@@ -1,6 +1,6 @@
 # Chopin
 
-> The high-level Rust Web Framework for perfectionists with deadlines.
+> Precision engineering for the ambitious web.
 
 Chopin is a **batteries-included REST API framework** designed for developers who want extreme performance without sacrificing developer experience. Built on Axum + SeaORM, optimized for Apple Silicon.
 
