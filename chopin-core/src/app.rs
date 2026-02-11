@@ -1,5 +1,6 @@
 use axum::Router;
 use axum::routing::get;
+use axum::response::Json as AxumJson;
 use sea_orm::DatabaseConnection;
 use sea_orm_migration::MigratorTrait;
 use tower_http::cors::CorsLayer;
@@ -60,6 +61,7 @@ impl App {
         let x_request_id = axum::http::HeaderName::from_static("x-request-id");
 
         Router::new()
+            .route("/", get(welcome))
             .merge(api_routes)
             .merge(Scalar::with_url("/api-docs", ApiDoc::openapi()))
             .route("/api-docs/openapi.json", get(openapi_json))
@@ -103,6 +105,15 @@ async fn shutdown_signal() {
         .await
         .expect("Failed to install CTRL+C signal handler");
     tracing::info!("Shutting down Chopin server...");
+}
+
+/// Welcome page at `/`.
+async fn welcome() -> AxumJson<serde_json::Value> {
+    AxumJson(serde_json::json!({
+        "message": "Welcome to Chopin! 🎹",
+        "docs": "/api-docs",
+        "status": "running"
+    }))
 }
 
 /// Serve the raw OpenAPI JSON spec.

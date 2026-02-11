@@ -28,6 +28,10 @@ Complete documentation for the Chopin web framework.
 - **[Security](security.md)** - Best practices and security checklist
 - **[Performance](performance.md)** - Optimization techniques and profiling
 
+### Advanced Features
+
+- **[LLM Learning Guide](llm-learning-guide.md)** - Share with LLMs (ChatGPT, Claude) so they can help you build Chopin apps
+
 ### Contributing
 
 - **[Contributing Guide](../CONTRIBUTING.md)** - How to contribute to Chopin
@@ -42,6 +46,10 @@ Complete documentation for the Chopin web framework.
 2. Read the [Architecture](architecture.md) overview
 3. Explore [CLI Cheat Sheet](cli-cheatsheet.md) for quick commands
 4. Build something with [Controllers](controllers-routing.md)
+
+### Asking LLMs for Help?
+
+- [LLM Learning Guide](llm-learning-guide.md) - Copy/paste this to ChatGPT, Claude to help them assist you
 
 ### Building Your API?
 
@@ -75,6 +83,7 @@ Complete documentation for the Chopin web framework.
 | Optimize performance | [Performance](performance.md) |
 | Deploy to production | [Deployment](deployment.md) |
 | Secure my app | [Security](security.md) |
+| Ask LLMs for help | [LLM Learning Guide](llm-learning-guide.md) |
 
 ### By Level
 
@@ -159,6 +168,11 @@ Security best practices, authentication, authorization, input validation, and ha
 Optimize for speed with compilation flags, database tuning, caching, and profiling.
 
 **Topics**: Compilation opts, Database indexes, Caching, Profiling, Apple Silicon
+
+### [LLM Learning Guide](llm-learning-guide.md)
+Complete framework documentation formatted for LLMs. Copy/paste to ChatGPT, Claude, or other AIs to help you build Chopin apps.
+
+**Topics**: Architecture, Models, Controllers, Extractors, Patterns, CLI, Database, Routing, Testing, Deployment, API endpoints, Error handling
 
 ---
 
