@@ -1,6 +1,6 @@
 # File Uploads Guide
 
-Chopin provides built-in file upload handling with support for multipart forms, local storage, and future S3 integration.
+Chopin provides built-in file upload handling with support for multipart forms, local storage, and S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces, etc.).
 
 ## Quick Start
 
@@ -327,43 +327,229 @@ storage.ensure_dir().await?;
 - Requires disk space management
 - No built-in CDN
 
+### S3-Compatible Storage (Production)
+
+Chopin includes a built-in S3 storage backend that works with AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces, Backblaze B2, and any S3-compatible service.
+
+**1. Enable the feature flag:**
+
+```toml
+# Cargo.toml
+[dependencies]
+chopin-core = { version = "0.1", features = ["s3"] }
+```
+
+**2. Configure via environment variables:**
+
+```env
+# Required
+S3_BUCKET=my-bucket
+
+# Optional (defaults shown)
+S3_REGION=us-east-1
+S3_PREFIX=uploads/
+
+# For AWS S3 — use explicit keys or IAM roles
+S3_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+S3_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+
+# For Cloudflare R2
+S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com
+S3_ACCESS_KEY_ID=your-r2-access-key
+S3_SECRET_ACCESS_KEY=your-r2-secret-key
+
+# For MinIO (self-hosted)
+S3_ENDPOINT=http://localhost:9000
+S3_ACCESS_KEY_ID=minioadmin
+S3_SECRET_ACCESS_KEY=minioadmin
+
+# Public URL prefix for serving files (optional)
+# If set, file URLs use this base instead of generating presigned URLs
+S3_PUBLIC_URL=https://cdn.example.com
+```
+
+**3. Use in your handler:**
+
+```rust
+use chopin_core::storage::{S3Storage, FileUploadService};
+
+async fn upload_file(
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<ApiResponse<Vec<UploadedFile>>, ChopinError> {
+    let storage = S3Storage::from_config(&state.config).await?;
+    let files = FileUploadService::process_upload(
+        multipart,
+        &storage,
+        state.config.max_upload_size,
+    ).await?;
+    
+    Ok(ApiResponse::success(files))
+}
+```
+
+**Pros:**
+- Scales to any size
+- Works across multiple servers
+- Built-in CDN integration
+- No local disk management
+
+**Cons:**
+- Requires network access
+- Slight latency vs local disk
+- Needs cloud account setup
+
+#### Provider-Specific Examples
+
+**AWS S3:**
+
+```env
+S3_BUCKET=my-app-uploads
+S3_REGION=us-west-2
+S3_ACCESS_KEY_ID=AKIA...
+S3_SECRET_ACCESS_KEY=...
+S3_PUBLIC_URL=https://my-app-uploads.s3.us-west-2.amazonaws.com
+```
+
+**Cloudflare R2:**
+
+```env
+S3_BUCKET=my-app-uploads
+S3_REGION=auto
+S3_ENDPOINT=https://abc123.r2.cloudflarestorage.com
+S3_ACCESS_KEY_ID=your-r2-key
+S3_SECRET_ACCESS_KEY=your-r2-secret
+S3_PUBLIC_URL=https://uploads.example.com
+```
+
+**DigitalOcean Spaces:**
+
+```env
+S3_BUCKET=my-space
+S3_REGION=nyc3
+S3_ENDPOINT=https://nyc3.digitaloceanspaces.com
+S3_ACCESS_KEY_ID=your-spaces-key
+S3_SECRET_ACCESS_KEY=your-spaces-secret
+S3_PUBLIC_URL=https://my-space.nyc3.cdn.digitaloceanspaces.com
+```
+
+**MinIO (self-hosted):**
+
+```env
+S3_BUCKET=uploads
+S3_REGION=us-east-1
+S3_ENDPOINT=http://localhost:9000
+S3_ACCESS_KEY_ID=minioadmin
+S3_SECRET_ACCESS_KEY=minioadmin
+```
+
+#### Automatic Backend Selection
+
+Choose the storage backend based on configuration:
+
+```rust
+use chopin_core::storage::{StorageBackend, LocalStorage};
+#[cfg(feature = "s3")]
+use chopin_core::storage::S3Storage;
+
+async fn get_storage(config: &Config) -> Result<Box<dyn StorageBackend>, ChopinError> {
+    #[cfg(feature = "s3")]
+    if config.has_s3() {
+        let s3 = S3Storage::from_config(config).await?;
+        return Ok(Box::new(s3));
+    }
+    
+    Ok(Box::new(LocalStorage::new(&config.upload_dir)))
+}
+
+// Usage in handler
+async fn upload(
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<ApiResponse<Vec<UploadedFile>>, ChopinError> {
+    let storage = get_storage(&state.config).await?;
+    let files = FileUploadService::process_upload(
+        multipart,
+        storage.as_ref(),
+        state.config.max_upload_size,
+    ).await?;
+    Ok(ApiResponse::success(files))
+}
+```
+
+#### Programmatic S3 Configuration
+
+Create an S3 backend without environment variables:
+
+```rust
+let storage = S3Storage::new(
+    "my-bucket",
+    "us-east-1",
+    Some("https://abc123.r2.cloudflarestorage.com".to_string()), // endpoint
+    "access-key",
+    "secret-key",
+    Some("https://cdn.example.com".to_string()), // public URL
+    Some("uploads/".to_string()),                 // key prefix
+).await?;
+```
+
+#### Presigned URLs
+
+When `S3_PUBLIC_URL` is not set, the `url()` method generates presigned URLs valid for 1 hour — useful for private buckets:
+
+```rust
+let storage = S3Storage::from_config(&config).await?;
+
+// Generates a time-limited presigned URL
+let download_url = storage.url("photo.jpg").await?;
+// → https://my-bucket.s3.amazonaws.com/uploads/photo.jpg?X-Amz-...
+```
+
+When `S3_PUBLIC_URL` is set, it returns a direct public URL instead:
+
+```rust
+// S3_PUBLIC_URL=https://cdn.example.com
+let url = storage.url("photo.jpg").await?;
+// → https://cdn.example.com/uploads/photo.jpg
+```
+
 ### Custom Storage Backend
 
-Implement the `StorageBackend` trait for S3, GCS, etc.:
+Implement the `StorageBackend` trait for other providers (GCS, Azure Blob, etc.):
 
 ```rust
 use async_trait::async_trait;
 use chopin_core::storage::{StorageBackend, UploadedFile};
 
-pub struct S3Storage {
+pub struct GcsStorage {
     bucket: String,
-    region: String,
+    project: String,
 }
 
 #[async_trait]
-impl StorageBackend for S3Storage {
+impl StorageBackend for GcsStorage {
     async fn store(
         &self,
         filename: &str,
         content_type: &str,
         data: &[u8],
     ) -> Result<UploadedFile, ChopinError> {
-        // S3 upload implementation
+        // GCS upload implementation
         todo!()
     }
     
     async fn delete(&self, stored_name: &str) -> Result<(), ChopinError> {
-        // S3 delete implementation
+        // GCS delete implementation
         todo!()
     }
     
     async fn exists(&self, stored_name: &str) -> Result<bool, ChopinError> {
-        // S3 exists check
+        // GCS exists check
         todo!()
     }
     
     async fn url(&self, stored_name: &str) -> Result<String, ChopinError> {
-        Ok(format!("https://{}.s3.amazonaws.com/{}", self.bucket, stored_name))
+        Ok(format!("https://storage.googleapis.com/{}/{}", self.bucket, stored_name))
     }
 }
 ```

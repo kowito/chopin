@@ -29,6 +29,27 @@ pub struct Config {
 
     /// Max upload file size in bytes (default: 10MB)
     pub max_upload_size: u64,
+
+    /// S3 bucket name (optional, enables S3 storage)
+    pub s3_bucket: Option<String>,
+
+    /// S3 region (default: us-east-1)
+    pub s3_region: Option<String>,
+
+    /// S3-compatible endpoint URL (for Cloudflare R2, MinIO, etc.)
+    pub s3_endpoint: Option<String>,
+
+    /// S3 access key ID (optional, falls back to AWS credential chain)
+    pub s3_access_key_id: Option<String>,
+
+    /// S3 secret access key (optional, falls back to AWS credential chain)
+    pub s3_secret_access_key: Option<String>,
+
+    /// Public base URL for S3 objects (e.g. CDN URL or R2 public domain)
+    pub s3_public_url: Option<String>,
+
+    /// S3 key prefix / folder (default: "uploads/")
+    pub s3_prefix: Option<String>,
 }
 
 impl Config {
@@ -61,12 +82,24 @@ impl Config {
                 .unwrap_or_else(|_| "10485760".to_string()) // 10MB
                 .parse()
                 .unwrap_or(10_485_760),
+            s3_bucket: std::env::var("S3_BUCKET").ok(),
+            s3_region: std::env::var("S3_REGION").ok(),
+            s3_endpoint: std::env::var("S3_ENDPOINT").ok(),
+            s3_access_key_id: std::env::var("S3_ACCESS_KEY_ID").ok(),
+            s3_secret_access_key: std::env::var("S3_SECRET_ACCESS_KEY").ok(),
+            s3_public_url: std::env::var("S3_PUBLIC_URL").ok(),
+            s3_prefix: std::env::var("S3_PREFIX").ok(),
         })
     }
 
     /// Check if running in development mode.
     pub fn is_dev(&self) -> bool {
         self.environment == "development"
+    }
+
+    /// Check if S3 storage is configured.
+    pub fn has_s3(&self) -> bool {
+        self.s3_bucket.is_some()
     }
 
     /// Get the full server address.

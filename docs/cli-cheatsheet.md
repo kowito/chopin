@@ -189,6 +189,14 @@ JWT_EXPIRY_HOURS=24
 SERVER_PORT=3000
 SERVER_HOST=127.0.0.1
 ENVIRONMENT=development
+
+# Optional: S3-compatible object storage
+# S3_BUCKET=my-bucket
+# S3_REGION=us-east-1
+# S3_ENDPOINT=https://account.r2.cloudflarestorage.com  # R2/MinIO
+# S3_ACCESS_KEY_ID=your-key
+# S3_SECRET_ACCESS_KEY=your-secret
+# S3_PUBLIC_URL=https://cdn.example.com
 ```
 
 ## After Generating

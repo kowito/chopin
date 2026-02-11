@@ -37,6 +37,13 @@ impl TestApp {
             redis_url: None,
             upload_dir: "/tmp/chopin-test-uploads".to_string(),
             max_upload_size: 10_485_760,
+            s3_bucket: None,
+            s3_region: None,
+            s3_endpoint: None,
+            s3_access_key_id: None,
+            s3_secret_access_key: None,
+            s3_public_url: None,
+            s3_prefix: None,
         };
 
         Self::with_config(config).await

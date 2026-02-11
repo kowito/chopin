@@ -228,6 +228,115 @@ if config.is_dev() {
 
 ---
 
+### S3-Compatible Object Storage
+
+> Requires the `s3` feature flag: `chopin-core = { version = "0.1", features = ["s3"] }`
+
+#### `S3_BUCKET` (required for S3 storage)
+
+S3 bucket name. Setting this enables S3 storage.
+
+```env
+S3_BUCKET=my-app-uploads
+```
+
+#### `S3_REGION`
+
+AWS region or equivalent for the S3 service.
+
+```env
+S3_REGION=us-east-1       # AWS (default)
+S3_REGION=us-west-2       # AWS Oregon
+S3_REGION=auto             # Cloudflare R2
+S3_REGION=nyc3             # DigitalOcean Spaces
+```
+
+**Default**: `us-east-1`
+
+#### `S3_ENDPOINT`
+
+Custom endpoint URL for S3-compatible services. Not needed for AWS S3.
+
+```env
+# Cloudflare R2
+S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com
+
+# MinIO (self-hosted)
+S3_ENDPOINT=http://localhost:9000
+
+# DigitalOcean Spaces
+S3_ENDPOINT=https://nyc3.digitaloceanspaces.com
+
+# Backblaze B2
+S3_ENDPOINT=https://s3.us-west-004.backblazeb2.com
+```
+
+**Default**: None (uses standard AWS S3 endpoints)
+
+#### `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`
+
+Credentials for the S3 service. If not set, falls back to the AWS credential chain (IAM roles, instance profiles, etc.).
+
+```env
+S3_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+S3_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+```
+
+#### `S3_PUBLIC_URL`
+
+Public base URL for serving files. If set, file URLs are constructed as `{S3_PUBLIC_URL}/{prefix}{stored_name}`. If not set, presigned URLs are generated instead.
+
+```env
+# CDN or public bucket URL
+S3_PUBLIC_URL=https://cdn.example.com
+S3_PUBLIC_URL=https://my-bucket.s3.us-west-2.amazonaws.com
+S3_PUBLIC_URL=https://uploads.example.com
+```
+
+**Default**: None (generates presigned URLs valid for 1 hour)
+
+#### `S3_PREFIX`
+
+Key prefix (folder) for uploaded objects.
+
+```env
+S3_PREFIX=uploads/         # Default
+S3_PREFIX=media/
+S3_PREFIX=user-content/
+```
+
+**Default**: `uploads/`
+
+#### Quick Setup by Provider
+
+**AWS S3:**
+```env
+S3_BUCKET=my-app-uploads
+S3_REGION=us-west-2
+S3_ACCESS_KEY_ID=AKIA...
+S3_SECRET_ACCESS_KEY=...
+```
+
+**Cloudflare R2:**
+```env
+S3_BUCKET=my-app-uploads
+S3_REGION=auto
+S3_ENDPOINT=https://abc123.r2.cloudflarestorage.com
+S3_ACCESS_KEY_ID=your-r2-key
+S3_SECRET_ACCESS_KEY=your-r2-secret
+S3_PUBLIC_URL=https://uploads.example.com
+```
+
+**MinIO:**
+```env
+S3_BUCKET=uploads
+S3_ENDPOINT=http://localhost:9000
+S3_ACCESS_KEY_ID=minioadmin
+S3_SECRET_ACCESS_KEY=minioadmin
+```
+
+---
+
 ## Configuration Loading
 
 ### Priority Order

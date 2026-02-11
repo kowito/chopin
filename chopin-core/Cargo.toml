@@ -9,6 +9,7 @@ description = "The high-level Rust Web Framework for perfectionists with deadlin
 default = []
 redis = ["dep:redis"]
 graphql = ["dep:async-graphql", "dep:async-graphql-axum"]
+s3 = ["dep:aws-sdk-s3", "dep:aws-config"]
 
 [dependencies]
 # Web framework
@@ -69,6 +70,10 @@ redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], opt
 # Optional: GraphQL
 async-graphql = { version = "7", features = ["chrono", "uuid"], optional = true }
 async-graphql-axum = { version = "7", optional = true }
+
+# Optional: S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, etc.)
+aws-sdk-s3 = { version = "1", optional = true }
+aws-config = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
