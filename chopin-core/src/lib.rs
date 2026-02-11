@@ -10,8 +10,10 @@ pub mod models;
 pub mod openapi;
 pub mod response;
 pub mod routing;
+pub mod testing;
 
 pub use app::App;
 pub use config::Config;
 pub use error::ChopinError;
 pub use response::ApiResponse;
+pub use testing::{TestApp, TestClient, TestResponse};

@@ -59,4 +59,7 @@ serde_urlencoded = "0.7"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
-reqwest = { version = "0.12", features = ["json"] }
+
+[dependencies.reqwest]
+version = "0.12"
+features = ["json"]

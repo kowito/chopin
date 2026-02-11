@@ -1,13 +1,16 @@
 use axum::Router;
 use axum::routing::get;
 use sea_orm::DatabaseConnection;
+use sea_orm_migration::MigratorTrait;
 use tower_http::cors::CorsLayer;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::config::Config;
 use crate::controllers::AppState;
+use crate::migrations::Migrator;
 use crate::openapi::ApiDoc;
 use crate::routing;
 
@@ -23,12 +26,23 @@ impl App {
         let config = Config::from_env()?;
         let db = crate::db::connect(&config).await?;
 
+        // Run pending migrations automatically on startup
+        tracing::info!("Running pending database migrations...");
+        Migrator::up(&db, None).await?;
+        tracing::info!("Migrations complete.");
+
         Ok(App { config, db })
     }
 
     /// Create a new Chopin application with a given config.
     pub async fn with_config(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
         let db = crate::db::connect(&config).await?;
+
+        // Run pending migrations automatically on startup
+        tracing::info!("Running pending database migrations...");
+        Migrator::up(&db, None).await?;
+        tracing::info!("Migrations complete.");
+
         Ok(App { config, db })
     }
 
@@ -39,12 +53,26 @@ impl App {
             config: self.config.clone(),
         };
 
+        let config = self.config.clone();
         let api_routes = routing::build_routes().with_state(state);
+
+        // Request ID header name
+        let x_request_id = axum::http::HeaderName::from_static("x-request-id");
 
         Router::new()
             .merge(api_routes)
             .merge(Scalar::with_url("/api-docs", ApiDoc::openapi()))
             .route("/api-docs/openapi.json", get(openapi_json))
+            // Inject Config into request extensions so AuthUser extractor can access it
+            .layer(axum::middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {
+                let config = config.clone();
+                async move {
+                    req.extensions_mut().insert(config);
+                    next.run(req).await
+                }
+            }))
+            .layer(SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid))
+            .layer(PropagateRequestIdLayer::new(x_request_id))
             .layer(CorsLayer::permissive())
             .layer(TraceLayer::new_for_http())
     }
