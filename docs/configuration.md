@@ -149,6 +149,76 @@ ENVIRONMENT=test
 - Error detail exposure
 - Performance optimizations
 
+---
+
+### Caching
+
+#### `REDIS_URL` (optional)
+
+Redis connection URL for caching. If not provided, Chopin uses in-memory caching.
+
+```env
+# Not set - uses in-memory cache (default)
+REDIS_URL=redis://127.0.0.1:6379
+REDIS_URL=redis://username:password@host:6379/0
+REDIS_URL=redis://localhost:6379?password=secret
+```
+
+**Default**: None (in-memory cache)
+
+**When to use Redis**:
+- Production environments
+- Multi-instance deployments (shared cache)
+- Large cache requirements
+- Cross-request cache sharing
+
+**Requires**: `redis` feature flag in `Cargo.toml`
+
+```toml
+chopin-core = { version = "0.1", features = ["redis"] }
+```
+
+---
+
+### File Uploads
+
+#### `UPLOAD_DIR`
+
+Directory for storing uploaded files.
+
+```env
+UPLOAD_DIR=./uploads              # Relative to project root
+UPLOAD_DIR=/var/www/uploads       # Absolute path
+UPLOAD_DIR=/tmp/uploads           # Temporary storage
+```
+
+**Default**: `./uploads`
+
+**Production recommendations**:
+- Use absolute paths
+- Ensure directory is writable
+- Configure backups
+- Consider object storage (S3) for scale
+
+#### `MAX_UPLOAD_SIZE`
+
+Maximum file upload size in bytes.
+
+```env
+MAX_UPLOAD_SIZE=10485760      # 10 MB (default)
+MAX_UPLOAD_SIZE=52428800      # 50 MB
+MAX_UPLOAD_SIZE=104857600     # 100 MB
+MAX_UPLOAD_SIZE=1048576       # 1 MB
+```
+
+**Default**: `10485760` (10 MB)
+
+**Calculation**:
+- 1 MB = 1,048,576 bytes
+- 10 MB = 10,485,760 bytes
+- 50 MB = 52,428,800 bytes
+- 100 MB = 104,857,600 bytes
+
 **Usage in code**:
 ```rust
 if config.is_dev() {

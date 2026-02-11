@@ -287,6 +287,8 @@ Post::delete_many()
 
 ## Caching Strategies
 
+> 📘 **Note**: Chopin now includes a built-in caching layer with Redis and in-memory backends. See [Caching Guide](caching.md) for the complete reference.
+
 ### In-Memory Cache
 
 Use `moka` for caching:

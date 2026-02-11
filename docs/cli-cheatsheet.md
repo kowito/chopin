@@ -71,6 +71,18 @@ cargo run
 
 # Manual migration (rarely needed)
 chopin db migrate
+
+# View migration status
+chopin db status
+
+# Rollback last migration
+chopin db rollback
+
+# Reset database (drops all tables, re-runs migrations)
+chopin db reset
+
+# Seed database with test data
+chopin db seed
 ```
 
 ## Documentation
@@ -80,6 +92,33 @@ chopin db migrate
 chopin docs export                                    # → openapi.json
 chopin docs export --format yaml                      # → openapi.json (as YAML)
 chopin docs export --output api-spec.yaml --format yaml
+```
+
+## User Management
+
+```bash
+# Create a superuser account
+chopin createsuperuser
+
+# Create with command-line options
+chopin createsuperuser \
+  --email admin@example.com \
+  --password SecurePass123 \
+  --name "Admin User"
+```
+
+## Diagnostics
+
+```bash
+# Show project information
+chopin info
+
+# Displays:
+# - Project name
+# - Framework version
+# - Database config
+# - Server config
+# - Available features
 ```
 
 ## Common Workflows

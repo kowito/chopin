@@ -73,6 +73,8 @@ async fn delete_post(
 
 **Role-based access** (custom implementation):
 
+> 📘 **Note**: Chopin now includes a built-in RBAC system. See [Roles & Permissions](roles-permissions.md) for a complete guide.
+
 ```rust
 #[derive(Debug)]
 pub enum Role {

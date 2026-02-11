@@ -22,14 +22,12 @@ Complete documentation for the Chopin web framework.
 - **[Controllers & Routing](controllers-routing.md)** - Creating endpoints and routes
 - **[Testing](testing.md)** - Unit, integration, and API testing
 
-### Production
-
-- **[Deployment](deployment.md)** - Deploy to cloud platforms and servers
-- **[Security](security.md)** - Best practices and security checklist
-- **[Performance](performance.md)** - Optimization techniques and profiling
-
 ### Advanced Features
 
+- **[Caching](caching.md)** - Redis and in-memory caching layer
+- **[File Uploads](file-uploads.md)** - Handle multipart uploads and storage
+- **[Roles & Permissions](roles-permissions.md)** - Role-based access control (RBAC)
+- **[GraphQL](graphql.md)** - GraphQL API support via async-graphql
 - **[LLM Learning Guide](llm-learning-guide.md)** - Share with LLMs (ChatGPT, Claude) so they can help you build Chopin apps
 
 ### Contributing
@@ -78,6 +76,10 @@ Complete documentation for the Chopin web framework.
 | Make database queries | [Models & Database](models-database.md#queries) |
 | Create API endpoints | [Controllers & Routing](controllers-routing.md) |
 | Add authentication | [API Reference](api.md#authentication) |
+| Add role-based access | [Roles & Permissions](roles-permissions.md) |
+| Cache data (Redis) | [Caching](caching.md) |
+| Handle file uploads | [File Uploads](file-uploads.md) |
+| Add GraphQL | [GraphQL](graphql.md) |
 | Write tests | [Testing](testing.md) |
 | Configure environment | [Configuration](configuration.md) |
 | Optimize performance | [Performance](performance.md) |
@@ -97,13 +99,16 @@ Complete documentation for the Chopin web framework.
 1. [Architecture](architecture.md)
 2. [Testing](testing.md)
 3. [Configuration](configuration.md)
-4. [Performance](performance.md)
+4. [Roles & Permissions](roles-permissions.md)
+5. [Caching](caching.md)
+6. [File Uploads](file-uploads.md)
 
 **Advanced** (optimizing and scaling):
-1. [Security](security.md)
-2. [Deployment](deployment.md)
-3. [Performance Profiling](performance.md#profiling)
-4. [Contributing](../CONTRIBUTING.md)
+1. [GraphQL](graphql.md)
+2. [Security](security.md)
+3. [Deployment](deployment.md)
+4. [Performance](performance.md)
+5. [Contributing](../CONTRIBUTING.md)
 
 ---
 
@@ -117,7 +122,7 @@ Install Chopin, create your first project, generate models, and understand the b
 ### [CLI Reference](cli.md)
 Complete reference for the `chopin` command-line tool with detailed examples and use cases.
 
-**Commands**: `new`, `generate model`, `generate controller`, `db migrate`, `docs export`, `run`
+**Commands**: `new`, `generate model`, `generate controller`, `db migrate`, `db rollback`, `db status`, `db reset`, `db seed`, `docs export`, `run`, `createsuperuser`, `info`
 
 ### [CLI Cheat Sheet](cli-cheatsheet.md)
 Quick reference card with common commands, field types, and workflows. Keep this handy!
@@ -168,6 +173,26 @@ Security best practices, authentication, authorization, input validation, and ha
 Optimize for speed with compilation flags, database tuning, caching, and profiling.
 
 **Topics**: Compilation opts, Database indexes, Caching, Profiling, Apple Silicon
+
+### [Caching](caching.md)
+Add caching with Redis or in-memory cache. Speed up your API with cache-aside patterns.
+
+**Topics**: CacheService, Redis backend, In-memory cache, TTL, Cache strategies, Best practices
+
+### [File Uploads](file-uploads.md)
+Handle multipart file uploads with validation, storage backends, and serving uploaded files.
+
+**Topics**: Multipart forms, UploadedFile, LocalStorage, Custom storage, Image processing, Security
+
+### [Roles & Permissions](roles-permissions.md)
+Implement role-based access control (RBAC) with User, Admin, and Superuser roles.
+
+**Topics**: Role hierarchy, AuthUserWithRole, Route protection, Middleware, RBAC testing
+
+### [GraphQL](graphql.md)
+Build GraphQL APIs alongside REST endpoints with async-graphql integration.
+
+**Topics**: Schema definition, Authentication, DataLoader, Subscriptions, Testing, Best practices
 
 ### [LLM Learning Guide](llm-learning-guide.md)
 Complete framework documentation formatted for LLMs. Copy/paste to ChatGPT, Claude, or other AIs to help you build Chopin apps.

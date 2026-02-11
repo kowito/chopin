@@ -12,6 +12,13 @@ The `chopin` command-line interface helps you scaffold and manage your Chopin pr
     - [model](#chopin-generate-model) - Generate model, migration, and controller
     - [controller](#chopin-generate-controller) - Generate standalone controller
   - [chopin db](#chopin-db) - Database operations
+    - [migrate](#chopin-db-migrate) - Run migrations
+    - [rollback](#chopin-db-rollback) - Rollback migrations
+    - [status](#chopin-db-status) - Show migration status
+    - [reset](#chopin-db-reset) - Reset database
+    - [seed](#chopin-db-seed) - Seed with sample data
+  - [chopin createsuperuser](#chopin-createsuperuser) - Create admin account
+  - [chopin info](#chopin-info) - Show project information
   - [chopin docs](#chopin-docs) - OpenAPI documentation
   - [chopin run](#chopin-run) - Start development server
 - [Complete Workflow Example](#complete-workflow-example)
@@ -30,7 +37,18 @@ chopin generate model Post title:string body:text published:bool
 chopin generate controller analytics
 
 # Database
-chopin db migrate                      # Run migrations (rarely needed)
+chopin db migrate                      # Run migrations
+chopin db rollback                     # Rollback last migration
+chopin db rollback --steps 3           # Rollback 3 migrations
+chopin db status                       # Show migration status
+chopin db reset                        # Reset entire database
+chopin db seed                         # Seed with sample data
+
+# User Management
+chopin createsuperuser                 # Create admin account interactively
+
+# Project Info
+chopin info                            # Show project status
 
 # Documentation
 chopin docs export                     # Export as JSON
@@ -261,6 +279,218 @@ cargo run
 ```
 
 Migrations are applied in order based on their timestamp. Each migration file includes both `up()` (apply) and `down()` (rollback) functions.
+
+#### `chopin db rollback`
+
+Rollback database migrations.
+
+**Usage:**
+
+```bash
+chopin db rollback [--steps <number>]
+```
+
+**Options:**
+
+- `--steps <number>` - Number of migrations to rollback (default: 1)
+
+**Examples:**
+
+```bash
+# Rollback the last migration
+chopin db rollback
+
+# Rollback the last 3 migrations
+chopin db rollback --steps 3
+
+# Rollback all migrations
+chopin db reset
+```
+
+**Important:**
+- Requires `down()` methods in migration files
+- Data may be lost during rollback
+- Always backup production databases before rolling back
+
+#### `chopin db status`
+
+Show the status of your migrations.
+
+**Usage:**
+
+```bash
+chopin db status
+```
+
+**Output:**
+
+```
+🎹 Migration status:
+
+  Found 3 migration(s):
+    📄 m20250211_000001_create_users_table.rs
+    📄 m20250211_120530_create_posts_table.rs
+    📄 m20250212_093045_create_comments_table.rs
+
+  Hint: Run `chopin db migrate` to apply pending migrations.
+  Hint: Run `chopin db rollback` to rollback the last migration.
+```
+
+#### `chopin db reset`
+
+Reset the entire database by dropping all tables and re-running migrations.
+
+**Usage:**
+
+```bash
+chopin db reset
+```
+
+**Warning:** This is destructive! It will:
+1. Delete your SQLite database file (or drop all tables)
+2. Re-run all migrations from scratch
+3. **All data will be lost**
+
+**Interactive confirmation:**
+
+```bash
+🎹 Resetting database...
+  ⚠  This will drop all tables and re-run all migrations!
+
+  Are you sure? (yes/no): yes
+```
+
+**Use cases:**
+- Development: Fresh start after schema changes
+- Testing: Clean slate between test runs
+- **Never** use in production without backups!
+
+#### `chopin db seed`
+
+Seed the database with sample data.
+
+**Usage:**
+
+```bash
+chopin db seed
+```
+
+**Setup:**
+
+Create a `src/seed.rs` file:
+
+```rust
+use sea_orm::DatabaseConnection;
+use sea_orm::DbErr;
+
+pub async fn seed(db: &DatabaseConnection) -> Result<(), DbErr> {
+    // Insert sample data here
+    Ok(())
+}
+```
+
+**Example seed file:**
+
+```rust
+use sea_orm::{DatabaseConnection, DbErr, ActiveModelTrait, Set};
+use crate::models::user;
+
+pub async fn seed(db: &DatabaseConnection) -> Result<(), DbErr> {
+    let now = chrono::Utc::now().naive_utc();
+    
+    // Create sample users
+    let user1 = user::ActiveModel {
+        email: Set("alice@example.com".to_string()),
+        username: Set("alice".to_string()),
+        password_hash: Set("hashed_password".to_string()),
+        role: Set("user".to_string()),
+        is_active: Set(true),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    user1.insert(db).await?;
+    
+    Ok(())
+}
+```
+
+---
+
+### `chopin createsuperuser`
+
+Create an admin (superuser) account interactively.
+
+**Usage:**
+
+```bash
+chopin createsuperuser
+```
+
+**Interactive prompts:**
+
+```
+🎹 Creating superuser account...
+
+  Email: admin@example.com
+  Username: admin
+  Password: ********
+  Confirm password: ********
+
+  ✓ Superuser 'admin' created successfully!
+```
+
+**What it creates:**
+- A user account with `role = "superuser"`
+- Password is automatically hashed with Argon2
+- Account is set as active (`is_active = true`)
+
+**Use cases:**
+- Initial admin account setup
+- Creating admin users for production
+- Testing role-based access control
+
+**Role hierarchy:**
+- **user** (0) - Default role, basic access
+- **admin** (1) - Administrative access
+- **superuser** (2) - Full system access
+
+---
+
+### `chopin info`
+
+Show project information and status.
+
+**Usage:**
+
+```bash
+chopin info
+```
+
+**Output:**
+
+```
+🎹 Chopin Project Info
+
+  Project: my-api
+  Version: 0.1.0
+  Config:  .env ✓
+  Models:  3 model file(s)
+  Ctrls:   2 controller file(s)
+  Migrs:   5 migration(s)
+  DB:      app.db (245 KB)
+```
+
+**Displays:**
+- Project name and version (from Cargo.toml)
+- Configuration status (.env file presence)
+- Number of models, controllers, and migrations
+- Database file size (if SQLite)
+
+**Use cases:**
+- Quick project overview
+- Verify project structure
+- Check if migrations exist
 
 ---
 
