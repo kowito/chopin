@@ -20,9 +20,9 @@ cargo build
 cargo run
 ```
 
-The server starts at `http://127.0.0.1:5000`.
+The server starts at `http://127.0.0.1:3000`.
 
-View API documentation at `http://127.0.0.1:5000/api-docs`.
+View API documentation at `http://127.0.0.1:3000/api-docs`.
 
 ## API Endpoints
 
@@ -42,7 +42,7 @@ View API documentation at `http://127.0.0.1:5000/api-docs`.
 ### 1. Sign up a user
 
 ```bash
-curl -X POST http://localhost:5000/api/auth/signup \
+curl -X POST http://localhost:3000/api/auth/signup \
   -H "Content-Type: application/json" \
   -d '{
     "email": "alice@example.com",
@@ -71,7 +71,7 @@ Response:
 ### 2. Create a post (authenticated)
 
 ```bash
-curl -X POST http://localhost:5000/api/posts \
+curl -X POST http://localhost:3000/api/posts \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN_HERE" \
   -d '{
@@ -83,13 +83,13 @@ curl -X POST http://localhost:5000/api/posts \
 ### 3. List posts (with pagination)
 
 ```bash
-curl http://localhost:5000/api/posts?limit=10&offset=0
+curl http://localhost:3000/api/posts?limit=10&offset=0
 ```
 
 ### 4. Get a specific post
 
 ```bash
-curl http://localhost:5000/api/posts/1
+curl http://localhost:3000/api/posts/1
 ```
 
 ## Project Structure

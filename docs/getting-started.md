@@ -41,9 +41,9 @@ my-api/
 cargo run
 ```
 
-The server starts at `http://127.0.0.1:5000`.
+The server starts at `http://127.0.0.1:3000`.
 
-API documentation is served at `http://127.0.0.1:5000/api-docs`.
+API documentation is served at `http://127.0.0.1:3000/api-docs`.
 
 ## Built-in Authentication
 
@@ -52,7 +52,7 @@ Chopin ships with a complete authentication system out of the box.
 ### Sign Up
 
 ```bash
-curl -X POST http://localhost:5000/api/auth/signup \
+curl -X POST http://localhost:3000/api/auth/signup \
   -H "Content-Type: application/json" \
   -d '{
     "email": "user@example.com",
@@ -82,7 +82,7 @@ Response:
 ### Log In
 
 ```bash
-curl -X POST http://localhost:5000/api/auth/login \
+curl -X POST http://localhost:3000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "user@example.com",
@@ -95,7 +95,7 @@ curl -X POST http://localhost:5000/api/auth/login \
 Include the JWT token in the `Authorization` header for protected endpoints:
 
 ```bash
-curl -X GET http://localhost:5000/api/posts \
+curl -X GET http://localhost:3000/api/posts \
   -H "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGc..."
 ```
 
@@ -166,8 +166,8 @@ Set `DATABASE_URL` in your `.env` file.
 
 Chopin auto-generates OpenAPI documentation from your handler annotations.
 
-- **Interactive docs**: `http://localhost:5000/api-docs`
-- **OpenAPI JSON**: `http://localhost:5000/api-docs/openapi.json`
+- **Interactive docs**: `http://localhost:3000/api-docs`
+- **OpenAPI JSON**: `http://localhost:3000/api-docs/openapi.json`
 
 Export the spec to a file:
 
@@ -189,7 +189,7 @@ JWT_SECRET=your-secret-key-here
 JWT_EXPIRY_HOURS=24
 
 # Server
-SERVER_PORT=5000
+SERVER_PORT=3000
 SERVER_HOST=127.0.0.1
 
 # Environment (development, production, test)

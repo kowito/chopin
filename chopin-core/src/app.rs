@@ -82,6 +82,10 @@ impl App {
         let addr = self.config.server_addr();
         let router = self.router();
 
+        println!("\n🎹 Chopin server is running!");
+        println!("   → Server: http://{}", addr);
+        println!("   → API docs: http://{}/api-docs\n", addr);
+        
         tracing::info!("Chopin server running on http://{}", addr);
         tracing::info!("API docs available at http://{}/api-docs", addr);
 

@@ -15,7 +15,7 @@ pub struct Config {
     /// Server host (default: 127.0.0.1)
     pub server_host: String,
 
-    /// Server port (default: 5000)
+    /// Server port (default: 3000)
     pub server_port: u16,
 
     /// Environment: development, production, test
@@ -40,9 +40,9 @@ impl Config {
             server_host: std::env::var("SERVER_HOST")
                 .unwrap_or_else(|_| "127.0.0.1".to_string()),
             server_port: std::env::var("SERVER_PORT")
-                .unwrap_or_else(|_| "5000".to_string())
+                .unwrap_or_else(|_| "3000".to_string())
                 .parse()
-                .unwrap_or(5000),
+                .unwrap_or(3000),
             environment: std::env::var("ENVIRONMENT")
                 .unwrap_or_else(|_| "development".to_string()),
         })

@@ -695,7 +695,7 @@ JWT_SECRET=your-secret-key-here
 JWT_EXPIRY_HOURS=24
 
 # Server
-SERVER_PORT=5000
+SERVER_PORT=3000
 SERVER_HOST=127.0.0.1
 
 # Environment
@@ -731,9 +731,9 @@ Built with [Chopin](https://github.com/yourusername/chopin) — the high-level R
 cargo run
 ```
 
-Server starts at `http://127.0.0.1:5000`
+Server starts at `http://127.0.0.1:3000`
 
-API docs at `http://127.0.0.1:5000/api-docs`
+API docs at `http://127.0.0.1:3000/api-docs`
 
 ## Generate Models
 
@@ -758,7 +758,7 @@ chopin generate model Post title:string body:text
     println!("    cd {}", name);
     println!("    cargo run");
     println!();
-    println!("  API docs: http://127.0.0.1:5000/api-docs");
+    println!("  API docs: http://127.0.0.1:3000/api-docs");
 }
 
 fn export_openapi(format: &str, output: &str) {

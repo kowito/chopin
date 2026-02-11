@@ -2,7 +2,9 @@
 
 > Precision engineering for the ambitious web.
 
-Chopin is a **batteries-included REST API framework** designed for developers who want extreme performance without sacrificing developer experience. Built on Axum + SeaORM, optimized for Apple Silicon.
+Chopin is a **batteries-included REST API framework** crafted for developers who demand both extreme performance and an exceptional developer experience. Built on Axum and SeaORM, and finely tuned for Apple Silicon, Chopin empowers you to build robust APIs with speed and confidence.
+
+Inspired by the technical brilliance and agility of Chopin’s Minute Waltz (Op. 64 No. 1), this framework is engineered for velocity without chaos. Just as the "Petit Chien" waltz delivers sophisticated structure at a breathtaking tempo, Chopin provides a well-composed environment that hides Rust’s complexity behind an elegant, rhythmic API. From your first line of code to production deployment, Chopin ensures your application moves with the grace and speed of a masterwork.
 
 ## Features
 
@@ -46,7 +48,7 @@ cd my-api
 chopin run
 ```
 
-This creates a fully functional API server running on `http://localhost:5000`.
+This creates a fully functional API server running on `http://localhost:3000`.
 
 ### Generate Your First Model
 
@@ -63,7 +65,7 @@ This scaffolds:
 
 ```bash
 # Signup
-curl -X POST http://localhost:5000/api/auth/signup \
+curl -X POST http://localhost:3000/api/auth/signup \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com","username":"john","password":"secret123"}'
 
@@ -77,12 +79,12 @@ curl -X POST http://localhost:5000/api/auth/signup \
 # }
 
 # Login
-curl -X POST http://localhost:5000/api/auth/login \
+curl -X POST http://localhost:3000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com","password":"secret123"}'
 
 # Protected endpoint (requires Authorization header)
-curl -X GET http://localhost:5000/api/posts \
+curl -X GET http://localhost:3000/api/posts \
   -H "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGc..."
 ```
 
@@ -242,7 +244,7 @@ JWT_SECRET=your-secret-key-here
 JWT_EXPIRY_HOURS=24
 
 # Server
-SERVER_PORT=5000
+SERVER_PORT=3000
 SERVER_HOST=127.0.0.1
 
 # Environment
@@ -272,23 +274,20 @@ Chopin is **heavily optimized for Apple Silicon (M4)**:
 chopin new <project-name>
 
 # Generate scaffolding
-chopin generate model <name> [fields]
+chopin generate model <ModelName> field:type field:type...
 chopin generate controller <name>
 
 # Database management
 chopin db migrate
-chopin db migrate --up
-chopin db migrate --down
 
-# Development server (with auto-reload)
+# OpenAPI documentation
+chopin docs export [--format json|yaml] [--output file]
+
+# Development server
 chopin run
-
-# Build for production
-chopin build
-
-# Run tests
-chopin test
 ```
+
+📚 **Documentation**: [CLI Reference](docs/cli.md) | [CLI Cheat Sheet](docs/cli-cheatsheet.md)
 
 ## Testing
 
@@ -346,12 +345,35 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 MIT
 
-## Resources
+## Documentation
 
-- **Docs**: [docs/getting-started.md](docs/getting-started.md)
-- **Examples**: [chopin-examples/](chopin-examples/)
-- **API Reference**: [docs/api.md](docs/api.md)
-- **GitHub**: [github.com/yourusername/chopin](https://github.com)
+📖 **[Complete Documentation](docs/README.md)** - Full framework documentation
+
+### Quick Links
+
+**Getting Started:**
+- [Getting Started Guide](docs/getting-started.md) - Your first Chopin app
+- [CLI Reference](docs/cli.md) - Complete CLI documentation
+- [CLI Cheat Sheet](docs/cli-cheatsheet.md) - Quick command reference
+
+**Core Concepts:**
+- [Architecture](docs/architecture.md) - Framework design and structure
+- [Configuration](docs/configuration.md) - Environment variables and settings
+- [API Reference](docs/api.md) - Request/response format
+
+**Development:**
+- [Models & Database](docs/models-database.md) - SeaORM and migrations
+- [Controllers & Routing](docs/controllers-routing.md) - Creating endpoints
+- [Testing](docs/testing.md) - Unit and integration testing
+
+**Production:**
+- [Deployment](docs/deployment.md) - Deploy to cloud platforms
+- [Security](docs/security.md) - Best practices and security
+- [Performance](docs/performance.md) - Optimization and profiling
+
+**Contributing:**
+- [Contributing Guide](CONTRIBUTING.md) - How to contribute
+- [Examples](chopin-examples/) - Sample applications
 
 ---
 
