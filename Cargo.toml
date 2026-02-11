@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "chopin-core",
+    "chopin-cli",
+    "chopin-examples/basic-api",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

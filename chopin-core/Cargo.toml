@@ -1,0 +1,62 @@
+[package]
+name = "chopin-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The high-level Rust Web Framework for perfectionists with deadlines"
+
+[dependencies]
+# Web framework
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "parking_lot"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace", "request-id", "util"] }
+hyper = { version = "1", features = ["full"] }
+
+# Database ORM
+sea-orm = { version = "1", features = [
+    "sqlx-sqlite",
+    "sqlx-postgres",
+    "sqlx-mysql",
+    "runtime-tokio-rustls",
+    "macros",
+    "with-chrono",
+    "with-uuid",
+] }
+sea-orm-migration = { version = "1", features = ["runtime-tokio-rustls", "sqlx-sqlite", "sqlx-postgres"] }
+
+# JSON serialization (ARM NEON optimized)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sonic-rs = "0.3"
+
+# Auth
+jsonwebtoken = "9"
+argon2 = "0.5"
+ring = "0.17"
+
+# TLS
+rustls = "0.23"
+
+# OpenAPI / Swagger
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-scalar = { version = "0.3", features = ["axum"] }
+
+# Configuration
+dotenvy = "0.15"
+
+# Logging / Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+validator = { version = "0.19", features = ["derive"] }
+async-trait = "0.1"
+serde_urlencoded = "0.7"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+reqwest = { version = "0.12", features = ["json"] }
