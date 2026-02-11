@@ -1,5 +1,6 @@
 use sea_orm::DatabaseConnection;
 
+use crate::cache::CacheService;
 use crate::config::Config;
 
 /// Shared application state available in all handlers.
@@ -7,6 +8,7 @@ use crate::config::Config;
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Config,
+    pub cache: CacheService,
 }
 
 pub mod auth;

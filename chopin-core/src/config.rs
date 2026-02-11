@@ -20,6 +20,15 @@ pub struct Config {
 
     /// Environment: development, production, test
     pub environment: String,
+
+    /// Redis URL for caching (optional, e.g. redis://127.0.0.1:6379)
+    pub redis_url: Option<String>,
+
+    /// Upload directory for file storage (default: ./uploads)
+    pub upload_dir: String,
+
+    /// Max upload file size in bytes (default: 10MB)
+    pub max_upload_size: u64,
 }
 
 impl Config {
@@ -45,6 +54,13 @@ impl Config {
                 .unwrap_or(3000),
             environment: std::env::var("ENVIRONMENT")
                 .unwrap_or_else(|_| "development".to_string()),
+            redis_url: std::env::var("REDIS_URL").ok(),
+            upload_dir: std::env::var("UPLOAD_DIR")
+                .unwrap_or_else(|_| "./uploads".to_string()),
+            max_upload_size: std::env::var("MAX_UPLOAD_SIZE")
+                .unwrap_or_else(|_| "10485760".to_string()) // 10MB
+                .parse()
+                .unwrap_or(10_485_760),
         })
     }
 

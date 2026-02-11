@@ -26,6 +26,9 @@ pub enum ChopinError {
     #[error("Validation error: {0}")]
     Validation(String),
 
+    #[error("Validation errors")]
+    ValidationErrors(Vec<FieldError>),
+
     #[error("Internal server error: {0}")]
     Internal(String),
 
@@ -43,6 +46,7 @@ impl ChopinError {
             ChopinError::Forbidden(_) => StatusCode::FORBIDDEN,
             ChopinError::Conflict(_) => StatusCode::CONFLICT,
             ChopinError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            ChopinError::ValidationErrors(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ChopinError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ChopinError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -57,9 +61,15 @@ impl ChopinError {
             ChopinError::Forbidden(_) => "FORBIDDEN",
             ChopinError::Conflict(_) => "CONFLICT",
             ChopinError::Validation(_) => "VALIDATION_ERROR",
+            ChopinError::ValidationErrors(_) => "VALIDATION_ERROR",
             ChopinError::Internal(_) => "INTERNAL_ERROR",
             ChopinError::Database(_) => "DATABASE_ERROR",
         }
+    }
+
+    /// Create a validation error with field-level details.
+    pub fn validation_fields(errors: Vec<FieldError>) -> Self {
+        ChopinError::ValidationErrors(errors)
     }
 }
 
@@ -68,17 +78,70 @@ impl ChopinError {
 pub struct ErrorDetail {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<FieldError>>,
+}
+
+/// Field-level validation error.
+///
+/// ```json
+/// {
+///   "field": "email",
+///   "message": "must be a valid email address",
+///   "code": "invalid_format"
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FieldError {
+    pub field: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+impl FieldError {
+    /// Create a new field error.
+    pub fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
+        FieldError {
+            field: field.into(),
+            message: message.into(),
+            code: None,
+        }
+    }
+
+    /// Create a new field error with a code.
+    pub fn with_code(field: impl Into<String>, message: impl Into<String>, code: impl Into<String>) -> Self {
+        FieldError {
+            field: field.into(),
+            message: message.into(),
+            code: Some(code.into()),
+        }
+    }
 }
 
 impl axum::response::IntoResponse for ChopinError {
     fn into_response(self) -> axum::response::Response {
         let status = self.status_code();
+        let fields = match &self {
+            ChopinError::ValidationErrors(errs) => Some(errs.clone()),
+            _ => None,
+        };
+        let message = match &self {
+            ChopinError::ValidationErrors(errs) => {
+                errs.iter()
+                    .map(|e| format!("{}: {}", e.field, e.message))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            }
+            _ => self.to_string(),
+        };
         let body: ApiResponse<()> = ApiResponse {
             success: false,
             data: None,
             error: Some(ErrorDetail {
                 code: self.error_code().to_string(),
-                message: self.to_string(),
+                message,
+                fields,
             }),
         };
 

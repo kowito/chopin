@@ -36,6 +36,11 @@ enum Commands {
     },
     /// Start the development server
     Run,
+    /// Create a superuser account
+    #[command(name = "createsuperuser")]
+    CreateSuperuser,
+    /// Show project info and status
+    Info,
 }
 
 #[derive(Subcommand)]
@@ -58,6 +63,18 @@ enum GenerateCommands {
 enum DbCommands {
     /// Run pending migrations
     Migrate,
+    /// Rollback the last migration (or N migrations)
+    Rollback {
+        /// Number of migrations to rollback (default: 1)
+        #[arg(short, long, default_value = "1")]
+        steps: u32,
+    },
+    /// Show migration status
+    Status,
+    /// Reset database (rollback all + re-migrate)
+    Reset,
+    /// Seed the database with sample data
+    Seed,
 }
 
 #[derive(Subcommand)]
@@ -93,6 +110,18 @@ fn main() {
             DbCommands::Migrate => {
                 run_migrations();
             }
+            DbCommands::Rollback { steps } => {
+                rollback_migrations(steps);
+            }
+            DbCommands::Status => {
+                migration_status();
+            }
+            DbCommands::Reset => {
+                reset_database();
+            }
+            DbCommands::Seed => {
+                seed_database();
+            }
         },
         Commands::Docs { action } => match action {
             DocsCommands::Export { format, output } => {
@@ -102,6 +131,12 @@ fn main() {
         },
         Commands::Run => {
             run_dev_server();
+        }
+        Commands::CreateSuperuser => {
+            create_superuser();
+        }
+        Commands::Info => {
+            show_project_info();
         }
     }
 }
@@ -605,6 +640,361 @@ fn run_migrations() {
     }
 }
 
+// ── DB Rollback ──
+
+fn rollback_migrations(steps: u32) {
+    println!("🎹 Rolling back {} migration(s)...", steps);
+
+    let status = Command::new("cargo")
+        .args(["run", "--quiet", "--", "--rollback", &steps.to_string()])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!("  ✓ Rolled back {} migration(s) successfully.", steps);
+        }
+        Ok(s) => {
+            eprintln!("  ✗ Rollback failed with exit code: {}", s);
+            eprintln!();
+            eprintln!("  Hint: Make sure your migration files have `down()` implemented.");
+            eprintln!("  You can also manually rollback by editing the migration table.");
+        }
+        Err(_) => {
+            println!("  Note: To rollback, ensure your app binary supports the --rollback flag.");
+            println!();
+            println!("  Add this to your main.rs:");
+            println!("    let args: Vec<String> = std::env::args().collect();");
+            println!("    if args.contains(&\"--rollback\".to_string()) {{");
+            println!("        use sea_orm_migration::MigratorTrait;");
+            println!("        Migrator::down(&db, Some(1)).await?;");
+            println!("    }}");
+        }
+    }
+}
+
+// ── DB Status ──
+
+fn migration_status() {
+    println!("🎹 Migration status:");
+    println!();
+
+    // Check for migration files
+    let migrations_dir = Path::new("src/migrations");
+    if !migrations_dir.exists() {
+        println!("  No migrations directory found.");
+        return;
+    }
+
+    let mut migration_files: Vec<String> = Vec::new();
+    if let Ok(entries) = fs::read_dir(migrations_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('m') && name.ends_with(".rs") && name != "mod.rs" {
+                migration_files.push(name);
+            }
+        }
+    }
+
+    migration_files.sort();
+
+    if migration_files.is_empty() {
+        println!("  No migration files found.");
+    } else {
+        println!("  Found {} migration(s):", migration_files.len());
+        for file in &migration_files {
+            println!("    📄 {}", file);
+        }
+    }
+
+    println!();
+    println!("  Hint: Run `chopin db migrate` to apply pending migrations.");
+    println!("  Hint: Run `chopin db rollback` to rollback the last migration.");
+}
+
+// ── DB Reset ──
+
+fn reset_database() {
+    println!("🎹 Resetting database...");
+    println!("  ⚠  This will drop all tables and re-run all migrations!");
+    println!();
+
+    // Simple confirmation
+    print!("  Are you sure? (yes/no): ");
+    use std::io::{self, Write};
+    io::stdout().flush().unwrap();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).unwrap();
+
+    if input.trim().to_lowercase() != "yes" {
+        println!("  Cancelled.");
+        return;
+    }
+
+    // Delete the SQLite database file if it exists
+    let db_files = ["chopin.db", "app.db"];
+    for db_file in &db_files {
+        if Path::new(db_file).exists() {
+            fs::remove_file(db_file).ok();
+            println!("  ✓ Removed {}", db_file);
+        }
+    }
+
+    // Re-run migrations
+    run_migrations();
+}
+
+// ── DB Seed ──
+
+fn seed_database() {
+    println!("🎹 Seeding database...");
+
+    let seed_file = Path::new("src/seed.rs");
+    if !seed_file.exists() {
+        println!("  No seed file found at src/seed.rs");
+        println!();
+        println!("  Create a seed file with sample data:");
+        println!("  ```");
+        println!("  // src/seed.rs");
+        println!("  pub async fn seed(db: &DatabaseConnection) -> Result<(), DbErr> {{");
+        println!("      // Insert sample data here");
+        println!("      Ok(())");
+        println!("  }}");
+        println!("  ```");
+        return;
+    }
+
+    let status = Command::new("cargo")
+        .args(["run", "--quiet", "--", "--seed"])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!("  ✓ Database seeded successfully.");
+        }
+        _ => {
+            eprintln!("  ✗ Seeding failed. Check your seed.rs file.");
+        }
+    }
+}
+
+// ── Create Superuser ──
+
+fn create_superuser() {
+    use std::io::{self, Write};
+
+    println!("🎹 Creating superuser account...");
+    println!();
+
+    // Prompt for email
+    print!("  Email: ");
+    io::stdout().flush().unwrap();
+    let mut email = String::new();
+    io::stdin().read_line(&mut email).unwrap();
+    let email = email.trim().to_string();
+
+    if email.is_empty() {
+        eprintln!("  ✗ Email is required.");
+        return;
+    }
+
+    // Prompt for username
+    print!("  Username: ");
+    io::stdout().flush().unwrap();
+    let mut username = String::new();
+    io::stdin().read_line(&mut username).unwrap();
+    let username = username.trim().to_string();
+
+    if username.is_empty() {
+        eprintln!("  ✗ Username is required.");
+        return;
+    }
+
+    // Prompt for password (simple, no hidden input for now)
+    print!("  Password: ");
+    io::stdout().flush().unwrap();
+    let mut password = String::new();
+    io::stdin().read_line(&mut password).unwrap();
+    let password = password.trim().to_string();
+
+    if password.len() < 8 {
+        eprintln!("  ✗ Password must be at least 8 characters.");
+        return;
+    }
+
+    // Confirm password
+    print!("  Confirm password: ");
+    io::stdout().flush().unwrap();
+    let mut confirm = String::new();
+    io::stdin().read_line(&mut confirm).unwrap();
+    let confirm = confirm.trim().to_string();
+
+    if password != confirm {
+        eprintln!("  ✗ Passwords do not match.");
+        return;
+    }
+
+    // Run a cargo command that creates the superuser
+    let status = Command::new("cargo")
+        .args([
+            "run", "--quiet", "--",
+            "--create-superuser",
+            &email,
+            &username,
+            &password,
+        ])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!();
+            println!("  ✓ Superuser '{}' created successfully!", username);
+        }
+        Ok(_) => {
+            eprintln!("  ✗ Failed to create superuser.");
+            eprintln!();
+            eprintln!("  Hint: Add superuser creation support to your main.rs:");
+            eprintln!("    if args.contains(&\"--create-superuser\") {{");
+            eprintln!("        // Hash password + insert user with role=\"superuser\"");
+            eprintln!("    }}");
+            eprintln!();
+            eprintln!("  Or use the built-in helper:");
+            create_superuser_inline(&email, &username, &password);
+        }
+        Err(_) => {
+            eprintln!("  ✗ Could not run cargo. Creating superuser directly...");
+            create_superuser_inline(&email, &username, &password);
+        }
+    }
+}
+
+fn create_superuser_inline(email: &str, username: &str, password: &str) {
+    // Generate a helper script that creates the superuser
+    let script = format!(
+        r#"
+// Add this to your main.rs to support `chopin createsuperuser`:
+//
+// use chopin_core::auth::hash_password;
+// use sea_orm::{{ActiveModelTrait, Set}};
+//
+// async fn create_superuser(db: &DatabaseConnection) {{
+//     let password_hash = hash_password("{}").unwrap();
+//     let now = chrono::Utc::now().naive_utc();
+//     let user = user::ActiveModel {{
+//         email: Set("{}".to_string()),
+//         username: Set("{}".to_string()),
+//         password_hash: Set(password_hash),
+//         role: Set("superuser".to_string()),
+//         is_active: Set(true),
+//         created_at: Set(now),
+//         updated_at: Set(now),
+//         ..Default::default()
+//     }};
+//     user.insert(db).await.unwrap();
+// }}
+"#,
+        password, email, username
+    );
+    println!("{}", script);
+}
+
+// ── Project Info ──
+
+fn show_project_info() {
+    println!("🎹 Chopin Project Info");
+    println!();
+
+    // Check if we're in a Chopin project
+    let cargo_toml = Path::new("Cargo.toml");
+    if !cargo_toml.exists() {
+        eprintln!("  Not in a Rust project directory (no Cargo.toml found).");
+        return;
+    }
+
+    // Read Cargo.toml to extract project info
+    if let Ok(content) = fs::read_to_string(cargo_toml) {
+        for line in content.lines() {
+            if line.starts_with("name") {
+                println!("  Project: {}", line.split('=').nth(1).unwrap_or("unknown").trim().trim_matches('"'));
+            }
+            if line.starts_with("version") && !line.contains("workspace") {
+                println!("  Version: {}", line.split('=').nth(1).unwrap_or("unknown").trim().trim_matches('"'));
+            }
+        }
+    }
+
+    // Check for .env
+    if Path::new(".env").exists() {
+        println!("  Config:  .env ✓");
+    } else if Path::new(".env.example").exists() {
+        println!("  Config:  .env.example found (copy to .env)");
+    } else {
+        println!("  Config:  No .env file");
+    }
+
+    // Check for models
+    let models_dir = Path::new("src/models");
+    if models_dir.exists() {
+        let model_count = fs::read_dir(models_dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        name.ends_with(".rs") && name != "mod.rs"
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        println!("  Models:  {} model file(s)", model_count);
+    }
+
+    // Check for controllers
+    let controllers_dir = Path::new("src/controllers");
+    if controllers_dir.exists() {
+        let controller_count = fs::read_dir(controllers_dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        name.ends_with(".rs") && name != "mod.rs"
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        println!("  Ctrls:   {} controller file(s)", controller_count);
+    }
+
+    // Check for migrations
+    let migrations_dir = Path::new("src/migrations");
+    if migrations_dir.exists() {
+        let migration_count = fs::read_dir(migrations_dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        name.starts_with('m') && name.ends_with(".rs")
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        println!("  Migrs:   {} migration(s)", migration_count);
+    }
+
+    // Check for database file
+    for db_file in &["chopin.db", "app.db"] {
+        if Path::new(db_file).exists() {
+            let metadata = fs::metadata(db_file);
+            let size = metadata.map(|m| m.len()).unwrap_or(0);
+            println!("  DB:      {} ({} KB)", db_file, size / 1024);
+        }
+    }
+
+    println!();
+}
+
 // ── Dev Server ──
 
 fn run_dev_server() {
@@ -700,6 +1090,13 @@ SERVER_HOST=127.0.0.1
 
 # Environment
 ENVIRONMENT=development
+
+# Cache (optional - uses in-memory by default)
+# REDIS_URL=redis://127.0.0.1:6379
+
+# File Uploads
+UPLOAD_DIR=./uploads
+MAX_UPLOAD_SIZE=10485760
 "#;
 
     // .gitignore

@@ -3,6 +3,48 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// User roles for permissions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub enum Role {
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "admin")]
+    Admin,
+    #[serde(rename = "superuser")]
+    Superuser,
+}
+
+impl Role {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::User => "user",
+            Role::Admin => "admin",
+            Role::Superuser => "superuser",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "admin" => Role::Admin,
+            "superuser" => Role::Superuser,
+            _ => Role::User,
+        }
+    }
+
+    /// Check if this role has at least the given permission level.
+    pub fn has_permission(&self, required: &Role) -> bool {
+        self.level() >= required.level()
+    }
+
+    fn level(&self) -> u8 {
+        match self {
+            Role::User => 0,
+            Role::Admin => 1,
+            Role::Superuser => 2,
+        }
+    }
+}
+
 /// User entity - the built-in user model for authentication.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize, ToSchema)]
 #[sea_orm(table_name = "users")]
@@ -21,6 +63,10 @@ pub struct Model {
     #[schema(read_only)]
     pub password_hash: String,
 
+    /// User role: "user", "admin", "superuser"
+    #[sea_orm(default_value = "user")]
+    pub role: String,
+
     pub is_active: bool,
 
     pub created_at: NaiveDateTime,
@@ -38,6 +84,7 @@ pub struct UserResponse {
     pub id: i32,
     pub email: String,
     pub username: String,
+    pub role: String,
     pub is_active: bool,
     pub created_at: NaiveDateTime,
 }
@@ -48,6 +95,7 @@ impl From<Model> for UserResponse {
             id: user.id,
             email: user.email,
             username: user.username,
+            role: user.role,
             is_active: user.is_active,
             created_at: user.created_at,
         }

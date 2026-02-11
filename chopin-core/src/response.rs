@@ -40,6 +40,7 @@ impl<T: Serialize> ApiResponse<T> {
             error: Some(ErrorDetail {
                 code: code.into(),
                 message: message.into(),
+                fields: None,
             }),
         }
     }

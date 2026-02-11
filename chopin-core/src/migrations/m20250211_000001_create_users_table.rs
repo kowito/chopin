@@ -36,6 +36,12 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(
+                        ColumnDef::new(Users::Role)
+                            .string()
+                            .not_null()
+                            .default("user"),
+                    )
+                    .col(
                         ColumnDef::new(Users::IsActive)
                             .boolean()
                             .not_null()
@@ -70,6 +76,7 @@ enum Users {
     Email,
     Username,
     PasswordHash,
+    Role,
     IsActive,
     CreatedAt,
     UpdatedAt,

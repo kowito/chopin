@@ -34,6 +34,9 @@ impl TestApp {
             server_host: "127.0.0.1".to_string(),
             server_port: 0, // OS assigns a random port
             environment: "test".to_string(),
+            redis_url: None,
+            upload_dir: "/tmp/chopin-test-uploads".to_string(),
+            max_upload_size: 10_485_760,
         };
 
         Self::with_config(config).await

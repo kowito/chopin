@@ -98,6 +98,7 @@ async fn signup(
         email: Set(payload.email),
         username: Set(payload.username),
         password_hash: Set(password_hash),
+        role: Set("user".to_string()),
         is_active: Set(true),
         created_at: Set(now),
         updated_at: Set(now),

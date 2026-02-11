@@ -9,6 +9,7 @@ use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 
+use crate::cache::CacheService;
 use crate::config::Config;
 use crate::controllers::AppState;
 use crate::migrations::Migrator;
@@ -19,6 +20,7 @@ use crate::routing;
 pub struct App {
     pub config: Config,
     pub db: DatabaseConnection,
+    pub cache: CacheService,
 }
 
 impl App {
@@ -32,7 +34,10 @@ impl App {
         Migrator::up(&db, None).await?;
         tracing::info!("Migrations complete.");
 
-        Ok(App { config, db })
+        // Initialize cache (in-memory by default, Redis if configured)
+        let cache = Self::init_cache(&config).await;
+
+        Ok(App { config, db, cache })
     }
 
     /// Create a new Chopin application with a given config.
@@ -44,7 +49,29 @@ impl App {
         Migrator::up(&db, None).await?;
         tracing::info!("Migrations complete.");
 
-        Ok(App { config, db })
+        // Initialize cache
+        let cache = Self::init_cache(&config).await;
+
+        Ok(App { config, db, cache })
+    }
+
+    /// Initialize the cache backend based on config.
+    async fn init_cache(config: &Config) -> CacheService {
+        #[cfg(feature = "redis")]
+        if let Some(ref redis_url) = config.redis_url {
+            match crate::cache::RedisCache::new(redis_url).await {
+                Ok(redis_cache) => {
+                    tracing::info!("Redis cache connected");
+                    return CacheService::new(redis_cache);
+                }
+                Err(e) => {
+                    tracing::warn!("Redis connection failed, falling back to in-memory cache: {}", e);
+                }
+            }
+        }
+        let _ = config; // suppress unused warning when redis feature is off
+        tracing::info!("Using in-memory cache");
+        CacheService::in_memory()
     }
 
     /// Build the Axum router with all middleware and routes.
@@ -52,6 +79,7 @@ impl App {
         let state = AppState {
             db: self.db.clone(),
             config: self.config.clone(),
+            cache: self.cache.clone(),
         };
 
         let config = self.config.clone();
