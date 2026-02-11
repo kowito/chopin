@@ -25,7 +25,7 @@ Complete documentation for the Chopin web framework.
 ### Advanced Features
 
 - **[Caching](caching.md)** - Redis and in-memory caching layer
-- **[File Uploads](file-uploads.md)** - Handle multipart uploads and storage
+- **[File Uploads](file-uploads.md)** - Multipart uploads with local filesystem or S3-compatible storage
 - **[Roles & Permissions](roles-permissions.md)** - Role-based access control (RBAC)
 - **[GraphQL](graphql.md)** - GraphQL API support via async-graphql
 - **[LLM Learning Guide](llm-learning-guide.md)** - Share with LLMs (ChatGPT, Claude) so they can help you build Chopin apps
@@ -180,9 +180,9 @@ Add caching with Redis or in-memory cache. Speed up your API with cache-aside pa
 **Topics**: CacheService, Redis backend, In-memory cache, TTL, Cache strategies, Best practices
 
 ### [File Uploads](file-uploads.md)
-Handle multipart file uploads with validation, storage backends, and serving uploaded files.
+Handle multipart file uploads with local filesystem or S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, etc.).
 
-**Topics**: Multipart forms, UploadedFile, LocalStorage, Custom storage, Image processing, Security
+**Topics**: Multipart forms, UploadedFile, LocalStorage, S3Storage, S3 providers, Presigned URLs, Image processing, Security
 
 ### [Roles & Permissions](roles-permissions.md)
 Implement role-based access control (RBAC) with User, Admin, and Superuser roles.

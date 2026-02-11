@@ -531,7 +531,7 @@ Chopin has recently gained several powerful features:
 - **Permissions system** - Role-based access control (RBAC) with User, Admin, and Superuser roles. See [Roles & Permissions](roles-permissions.md)
 - **Caching layer** - Redis and in-memory caching with cache-aside patterns. See [Caching](caching.md)
 - **GraphQL** - Optional GraphQL API support via async-graphql. See [GraphQL](graphql.md)
-- **File uploads** - Multipart upload handling with LocalStorage backend. See [File Uploads](file-uploads.md)
+- **File uploads** - Multipart upload handling with LocalStorage or S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, etc.). See [File Uploads](file-uploads.md)
 
 ## Future Architecture
 
