@@ -194,7 +194,13 @@ SERVER_HOST=127.0.0.1
 
 # Environment (development, production, test)
 ENVIRONMENT=development
+
+# Logging (trace, debug, info, warn, error)
+# Set to 'debug' for development, 'info' for production
+RUST_LOG=debug
 ```
+
+> **💡 Tip:** Use `RUST_LOG=debug` during development to see detailed logs including database queries, cache hits, and request handling. For production, use `RUST_LOG=info` or `RUST_LOG=warn`.
 
 ## Testing
 

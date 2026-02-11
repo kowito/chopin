@@ -1091,6 +1091,10 @@ SERVER_HOST=127.0.0.1
 # Environment
 ENVIRONMENT=development
 
+# Logging (see: https://docs.rs/tracing-subscriber)
+# Options: trace, debug, info, warn, error
+RUST_LOG=debug
+
 # Cache (optional - uses in-memory by default)
 # REDIS_URL=redis://127.0.0.1:6379
 

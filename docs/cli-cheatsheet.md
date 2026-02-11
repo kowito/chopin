@@ -190,6 +190,9 @@ SERVER_PORT=3000
 SERVER_HOST=127.0.0.1
 ENVIRONMENT=development
 
+# Logging level: trace, debug, info, warn, error
+RUST_LOG=debug
+
 # Optional: S3-compatible object storage
 # S3_BUCKET=my-bucket
 # S3_REGION=us-east-1
