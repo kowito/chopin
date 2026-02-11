@@ -1,0 +1,18 @@
+[package]
+name = "chopin-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI scaffolding tool for the Chopin web framework"
+
+[[bin]]
+name = "chopin"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+chopin-core = { path = "../chopin-core" }
+utoipa = { version = "5", features = ["yaml"] }
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
