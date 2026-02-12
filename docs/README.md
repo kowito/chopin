@@ -1,6 +1,8 @@
-# Chopin Documentation
+# Chopin Documentation (v0.1.1)
 
 > The high-performance Rust web framework for perfectionists with deadlines.
+>
+> **Current Version:** 0.1.1 | **Last Updated:** February 2026
 
 ## Table of Contents
 

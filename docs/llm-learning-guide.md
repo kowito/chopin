@@ -1,6 +1,8 @@
-# Chopin Framework — LLM Learning Guide
+# Chopin Framework — LLM Learning Guide (v0.1.1)
 
 > This document is designed for AI assistants (ChatGPT, Claude, Copilot, etc.) to understand the Chopin framework completely. It contains everything needed to help users build applications with Chopin.
+>
+> **Last Updated:** February 2026 | **Current Version:** 0.1.1
 
 ## What is Chopin?
 
@@ -25,12 +27,14 @@ Chopin is a **high-performance Rust web framework** built on Axum, SeaORM, and T
 | Raw HTTP | Hyper | 1.x |
 | Async runtime | Tokio | 1.x |
 | ORM | SeaORM | 1.x |
-| JSON | sonic-rs | 0.3 (SIMD-optimized) |
+| JSON | sonic-rs | 0.3 (ARM NEON/SIMD) |
 | Auth | jsonwebtoken + argon2 | 9 / 0.5 |
 | API docs | utoipa + utoipa-scalar | 5 / 0.3 |
 | Caching | DashMap / Redis | — / 0.27 |
 | Storage | Local / AWS S3 | — / 1.x |
 | GraphQL | async-graphql | 7.x (optional) |
+| Allocator | mimalloc | 0.1 (perf feature) |
+| Socket mult. | socket2 | 0.5 (SO_REUSEPORT) |
 
 ## Project Structure
 

@@ -1,4 +1,6 @@
-# GraphQL
+# GraphQL (v0.1.1)
+
+**Current Version:** 0.1.1 | **Last Updated:** February 2026
 
 > Requires the `graphql` feature flag.
 

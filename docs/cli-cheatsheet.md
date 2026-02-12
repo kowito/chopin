@@ -1,4 +1,6 @@
-# CLI Cheatsheet
+# CLI Cheatsheet (v0.1.1)
+
+**Current Version:** 0.1.1 | **Last Updated:** February 2026
 
 Quick reference for all `chopin` CLI commands.
 

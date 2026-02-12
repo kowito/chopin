@@ -1,4 +1,6 @@
-# Architecture
+# Architecture (v0.1.1)
+
+**Current Version:** 0.1.1 | **Last Updated:** February 2026
 
 ## Overview
 

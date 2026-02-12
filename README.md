@@ -1,6 +1,8 @@
-# 🎹 Chopin
+# 🎹 Chopin (v0.1.1)
 
 **The high-performance Rust web framework for perfectionists with deadlines.**
+
+**Current Version:** 0.1.1 | **Last Updated:** February 2026
 
 Chopin gives you the full-stack experience — auth, database, caching, file uploads, OpenAPI docs — with the performance to beat raw frameworks in benchmarks.
 
