@@ -5,6 +5,7 @@ members = [
     "chopin-examples/basic-api",
     "chopin-examples/hello-world",
     "chopin-examples/benchmark",
+    "chopin-examples/performance-mode",
 ]
 resolver = "2"
 
