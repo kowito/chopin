@@ -32,6 +32,7 @@
 
 ### Performance
 
+- [Building High-Performance Apps](building-high-performance-apps.md) — Complete guide to building production-ready high-performance applications
 - [Performance](performance.md) — Server modes, mimalloc, SO_REUSEPORT, benchmarks
 - [Deployment](deployment.md) — Production deployment guide
 

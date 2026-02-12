@@ -31,22 +31,27 @@ Core 2: TcpListener → accept → spawn connection handler
 Core N: TcpListener → accept → spawn connection handler
 ```
 
-### Zero-Allocation Benchmark Endpoints
+### Zero-Allocation Fast Routes
 
-The `/json` and `/plaintext` endpoints bypass Axum entirely:
-
-```rust
-// Pre-computed at compile time — embedded in .rodata section
-static JSON_BODY: Bytes = Bytes::from_static(b"{\"message\":\"Hello, World!\"}");
-static PLAIN_BODY: Bytes = Bytes::from_static(b"Hello, World!");
-```
-
-Response construction uses pre-computed `HeaderValue` statics — no heap allocation, no string formatting:
+Register static response endpoints via the `FastRoute` API — they bypass Axum entirely:
 
 ```rust
-static CT_JSON: HeaderValue = HeaderValue::from_static("application/json");
-static CL_27: HeaderValue = HeaderValue::from_static("27");
+use chopin_core::{App, FastRoute};
+
+let app = App::new().await?
+    .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
+    .fast_route(FastRoute::text("/plaintext", b"Hello, World!"))
+    .fast_route(FastRoute::html("/health", b"OK"));
+app.run().await?;
 ```
+
+Under the hood, `FastRoute` pre-computes everything at registration time:
+- Body as `Bytes::from_static` (embedded in binary's `.rodata`)
+- `Content-Type`, `Content-Length`, `Server` headers in a pre-built `HeaderMap`
+- Only the `Date` header is inserted per-request (cached, updated every 500ms)
+
+No heap allocation occurs on the hot path — the `ChopinFuture::Ready` variant
+returns the response inline without `Box::pin`.
 
 ### Date Header Caching
 
@@ -151,10 +156,11 @@ bombardier -c 256 -d 10s http://127.0.0.1:3000/plaintext
 | Server layer | `axum::serve` | Raw `hyper::http1` |
 | Accept loops | 1 | N (per CPU core) |
 | SO_REUSEPORT | No | Yes |
-| `/json` path | Through Axum + middleware | Direct hyper (zero alloc) |
+| Fast routes | Through Axum + middleware | `FastRoute` API (zero alloc) |
+| Future type | Axum internal | `ChopinFuture` enum (no `Box::pin`) |
 | Allocator | System | mimalloc (with `perf`) |
-| Date header | Per-request | Cached (500ms) |
-| Middleware on `/json` | Full stack | None |
+| Date header | Per-request | Cached (500ms, `std::sync::RwLock`) |
+| Middleware on fast routes | Full stack | None |
 | Best for | Development, typical API | Benchmarks, extreme throughput |
 
 ## Checklist for Maximum Performance

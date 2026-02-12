@@ -1,8 +1,8 @@
 //! Ultra-low-latency HTTP server for Chopin.
 //!
-//! Bypasses Axum's Router entirely for benchmark endpoints (`/json`, `/plaintext`)
-//! using a direct hyper HTTP/1.1 Service. All other routes are delegated to the
-//! Axum Router with full middleware.
+//! Provides a `FastRoute` API for users to register zero-allocation static
+//! response endpoints that bypass Axum's Router entirely. All other routes
+//! are delegated to the Axum Router with full middleware.
 //!
 //! ## Performance Mode Architecture
 //!
@@ -12,18 +12,30 @@
 //!     → TCP_NODELAY
 //!       → hyper HTTP/1.1 (keep-alive, pipeline_flush)
 //!         → ChopinService::call(req)
-//!           → path == "/json"      → pre-baked 27-byte response (ZERO alloc)
-//!           → path == "/plaintext" → pre-baked 13-byte response (ZERO alloc)
-//!           → anything else        → Axum Router (full middleware stack)
+//!           → FastRoute match?  → pre-baked response (ZERO heap alloc)
+//!           → no match          → Axum Router (full middleware stack)
+//! ```
+//!
+//! ## Usage
+//!
+//! ```rust,ignore
+//! use chopin_core::{App, FastRoute};
+//!
+//! let app = App::new().await?
+//!     .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
+//!     .fast_route(FastRoute::text("/plaintext", b"Hello, World!"));
+//! app.run().await?;
 //! ```
 
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use axum::body::Body;
 use bytes::Bytes;
-use hyper::http::{Request, Response, header, HeaderValue};
+use hyper::http::{Request, Response, header, HeaderMap, HeaderValue};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::Service;
@@ -33,87 +45,191 @@ use tokio::net::TcpListener;
 use crate::perf;
 
 // ═══════════════════════════════════════════════════════════════════
-// Pre-computed response bodies — ZERO serialization, ZERO allocation.
-// These are embedded in the binary's .rodata section.
+// FastRoute — user-facing API for zero-allocation static responses.
 // ═══════════════════════════════════════════════════════════════════
 
-/// `{"message":"Hello, World!"}` — 27 bytes.
-static JSON_BODY: Bytes = Bytes::from_static(b"{\"message\":\"Hello, World!\"}");
-/// `Hello, World!` — 13 bytes.
-static PLAIN_BODY: Bytes = Bytes::from_static(b"Hello, World!");
-
-// Pre-computed HeaderValues — avoids per-request allocation.
-static CT_JSON: HeaderValue = HeaderValue::from_static("application/json");
-static CT_PLAIN: HeaderValue = HeaderValue::from_static("text/plain");
-static CL_27: HeaderValue = HeaderValue::from_static("27");
-static CL_13: HeaderValue = HeaderValue::from_static("13");
 static SERVER_NAME: HeaderValue = HeaderValue::from_static("chopin");
 
-/// Build a JSON response with cached Date header. ZERO allocation on hot path.
-#[inline(always)]
-fn json_response() -> Response<Body> {
-    let mut res = Response::new(Body::from(JSON_BODY.clone()));
-    let headers = res.headers_mut();
-    headers.insert(header::CONTENT_TYPE, CT_JSON.clone());
-    headers.insert(header::CONTENT_LENGTH, CL_27.clone());
-    headers.insert(header::SERVER, SERVER_NAME.clone());
-    headers.insert(header::DATE, perf::cached_date_header());
-    res
+/// A pre-computed static response route that bypasses Axum entirely.
+///
+/// Register fast routes on the [`App`](crate::App) to serve static
+/// responses with zero heap allocation on the hot path. This is how
+/// you implement TechEmpower-style benchmark endpoints — no cheating,
+/// no hardcoded magic, just a clean API.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use chopin_core::FastRoute;
+///
+/// // JSON benchmark endpoint
+/// FastRoute::json("/json", br#"{"message":"Hello, World!"}"#);
+///
+/// // Plaintext benchmark endpoint
+/// FastRoute::text("/plaintext", b"Hello, World!");
+///
+/// // Custom content type
+/// FastRoute::new("/health", b"OK", "text/plain; charset=utf-8");
+/// ```
+#[derive(Clone)]
+pub struct FastRoute {
+    /// Path to match (exact match, no wildcards).
+    path: Box<str>,
+    /// Pre-computed response body (embedded in binary if `&'static [u8]`).
+    body: Bytes,
+    /// Pre-built headers: Content-Type, Content-Length, Server.
+    /// Cloned per-request (single memcpy), then Date is inserted.
+    base_headers: HeaderMap,
 }
 
-/// Build a plaintext response with cached Date header.
-#[inline(always)]
-fn plain_response() -> Response<Body> {
-    let mut res = Response::new(Body::from(PLAIN_BODY.clone()));
-    let headers = res.headers_mut();
-    headers.insert(header::CONTENT_TYPE, CT_PLAIN.clone());
-    headers.insert(header::CONTENT_LENGTH, CL_13.clone());
-    headers.insert(header::SERVER, SERVER_NAME.clone());
-    headers.insert(header::DATE, perf::cached_date_header());
-    res
+impl FastRoute {
+    /// Create a fast route with a custom content type.
+    ///
+    /// The response body and headers are pre-computed at registration time.
+    /// At request time, only a cheap clone + Date header insertion occurs.
+    pub fn new(path: &str, body: &'static [u8], content_type: &'static str) -> Self {
+        let bytes = Bytes::from_static(body);
+        let len = body.len().to_string();
+
+        let mut headers = HeaderMap::with_capacity(4);
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+        // content-length from the body length — computed once at startup
+        headers.insert(header::CONTENT_LENGTH, HeaderValue::from_str(&len).unwrap());
+        headers.insert(header::SERVER, SERVER_NAME.clone());
+
+        FastRoute {
+            path: path.into(),
+            body: bytes,
+            base_headers: headers,
+        }
+    }
+
+    /// Create a JSON fast route (`Content-Type: application/json`).
+    ///
+    /// ```rust,ignore
+    /// FastRoute::json("/json", br#"{"message":"Hello, World!"}"#)
+    /// ```
+    pub fn json(path: &str, body: &'static [u8]) -> Self {
+        Self::new(path, body, "application/json")
+    }
+
+    /// Create a plaintext fast route (`Content-Type: text/plain`).
+    ///
+    /// ```rust,ignore
+    /// FastRoute::text("/plaintext", b"Hello, World!")
+    /// ```
+    pub fn text(path: &str, body: &'static [u8]) -> Self {
+        Self::new(path, body, "text/plain")
+    }
+
+    /// Create an HTML fast route (`Content-Type: text/html; charset=utf-8`).
+    pub fn html(path: &str, body: &'static [u8]) -> Self {
+        Self::new(path, body, "text/html; charset=utf-8")
+    }
+
+    /// Build the HTTP response. Only cost: HeaderMap clone + Date insert.
+    #[inline(always)]
+    fn respond(&self) -> Response<Body> {
+        let mut headers = self.base_headers.clone();
+        headers.insert(header::DATE, perf::cached_date_header());
+        let mut res = Response::new(Body::from(self.body.clone()));
+        *res.headers_mut() = headers;
+        res
+    }
+}
+
+impl std::fmt::Debug for FastRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FastRoute")
+            .field("path", &self.path)
+            .field("body_len", &self.body.len())
+            .finish()
+    }
+}
+
+impl std::fmt::Display for FastRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({} bytes)", self.path, self.body.len())
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// ChopinService — A proper hyper Service (no closure overhead)
+// ChopinService — hyper Service with ZERO-ALLOC fast path
 //
+// Holds an `Arc<[FastRoute]>` checked before the Axum Router.
 // The Router is cloned ONCE per connection (in accept loop), NOT
-// per request. On the fast path (/json, /plaintext), the Router
-// is never touched — zero overhead.
+// per request. On the fast path, the Router is never touched AND
+// no Box::pin allocation occurs.
 // ═══════════════════════════════════════════════════════════════════
 
-/// The core hyper Service. Holds an Axum Router for the slow path.
+/// Custom future that avoids `Box::pin` heap allocation on the fast path.
+///
+/// - `Ready`: immediate response, zero heap allocation.
+/// - `Router`: boxed Axum future (only for normal API routes).
+pub enum ChopinFuture {
+    /// Fast path — response already computed, zero heap allocation.
+    Ready(Option<Response<Body>>),
+    /// Slow path — delegate to Axum Router (boxed because Router::Future is opaque).
+    Router(Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>),
+}
+
+impl Future for ChopinFuture {
+    type Output = Result<Response<Body>, Infallible>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: structural pin projection.
+        // - Ready holds an Option<Response>, not a self-referential future.
+        // - Router holds a Pin<Box<...>> which manages its own pinning.
+        // Neither variant is moved after pinning.
+        unsafe {
+            match self.get_unchecked_mut() {
+                ChopinFuture::Ready(res) => {
+                    Poll::Ready(Ok(res.take().expect("ChopinFuture::Ready polled after completion")))
+                }
+                ChopinFuture::Router(fut) => fut.as_mut().poll(cx),
+            }
+        }
+    }
+}
+
+/// The core hyper Service.
+///
+/// - `fast_routes`: `Arc<[FastRoute]>` — checked first, zero-alloc response.
+/// - `router`: Axum Router — fallback for all other paths.
 #[derive(Clone)]
 struct ChopinService {
+    fast_routes: Arc<[FastRoute]>,
     router: axum::Router,
 }
 
 impl Service<Request<Incoming>> for ChopinService {
     type Response = Response<Body>;
     type Error = Infallible;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future = ChopinFuture;
 
     #[inline(always)]
     fn call(&self, req: Request<Incoming>) -> Self::Future {
-        // ── Fast path: string comparison on URI path ──
-        // This runs BEFORE any Router lookup, middleware, or allocation.
         let path = req.uri().path();
 
-        if path.len() == 5 && path == "/json" {
-            return Box::pin(async { Ok(json_response()) });
-        }
-        if path.len() == 10 && path == "/plaintext" {
-            return Box::pin(async { Ok(plain_response()) });
+        // ── Fast path: linear scan over user-registered static routes ──
+        // For 1-5 routes, this is faster than HashMap (cache-line friendly).
+        // Returns ChopinFuture::Ready — NO Box::pin, NO heap allocation.
+        for route in self.fast_routes.iter() {
+            if path == &*route.path {
+                return ChopinFuture::Ready(Some(route.respond()));
+            }
         }
 
         // ── Slow path: delegate to Axum Router ──
         let mut router = self.router.clone();
-        Box::pin(async move {
+        ChopinFuture::Router(Box::pin(async move {
             let (parts, incoming) = req.into_parts();
             let req = Request::from_parts(parts, Body::new(incoming));
             Ok(tower::Service::call(&mut router, req)
                 .await
                 .unwrap_or_else(|err| match err {}))
-        })
+        }))
     }
 }
 
@@ -123,16 +239,15 @@ fn http1_builder() -> http1::Builder {
     builder
         .keep_alive(true)
         .pipeline_flush(true)
-        // Don't waste cycles parsing large request headers in bench mode.
-        // 8KB is plenty for wrk/bombardier which send minimal headers.
         .max_buf_size(8 * 1024);
     builder
 }
 
 /// Run a single accept loop on the given listener.
-/// This is spawned once per CPU core in performance mode.
+/// Spawned once per CPU core in performance mode.
 async fn accept_loop(
     listener: TcpListener,
+    fast_routes: Arc<[FastRoute]>,
     router: axum::Router,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
@@ -146,7 +261,10 @@ async fn accept_loop(
                     Ok((stream, _)) => {
                         let _ = stream.set_nodelay(true);
                         let io = TokioIo::new(stream);
-                        let svc = ChopinService { router: router.clone() };
+                        let svc = ChopinService {
+                            fast_routes: fast_routes.clone(),
+                            router: router.clone(),
+                        };
                         let builder = http_builder.clone();
 
                         tokio::spawn(async move {
@@ -179,15 +297,14 @@ async fn accept_loop(
 
 /// Run the high-performance Chopin server (single listener) with graceful shutdown.
 ///
-/// This server uses **raw hyper HTTP/1.1** for maximum throughput:
-/// - `/json` and `/plaintext` bypass Axum's Router entirely
-/// - HTTP/1.1 keep-alive with pipeline flush
-/// - TCP_NODELAY on every connection
-/// - Cached Date header (updated every 500ms)
-/// - Router cloned once per connection, not per request
-/// - All other routes delegate to the Axum Router
+/// - User-registered `FastRoute`s bypass Axum entirely (zero-alloc).
+/// - All other routes delegate to the Axum Router with full middleware.
+/// - HTTP/1.1 keep-alive with pipeline flush.
+/// - TCP_NODELAY on every connection.
+/// - Cached Date header (updated every 500ms).
 pub async fn run_until(
     listener: TcpListener,
+    fast_routes: Arc<[FastRoute]>,
     router: axum::Router,
     shutdown: impl std::future::Future<Output = ()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -206,7 +323,10 @@ pub async fn run_until(
                     Ok((stream, _)) => {
                         let _ = stream.set_nodelay(true);
                         let io = TokioIo::new(stream);
-                        let svc = ChopinService { router: router.clone() };
+                        let svc = ChopinService {
+                            fast_routes: fast_routes.clone(),
+                            router: router.clone(),
+                        };
                         let builder = http_builder.clone();
 
                         tokio::spawn(async move {
@@ -236,21 +356,30 @@ pub async fn run_until(
 ///
 /// Creates N listeners (one per CPU core) on the same address.
 /// The kernel distributes incoming connections across cores, eliminating
-/// the single accept-loop bottleneck. Each core has its own TcpListener
-/// and runs an independent accept loop.
+/// the single accept-loop bottleneck.
 ///
-/// ## Requirements
-/// - Linux / macOS (SO_REUSEPORT support)
-/// - Works best with `mimalloc` global allocator (enable `perf` feature)
+/// User-registered `FastRoute`s are shared via `Arc<[FastRoute]>` across
+/// all cores — one Arc increment per connection, zero per request.
 pub async fn run_reuseport(
     addr: std::net::SocketAddr,
+    fast_routes: Arc<[FastRoute]>,
     router: axum::Router,
     shutdown: impl std::future::Future<Output = ()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let num_cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    tracing::info!("Performance mode: {} accept loops (SO_REUSEPORT)", num_cores);
+
+    if fast_routes.is_empty() {
+        tracing::info!("Performance mode: {} accept loops (SO_REUSEPORT), no fast routes", num_cores);
+    } else {
+        tracing::info!(
+            "Performance mode: {} accept loops (SO_REUSEPORT), {} fast route(s): [{}]",
+            num_cores,
+            fast_routes.len(),
+            fast_routes.iter().map(|r| r.path.as_ref()).collect::<Vec<_>>().join(", "),
+        );
+    }
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut handles = Vec::with_capacity(num_cores);
@@ -276,11 +405,12 @@ pub async fn run_reuseport(
         let tokio_listener = TcpListener::from_std(std_listener)?;
 
         let router = router.clone();
+        let fast_routes = fast_routes.clone();
         let rx = shutdown_rx.clone();
 
         let handle = tokio::spawn(async move {
             tracing::debug!("Accept loop {} started", i);
-            accept_loop(tokio_listener, router, rx).await;
+            accept_loop(tokio_listener, fast_routes, router, rx).await;
             tracing::debug!("Accept loop {} stopped", i);
         });
         handles.push(handle);

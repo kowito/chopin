@@ -374,6 +374,17 @@ pub struct ApiDoc;
 
 ### 16. Performance Architecture
 
+**FastRoute API** — Users register zero-allocation static response endpoints:
+
+```rust
+use chopin_core::{App, FastRoute};
+
+let app = App::new().await?
+    .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
+    .fast_route(FastRoute::text("/plaintext", b"Hello, World!"));
+app.run().await?;
+```
+
 The performance mode stack:
 
 ```
@@ -382,14 +393,15 @@ SO_REUSEPORT × N CPU cores  (kernel distributes connections)
     → TCP_NODELAY on accept
       → hyper::http1::Builder (keep_alive, pipeline_flush, max_buf_size=8192)
         → ChopinService::call(req)
-          → /json      → pre-baked Bytes::from_static (27 bytes) + cached Date header
-          → /plaintext → pre-baked Bytes::from_static (13 bytes) + cached Date header
-          → *          → Axum Router with full middleware
+          → FastRoute match → ChopinFuture::Ready (ZERO alloc, no Box::pin)
+          → no match        → Axum Router with full middleware
 ```
 
 JSON serialization everywhere uses **sonic-rs** (ARM NEON / x86 AVX2 optimized).
 
 Release profile: `opt-level=3`, `lto="fat"`, `codegen-units=1`, `strip=true`, `panic="abort"`.
+
+> **📚 For a complete guide on building high-performance applications**, see [building-high-performance-apps.md](./building-high-performance-apps.md) which covers setup, optimization patterns, caching strategies, and production deployment.
 
 ## CLI Commands
 
@@ -508,10 +520,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 1. **Config is `Arc<Config>`** in AppState — never clone the full Config, always Arc.
 2. **JSON uses `sonic_rs`** — all `ApiResponse` and `ChopinError` serialize with `sonic_rs::to_vec()`, not `serde_json`.
 3. **The `Json` extractor** in `chopin_core::extractors` uses `sonic_rs::from_slice()` — it's NOT `axum::Json`.
-4. **Performance mode bypasses Axum** — the `ChopinService` in `server.rs` checks path before touching the Router.
-5. **SO_REUSEPORT uses `socket2`** — creates N `socket2::Socket` instances, converts to `tokio::TcpListener`.
-6. **mimalloc is optional** — only active with `--features perf`. Set via `#[global_allocator]` in `lib.rs`.
-7. **Date header is cached** — `perf::cached_date_header()` returns a cached `HeaderValue`, updated every 500ms.
-8. **Migrations auto-run** — both `App::new()` and `App::with_config()` call `Migrator::up()` on startup.
-9. **Role is an integer in the DB** — `Role::User = 0`, `Role::Admin = 2`, etc. Stored in the `role` column.
-10. **AuthUser reads from request Extensions** — the JWT middleware injects claims via `axum::Extension<Arc<Config>>`.
+4. **FastRoute bypasses Axum** — `ChopinService` checks user-registered `FastRoute`s before the Router. No hardcoded paths.
+5. **`ChopinFuture` avoids `Box::pin`** — fast routes return `ChopinFuture::Ready` (stack-allocated), only Router path boxes.
+6. **SO_REUSEPORT uses `socket2`** — creates N `socket2::Socket` instances, converts to `tokio::TcpListener`.
+7. **mimalloc is optional** — only active with `--features perf`. Set via `#[global_allocator]` in `lib.rs`.
+8. **Date header is cached** — `perf::cached_date_header()` uses `std::sync::RwLock` (not tokio), updated every 500ms. Readers never block.
+9. **Migrations auto-run** — both `App::new()` and `App::with_config()` call `Migrator::up()` on startup.
+10. **Role is an integer in the DB** — `Role::User = 0`, `Role::Admin = 2`, etc. Stored in the `role` column.
+11. **AuthUser reads from request Extensions** — the JWT middleware injects claims via `axum::Extension<Arc<Config>>`.

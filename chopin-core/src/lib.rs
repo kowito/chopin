@@ -30,4 +30,5 @@ pub use cache::CacheService;
 pub use config::{Config, ServerMode};
 pub use error::ChopinError;
 pub use response::ApiResponse;
+pub use server::FastRoute;
 pub use testing::{TestApp, TestClient, TestResponse};

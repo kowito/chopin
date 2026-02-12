@@ -20,12 +20,14 @@ use crate::migrations::Migrator;
 use crate::openapi::ApiDoc;
 use crate::perf;
 use crate::routing;
+use crate::server::FastRoute;
 
 /// The main Chopin application.
 pub struct App {
     pub config: Config,
     pub db: DatabaseConnection,
     pub cache: CacheService,
+    fast_routes: Vec<FastRoute>,
 }
 
 impl App {
@@ -42,7 +44,7 @@ impl App {
         // Initialize cache (in-memory by default, Redis if configured)
         let cache = Self::init_cache(&config).await;
 
-        Ok(App { config, db, cache })
+        Ok(App { config, db, cache, fast_routes: Vec::new() })
     }
 
     /// Create a new Chopin application with a given config.
@@ -57,7 +59,7 @@ impl App {
         // Initialize cache
         let cache = Self::init_cache(&config).await;
 
-        Ok(App { config, db, cache })
+        Ok(App { config, db, cache, fast_routes: Vec::new() })
     }
 
     /// Initialize the cache backend based on config.
@@ -81,8 +83,8 @@ impl App {
 
     /// Build the Axum router for API routes only.
     ///
-    /// Note: `/json` and `/plaintext` benchmark endpoints are handled directly
-    /// by the hyper server layer (see `server.rs`) and never touch this Router.
+    /// Fast routes registered via [`fast_route`](Self::fast_route) bypass this
+    /// Router entirely in performance mode — they are handled at the hyper layer.
     pub fn router(&self) -> Router {
         let config = Arc::new(self.config.clone());
         let is_dev = self.config.is_dev();
@@ -116,6 +118,44 @@ impl App {
         router
     }
 
+    // ═══ Fast Route Builder API ═══
+
+    /// Register a [`FastRoute`] — a zero-allocation static response endpoint
+    /// that bypasses Axum entirely in performance mode.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use chopin_core::{App, FastRoute};
+    ///
+    /// let app = App::new().await?
+    ///     .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
+    ///     .fast_route(FastRoute::text("/plaintext", b"Hello, World!"));
+    /// app.run().await?;
+    /// ```
+    pub fn fast_route(mut self, route: FastRoute) -> Self {
+        self.fast_routes.push(route);
+        self
+    }
+
+    /// Convenience: register a JSON fast route (`Content-Type: application/json`).
+    ///
+    /// ```rust,ignore
+    /// app.fast_json("/json", br#"{"message":"Hello, World!"}"#)
+    /// ```
+    pub fn fast_json(self, path: &str, body: &'static [u8]) -> Self {
+        self.fast_route(FastRoute::json(path, body))
+    }
+
+    /// Convenience: register a plaintext fast route (`Content-Type: text/plain`).
+    ///
+    /// ```rust,ignore
+    /// app.fast_text("/plaintext", b"Hello, World!")
+    /// ```
+    pub fn fast_text(self, path: &str, body: &'static [u8]) -> Self {
+        self.fast_route(FastRoute::text(path, body))
+    }
+
     /// Run the application server.
     ///
     /// Behaviour depends on [`ServerMode`]:
@@ -123,17 +163,25 @@ impl App {
     /// - **Standard** — `axum::serve` with full middleware, graceful shutdown.
     ///   Easy to use, great for development and typical production.
     /// - **Performance** — Raw hyper HTTP/1.1 server with SO_REUSEPORT,
-    ///   multi-core accept loops, and pre-baked static responses on `/json`
-    ///   and `/plaintext`. All other routes still go through Axum.
+    ///   multi-core accept loops. User-registered fast routes bypass Axum
+    ///   with zero allocation. All other routes go through the full middleware.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         let addr = self.config.server_addr();
         let mode = self.config.server_mode;
         let router = self.router();
+        let fast_routes: Arc<[FastRoute]> = self.fast_routes.into();
 
         println!("\n🎹 Chopin server is running!");
         println!("   → Mode:    {}", mode);
         println!("   → Server:  http://{}", addr);
-        println!("   → API docs: http://{}/api-docs\n", addr);
+        println!("   → API docs: http://{}/api-docs", addr);
+        if !fast_routes.is_empty() {
+            println!("   → Fast routes: {}", fast_routes.len());
+            for r in fast_routes.iter() {
+                println!("     • {}", r);
+            }
+        }
+        println!();
 
         tracing::info!("Chopin server running on http://{} (mode: {})", addr, mode);
 
@@ -148,7 +196,7 @@ impl App {
             ServerMode::Performance => {
                 // ─── Performance mode: raw hyper + SO_REUSEPORT ───
                 let socket_addr: std::net::SocketAddr = addr.parse()?;
-                crate::server::run_reuseport(socket_addr, router, shutdown_signal()).await?;
+                crate::server::run_reuseport(socket_addr, fast_routes, router, shutdown_signal()).await?;
             }
         }
 

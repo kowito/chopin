@@ -4,15 +4,16 @@
 //! to minimize per-request overhead.
 
 use axum::http::HeaderValue;
-use std::sync::{Arc, OnceLock};
-
-/// We piggyback on tokio's parking_lot feature (already enabled) for
-/// a faster RwLock — no poisoning overhead, smaller memory footprint.
-use tokio::sync::RwLock;
+use std::sync::{Arc, OnceLock, RwLock};
 
 /// Cached HTTP Date header, updated every 500ms by a background task.
-/// Using a tokio::sync::RwLock inside an Arc avoids std::sync::RwLock
-/// poisoning and is designed for async contexts.
+///
+/// Uses `std::sync::RwLock` (NOT `tokio::sync::RwLock`) because:
+/// - Reads are synchronous and take nanoseconds (no async overhead)
+/// - Multiple readers never block each other (read-heavy pattern)
+/// - The write lock is held for ~50ns every 500ms (negligible contention)
+/// - `tokio::sync::RwLock::try_read()` can FAIL under contention,
+///   causing expensive fallback to `SystemTime::now()` + format
 static CACHED_DATE: OnceLock<Arc<RwLock<HeaderValue>>> = OnceLock::new();
 
 fn now_header() -> HeaderValue {
@@ -31,7 +32,8 @@ pub fn init_date_cache() {
             loop {
                 interval.tick().await;
                 let hv = now_header();
-                *val_clone.write().await = hv;
+                // write() blocks readers for ~nanoseconds — negligible
+                *val_clone.write().unwrap_or_else(|e| e.into_inner()) = hv;
             }
         });
         val
@@ -40,10 +42,14 @@ pub fn init_date_cache() {
 
 /// Get the cached Date header value.
 /// Falls back to computing it live if the cache isn't initialized.
-#[inline]
+///
+/// This is a synchronous read — no async runtime interaction, no task
+/// scheduling, just an atomic compare on the RwLock. Multiple readers
+/// proceed concurrently (no blocking).
+#[inline(always)]
 pub fn cached_date_header() -> HeaderValue {
-    CACHED_DATE
-        .get()
-        .and_then(|v| v.try_read().ok().map(|h| h.clone()))
-        .unwrap_or_else(now_header)
+    match CACHED_DATE.get() {
+        Some(lock) => lock.read().unwrap_or_else(|e| e.into_inner()).clone(),
+        None => now_header(),
+    }
 }

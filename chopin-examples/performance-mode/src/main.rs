@@ -115,7 +115,7 @@
 //! | Target CPU | native | native |
 //! | Use case | Dev, typical prod | Benchmarks, extreme throughput |
 
-use chopin_core::App;
+use chopin_core::{App, FastRoute};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -138,7 +138,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("JWT_SECRET", "perf-example-secret");
     }
 
-    let app = App::new().await?;
+    let app = App::new().await?
+        // Register benchmark endpoints as FastRoutes (zero-alloc in performance mode)
+        .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
+        .fast_route(FastRoute::text("/plaintext", b"Hello, World!"));
+
     app.run().await?;
 
     Ok(())

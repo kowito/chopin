@@ -3,10 +3,13 @@
 //! A minimal server designed for maximum throughput benchmarking.
 //! Uses `ServerMode::Performance` — raw hyper HTTP/1.1 with SO_REUSEPORT.
 //!
+//! Fast routes are registered via the `FastRoute` API — these bypass Axum
+//! entirely and serve pre-computed responses with zero heap allocation.
+//!
 //! ## Endpoints
 //!
-//! - `GET /json`      → `{"message":"Hello, World!"}`   (pre-computed, zero-alloc)
-//! - `GET /plaintext` → `Hello, World!`                 (pre-computed, zero-alloc)
+//! - `GET /json`      → `{"message":"Hello, World!"}`   (FastRoute, zero-alloc)
+//! - `GET /plaintext` → `Hello, World!`                 (FastRoute, zero-alloc)
 //! - `GET /`          → Welcome JSON via Axum
 //! - `GET /api-docs`  → Scalar OpenAPI explorer
 //!
@@ -20,17 +23,17 @@
 //! ## Benchmark
 //!
 //! ```bash
-//! # JSON endpoint (raw hyper fast-path)
+//! # JSON endpoint (FastRoute fast-path)
 //! wrk -t4 -c256 -d10s http://127.0.0.1:3000/json
 //!
-//! # Plaintext endpoint (raw hyper fast-path)
+//! # Plaintext endpoint (FastRoute fast-path)
 //! wrk -t4 -c256 -d10s http://127.0.0.1:3000/plaintext
 //!
 //! # Axum route (standard middleware path)
 //! wrk -t4 -c256 -d10s http://127.0.0.1:3000/
 //! ```
 
-use chopin_core::App;
+use chopin_core::{App, FastRoute};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,7 +53,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("JWT_SECRET", "benchmark-secret");
     }
 
-    let app = App::new().await?;
+    let app = App::new().await?
+        // Register benchmark endpoints as FastRoutes.
+        // These bypass Axum entirely — zero allocation, maximum throughput.
+        .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
+        .fast_route(FastRoute::text("/plaintext", b"Hello, World!"));
+
     app.run().await?;
 
     Ok(())
