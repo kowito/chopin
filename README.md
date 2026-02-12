@@ -1,14 +1,15 @@
-# 🎹 Chopin (v0.1.1)
+# 🎹 Chopin (v0.1.2)
 
 **The high-performance Rust web framework for perfectionists with deadlines.**
 
-**Current Version:** 0.1.1 | **Last Updated:** February 2026
+**Current Version:** 0.1.2 | **Last Updated:** February 2026
 
 Chopin gives you the full-stack experience — auth, database, caching, file uploads, OpenAPI docs — with the performance to beat raw frameworks in benchmarks.
 
 ## Features
 
 - **Dual Server Modes** — Standard (easy, full middleware) or Performance (raw hyper, SO_REUSEPORT, zero-alloc)
+- **FastRoute API** — Zero-allocation endpoints via `ChopinBody` + direct header manipulation for extreme performance
 - **Built-in Auth** — JWT + Argon2id with signup/login endpoints out of the box
 - **Role-Based Access** — User, Moderator, Admin, SuperAdmin with extractors and middleware
 - **SeaORM Database** — SQLite, PostgreSQL, MySQL with auto-migrations
@@ -106,6 +107,7 @@ See the [docs/](docs/README.md) directory:
 |---------|-------------|
 | [hello-world](chopin-examples/hello-world/) | Minimal server — one file, zero config |
 | [basic-api](chopin-examples/basic-api/) | Full CRUD API with auth, pagination, tests |
+| [performance-mode](chopin-examples/performance-mode/) | FastRoute + zero-alloc JSON responses for maximum throughput |
 | [benchmark](chopin-examples/benchmark/) | Performance mode showcase for benchmarking |
 
 ## Tech Stack
