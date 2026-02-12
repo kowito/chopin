@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     extract::FromRequestParts,
     http::request::Parts,
@@ -41,10 +43,10 @@ where
                 ChopinError::Unauthorized("Invalid Authorization header format".to_string())
             })?;
 
-        // Get JWT secret from extensions (set by middleware)
+        // Get JWT secret from Arc<Config> in extensions (cheap Arc clone per request)
         let config = parts
             .extensions
-            .get::<Config>()
+            .get::<Arc<Config>>()
             .ok_or_else(|| ChopinError::Internal("Config not found in request".to_string()))?;
 
         let claims = auth::validate_token(token, &config.jwt_secret)?;

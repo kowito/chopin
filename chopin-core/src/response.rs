@@ -53,6 +53,19 @@ impl<T: Serialize> axum::response::IntoResponse for ApiResponse<T> {
         } else {
             axum::http::StatusCode::BAD_REQUEST
         };
-        (status, axum::Json(self)).into_response()
+        // Use sonic-rs for ARM NEON accelerated serialization
+        match sonic_rs::to_vec(&self) {
+            Ok(bytes) => (
+                status,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                bytes,
+            )
+                .into_response(),
+            Err(_) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Server Error",
+            )
+                .into_response(),
+        }
     }
 }

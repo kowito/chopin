@@ -1,137 +1,86 @@
 # Contributing to Chopin
 
-Thank you for your interest in contributing to Chopin! This guide will help you get started.
-
-## Development Setup
-
-### Prerequisites
-
-- Rust 1.75+ (stable)
-- SQLite (for development/testing)
-- Git
-
-### Clone and Build
+## Getting Started
 
 ```bash
-git clone https://github.com/yourusername/chopin.git
+git clone https://github.com/your-org/chopin.git
 cd chopin
 cargo build
-```
-
-### Run Tests
-
-```bash
 cargo test
 ```
 
-Tests use an in-memory SQLite database automatically — no external setup needed.
-
-### Project Structure
+## Workspace Structure
 
 ```
 chopin/
-├── chopin-core/          # Main framework library
-│   ├── src/
-│   │   ├── app.rs        # Application struct & server
-│   │   ├── auth/         # JWT + password hashing
-│   │   ├── config.rs     # Environment configuration
-│   │   ├── controllers/  # Built-in auth controllers
-│   │   ├── db.rs         # Database connection
-│   │   ├── error.rs      # Error types
-│   │   ├── extractors/   # Axum extractors (Json, AuthUser, Pagination)
-│   │   ├── migrations/   # SeaORM migrations
-│   │   ├── models/       # Built-in User model
-│   │   ├── openapi.rs    # OpenAPI/Swagger setup
-│   │   ├── response.rs   # ApiResponse wrapper
-│   │   ├── routing.rs    # Route builder
-│   │   └── testing.rs    # Test utilities (TestApp, TestClient)
-│   └── tests/            # Integration tests
-├── chopin-cli/           # CLI scaffolding tool
-├── chopin-examples/      # Example projects
-└── docs/                 # Documentation
+├── chopin-core/         # Framework library
+├── chopin-cli/          # CLI tool
+├── chopin-examples/     # Example applications
+│   ├── hello-world/     # Minimal example
+│   ├── basic-api/       # Full CRUD example
+│   └── benchmark/       # Performance benchmark
+└── docs/                # Documentation
 ```
 
-## How to Contribute
+## Development
 
-### Reporting Issues
+### Build
 
-- Search existing issues before opening a new one
-- Include steps to reproduce, expected behavior, and actual behavior
-- Include Rust version (`rustc --version`) and OS
-
-### Pull Requests
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Make your changes
-4. Add tests for new functionality
-5. Ensure all tests pass: `cargo test`
-6. Ensure no warnings: `cargo clippy`
-7. Format code: `cargo fmt`
-8. Commit with clear messages
-9. Push and open a Pull Request
-
-### Commit Messages
-
-Use clear, descriptive commit messages:
-
-```
-feat: add rate limiting middleware
-fix: handle empty email in signup validation
-docs: update API reference for pagination
-test: add integration tests for login flow
-refactor: extract JWT logic into auth module
+```bash
+cargo build                              # Debug build
+cargo build --release                    # Release build
+cargo build --release --features perf    # With mimalloc
 ```
 
-### Code Style
+### Test
 
-- Run `cargo fmt` before committing
-- Run `cargo clippy` and fix all warnings
+```bash
+cargo test                               # All tests
+cargo test -p chopin-core                # Core library only
+cargo test -p chopin-basic-api           # Example tests
+```
+
+### Run Examples
+
+```bash
+# Hello World
+cargo run -p chopin-hello-world
+
+# Basic API
+cargo run -p chopin-basic-api
+
+# Benchmark
+SERVER_MODE=performance cargo run -p chopin-benchmark --release --features chopin-core/perf
+```
+
+## Code Style
+
+- Use `rustfmt` for formatting
+- Use `clippy` for linting: `cargo clippy --all-targets`
 - Follow Rust naming conventions
-- Add doc comments (`///`) for public APIs
-- Keep functions focused and small
+- Add doc comments to all public items
 
-## Areas for Contribution
+## Adding a Feature
 
-### Good First Issues
+1. Add the feature flag to `chopin-core/Cargo.toml`
+2. Gate the code with `#[cfg(feature = "...")]`
+3. Update documentation in `docs/`
+4. Add tests
+5. Update the LLM learning guide if significant
 
-- Adding more field type mappings to the CLI generator
-- Improving error messages
-- Adding more test coverage
-- Documentation improvements
+## Pull Request Process
 
-### Feature Areas
+1. Create a branch from `main`
+2. Make your changes
+3. Run `cargo test` and `cargo clippy`
+4. Update documentation
+5. Submit a PR with a clear description
 
-- **Permissions system**: Role-based access control
-- **Caching**: Redis integration layer
-- **Background jobs**: Async task queue
-- **File uploads**: Storage abstraction
-- **Rate limiting**: Request throttling middleware
-- **GraphQL**: Alternative API layer
+## Feature Flags
 
-## Testing Guidelines
-
-- All new features must include tests
-- Use `TestApp` for integration tests
-- Test both success and error paths
-- Test edge cases (empty inputs, duplicates, invalid tokens)
-
-Example test:
-
-```rust
-use chopin_core::TestApp;
-
-#[tokio::test]
-async fn test_my_feature() {
-    let app = TestApp::new().await;
-
-    let res = app.client.get(&app.url("/api/my-endpoint")).await;
-
-    assert_eq!(res.status, 200);
-    assert!(res.is_success());
-}
-```
-
-## License
-
-By contributing to Chopin, you agree that your contributions will be licensed under the MIT License.
+| Feature | Purpose |
+|---------|---------|
+| `redis` | Redis caching backend |
+| `graphql` | async-graphql integration |
+| `s3` | AWS S3 file storage |
+| `perf` | mimalloc global allocator |

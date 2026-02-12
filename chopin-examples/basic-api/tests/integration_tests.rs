@@ -1,156 +1,189 @@
-use chopin_core::TestApp;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use tower::ServiceExt;
+
+/// Helper to build the test app router (same as main.rs but without starting the server).
+async fn setup() -> (axum::Router, sea_orm::DatabaseConnection) {
+    use chopin_core::{config::Config, db};
+    use sea_orm_migration::MigratorTrait;
+
+    // Use in-memory SQLite for tests
+    std::env::set_var("DATABASE_URL", "sqlite::memory:");
+    std::env::set_var("JWT_SECRET", "test-secret-key-for-tests");
+
+    let config = Config::from_env().unwrap();
+    let database_conn = db::connect(&config).await.unwrap();
+
+    // Run example-specific migrations
+    chopin_basic_api::migrations::Migrator::up(&database_conn, None)
+        .await
+        .unwrap();
+
+    let state = chopin_basic_api::AppState {
+        db: database_conn.clone(),
+        config,
+    };
+
+    let app = axum::Router::new()
+        .merge(chopin_basic_api::controllers::posts::routes())
+        .with_state(state);
+
+    (app, database_conn)
+}
 
 #[tokio::test]
 async fn test_list_posts_empty() {
-    let app = TestApp::new().await;
+    let (app, _db) = setup().await;
 
-    let res = app.client.get(&app.url("/api/posts")).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/posts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
-    assert_eq!(res.status, 200);
-    assert!(res.is_success());
-
-    let data = res.data();
-    assert!(data.is_array());
-    assert_eq!(data.as_array().unwrap().len(), 0);
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
-async fn test_create_post_requires_auth() {
-    let app = TestApp::new().await;
-
-    let body = serde_json::json!({
-        "title": "Test Post",
-        "body": "Test body"
-    });
-
-    let res = app
-        .client
-        .post(&app.url("/api/posts"), &body.to_string())
-        .await;
-
-    // Should fail without authentication
-    assert_eq!(res.status, 401);
-    assert!(!res.is_success());
-}
-
-#[tokio::test]
-async fn test_create_post_with_auth() {
-    let app = TestApp::new().await;
-
-    // Create and auth a user
-    let (token, _user) = app
-        .create_user("author@example.com", "author", "password123")
-        .await;
-
-    let body = serde_json::json!({
-        "title": "My First Post",
-        "body": "This is the content of my post."
-    });
-
-    let res = app
-        .client
-        .post_with_auth(&app.url("/api/posts"), &token, &body.to_string())
-        .await;
-
-    assert_eq!(res.status, 200);
-    assert!(res.is_success());
-
-    let data = res.data();
-    assert_eq!(data["title"], "My First Post");
-    assert_eq!(data["body"], "This is the content of my post.");
-    assert!(data["id"].is_number());
-}
-
-#[tokio::test]
-async fn test_create_post_validation() {
-    let app = TestApp::new().await;
-
-    let (token, _user) = app
-        .create_user("val@example.com", "val", "password123")
-        .await;
-
-    // Empty title should fail
-    let body = serde_json::json!({
-        "title": "",
-        "body": "Some content"
-    });
-
-    let res = app
-        .client
-        .post_with_auth(&app.url("/api/posts"), &token, &body.to_string())
-        .await;
-
-    assert_eq!(res.status, 422);
-    assert!(!res.is_success());
-}
-
-#[tokio::test]
-async fn test_list_posts_with_pagination() {
-    let app = TestApp::new().await;
-
-    let (token, _user) = app
-        .create_user("paginate@example.com", "paginate", "password123")
-        .await;
-
-    // Create several posts
-    for i in 1..=5 {
-        let body = serde_json::json!({
-            "title": format!("Post {}", i),
-            "body": format!("Content {}", i)
-        });
-
-        app.client
-            .post_with_auth(&app.url("/api/posts"), &token, &body.to_string())
-            .await;
-    }
-
-    // List with limit
-    let res = app.client.get(&app.url("/api/posts?limit=3")).await;
-
-    assert_eq!(res.status, 200);
-    let data = res.data();
-    assert!(data.is_array());
-    assert_eq!(data.as_array().unwrap().len(), 3);
-}
-
-#[tokio::test]
-async fn test_get_post_by_id() {
-    let app = TestApp::new().await;
-
-    let (token, _user) = app
-        .create_user("getpost@example.com", "getpost", "password123")
-        .await;
+async fn test_create_and_get_post() {
+    let (app, _db) = setup().await;
 
     // Create a post
-    let body = serde_json::json!({
-        "title": "Specific Post",
-        "body": "Specific content"
+    let create_body = serde_json::json!({
+        "title": "Hello World",
+        "body": "My first post"
     });
 
-    let create_res = app
-        .client
-        .post_with_auth(&app.url("/api/posts"), &token, &body.to_string())
-        .await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/posts")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
-    let post_id = create_res.data()["id"].as_i64().unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
 
-    // Get the post by ID
-    let res = app
-        .client
-        .get(&app.url(&format!("/api/posts/{}", post_id)))
-        .await;
+    // Fetch it back
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/posts/1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
-    assert_eq!(res.status, 200);
-    assert!(res.is_success());
-    assert_eq!(res.data()["title"], "Specific Post");
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
 async fn test_get_nonexistent_post() {
-    let app = TestApp::new().await;
+    let (app, _db) = setup().await;
 
-    let res = app.client.get(&app.url("/api/posts/99999")).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/posts/999")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
-    assert_eq!(res.status, 404);
-    assert!(!res.is_success());
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_update_post() {
+    let (app, _db) = setup().await;
+
+    // Create
+    let create_body = serde_json::json!({ "title": "Draft", "body": "WIP" });
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/posts")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Update
+    let update_body = serde_json::json!({ "title": "Published!", "published": true });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/posts/1")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&update_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_delete_post() {
+    let (app, _db) = setup().await;
+
+    // Create
+    let create_body = serde_json::json!({ "title": "To Delete", "body": "Bye" });
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/posts")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Delete
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/posts/1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify gone
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/posts/1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

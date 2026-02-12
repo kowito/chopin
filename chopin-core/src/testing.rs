@@ -28,6 +28,7 @@ impl TestApp {
     /// Create a new test app with an in-memory SQLite database.
     pub async fn new() -> Self {
         let config = Config {
+            server_mode: crate::config::ServerMode::Standard,
             database_url: "sqlite::memory:".to_string(),
             jwt_secret: "test-secret-key-for-testing".to_string(),
             jwt_expiry_hours: 24,

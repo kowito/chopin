@@ -145,6 +145,15 @@ impl axum::response::IntoResponse for ChopinError {
             }),
         };
 
-        (status, axum::Json(body)).into_response()
+        // Use sonic-rs for ARM NEON accelerated serialization
+        match sonic_rs::to_vec(&body) {
+            Ok(bytes) => (
+                status,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                bytes,
+            )
+                .into_response(),
+            Err(_) => (status, "Internal Server Error").into_response(),
+        }
     }
 }

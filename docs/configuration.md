@@ -1,678 +1,151 @@
-# Configuration Guide
+# Configuration
 
-Chopin uses environment variables for all configuration, loaded via `.env` files.
+Chopin loads configuration from environment variables with `.env` file support (via `dotenvy`).
 
-## Quick Start
+## Server Mode
 
-Create a `.env` file in your project root:
+The `SERVER_MODE` variable controls how Chopin handles HTTP connections:
 
-```env
-DATABASE_URL=sqlite://app.db?mode=rwc
-JWT_SECRET=your-secret-key-change-in-production
-JWT_EXPIRY_HOURS=24
-SERVER_PORT=3000
-SERVER_HOST=127.0.0.1
-ENVIRONMENT=development
-```
-
-## Configuration Options
-
-### Database
-
-#### `DATABASE_URL` (required)
-
-Database connection string.
-
-**SQLite** (default for development):
-```env
-DATABASE_URL=sqlite://app.db?mode=rwc
-DATABASE_URL=sqlite::memory:  # In-memory (testing)
-```
-
-**PostgreSQL**:
-```env
-DATABASE_URL=postgres://username:password@localhost:5432/dbname
-DATABASE_URL=postgres://user:pass@localhost/mydb?sslmode=require
-```
-
-**MySQL**:
-```env
-DATABASE_URL=mysql://username:password@localhost:3306/dbname
-DATABASE_URL=mysql://root@localhost/mydb
-```
-
-**Connection Pool Options**:
-```env
-DATABASE_URL=postgres://user:pass@localhost/db?max_connections=100&min_connections=5
-```
-
-**Default**: `sqlite://chopin.db?mode=rwc`
-
----
-
-### JWT Authentication
-
-#### `JWT_SECRET` (required in production)
-
-Secret key used to sign JWT tokens. **Must be kept secret**.
-
-**Development**:
-```env
-JWT_SECRET=chopin-dev-secret-change-me
-```
-
-**Production** (generate strong secret):
-```bash
-# Generate a secure random secret
-openssl rand -base64 32
-
-# Use in .env
-JWT_SECRET=your-generated-secret-here
-```
-
-**Important**:
-- Use at least 32 characters
-- Use random, unpredictable values
-- Never commit secrets to version control
-- Rotate periodically in production
-
-**Default**: `chopin-dev-secret-change-me` (dev only)
-
-#### `JWT_EXPIRY_HOURS`
-
-Token expiration time in hours.
+| Value | Description |
+|-------|-------------|
+| `standard` (default) | Full Axum pipeline with middleware, tracing, graceful shutdown |
+| `performance` / `perf` / `fast` | Raw hyper HTTP/1.1 + SO_REUSEPORT multi-core accept loops |
 
 ```env
-JWT_EXPIRY_HOURS=24    # 1 day
-JWT_EXPIRY_HOURS=168   # 1 week
-JWT_EXPIRY_HOURS=1     # 1 hour (strict)
+SERVER_MODE=performance
 ```
 
-**Default**: `24`
+```rust
+use chopin_core::config::ServerMode;
 
-**Recommendations**:
-- Development: 24-168 hours
-- Production: 1-24 hours
-- High-security apps: 1-2 hours with refresh tokens
-
----
-
-### Server
-
-#### `SERVER_PORT`
-
-HTTP server port.
-
-```env
-SERVER_PORT=3000     # Development
-SERVER_PORT=8080     # Alternative
-SERVER_PORT=80       # Production (requires privileges)
+// Access programmatically
+if config.server_mode == ServerMode::Performance {
+    println!("Running in performance mode!");
+}
 ```
 
-**Default**: `3000`
+## All Environment Variables
 
-#### `SERVER_HOST`
+### Core
 
-HTTP server bind address.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SERVER_MODE` | `standard` | Server mode: `standard`, `performance`, `perf`, `fast` |
+| `SERVER_HOST` | `127.0.0.1` | Bind address |
+| `SERVER_PORT` | `3000` | Bind port |
+| `ENVIRONMENT` | `development` | `development`, `production`, or `test` |
+| `DATABASE_URL` | `sqlite://chopin.db?mode=rwc` | Database connection string |
 
-```env
-SERVER_HOST=127.0.0.1    # Localhost only
-SERVER_HOST=0.0.0.0      # All interfaces (production)
-```
+### Authentication
 
-**Default**: `127.0.0.1`
-
-**Security**:
-- Development: Use `127.0.0.1` (localhost only)
-- Production: Use `0.0.0.0` behind a reverse proxy
-- **Never** expose directly to internet without TLS
-
----
-
-### Environment
-
-#### `ENVIRONMENT`
-
-Runtime environment identifier.
-
-```env
-ENVIRONMENT=development
-ENVIRONMENT=production
-ENVIRONMENT=staging
-ENVIRONMENT=test
-```
-
-**Default**: `development`
-
-**Effects**:
-- Logging verbosity
-- Error detail exposure
-- Performance optimizations
-
----
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JWT_SECRET` | `chopin-dev-secret-change-me` | JWT signing secret (HMAC-SHA256) |
+| `JWT_EXPIRY_HOURS` | `24` | Token expiration in hours |
 
 ### Caching
 
-#### `REDIS_URL` (optional)
-
-Redis connection URL for caching. If not provided, Chopin uses in-memory caching.
-
-```env
-# Not set - uses in-memory cache (default)
-REDIS_URL=redis://127.0.0.1:6379
-REDIS_URL=redis://username:password@host:6379/0
-REDIS_URL=redis://localhost:6379?password=secret
-```
-
-**Default**: None (in-memory cache)
-
-**When to use Redis**:
-- Production environments
-- Multi-instance deployments (shared cache)
-- Large cache requirements
-- Cross-request cache sharing
-
-**Requires**: `redis` feature flag in `Cargo.toml`
-
-```toml
-chopin-core = { version = "0.1", features = ["redis"] }
-```
-
----
-
-### File Uploads
-
-#### `UPLOAD_DIR`
-
-Directory for storing uploaded files.
-
-```env
-UPLOAD_DIR=./uploads              # Relative to project root
-UPLOAD_DIR=/var/www/uploads       # Absolute path
-UPLOAD_DIR=/tmp/uploads           # Temporary storage
-```
-
-**Default**: `./uploads`
-
-**Production recommendations**:
-- Use absolute paths
-- Ensure directory is writable
-- Configure backups
-- Consider object storage (S3) for scale
-
-#### `MAX_UPLOAD_SIZE`
-
-Maximum file upload size in bytes.
-
-```env
-MAX_UPLOAD_SIZE=10485760      # 10 MB (default)
-MAX_UPLOAD_SIZE=52428800      # 50 MB
-MAX_UPLOAD_SIZE=104857600     # 100 MB
-MAX_UPLOAD_SIZE=1048576       # 1 MB
-```
-
-**Default**: `10485760` (10 MB)
-
-**Calculation**:
-- 1 MB = 1,048,576 bytes
-- 10 MB = 10,485,760 bytes
-- 50 MB = 52,428,800 bytes
-- 100 MB = 104,857,600 bytes
-
-**Usage in code**:
-```rust
-if config.is_dev() {
-    // Development-only features
-}
-```
-
----
-
-### S3-Compatible Object Storage
-
-> Requires the `s3` feature flag: `chopin-core = { version = "0.1", features = ["s3"] }`
-
-#### `S3_BUCKET` (required for S3 storage)
-
-S3 bucket name. Setting this enables S3 storage.
-
-```env
-S3_BUCKET=my-app-uploads
-```
-
-#### `S3_REGION`
-
-AWS region or equivalent for the S3 service.
-
-```env
-S3_REGION=us-east-1       # AWS (default)
-S3_REGION=us-west-2       # AWS Oregon
-S3_REGION=auto             # Cloudflare R2
-S3_REGION=nyc3             # DigitalOcean Spaces
-```
-
-**Default**: `us-east-1`
-
-#### `S3_ENDPOINT`
-
-Custom endpoint URL for S3-compatible services. Not needed for AWS S3.
-
-```env
-# Cloudflare R2
-S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com
-
-# MinIO (self-hosted)
-S3_ENDPOINT=http://localhost:9000
-
-# DigitalOcean Spaces
-S3_ENDPOINT=https://nyc3.digitaloceanspaces.com
-
-# Backblaze B2
-S3_ENDPOINT=https://s3.us-west-004.backblazeb2.com
-```
-
-**Default**: None (uses standard AWS S3 endpoints)
-
-#### `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`
-
-Credentials for the S3 service. If not set, falls back to the AWS credential chain (IAM roles, instance profiles, etc.).
-
-```env
-S3_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-S3_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-```
-
-#### `S3_PUBLIC_URL`
-
-Public base URL for serving files. If set, file URLs are constructed as `{S3_PUBLIC_URL}/{prefix}{stored_name}`. If not set, presigned URLs are generated instead.
-
-```env
-# CDN or public bucket URL
-S3_PUBLIC_URL=https://cdn.example.com
-S3_PUBLIC_URL=https://my-bucket.s3.us-west-2.amazonaws.com
-S3_PUBLIC_URL=https://uploads.example.com
-```
-
-**Default**: None (generates presigned URLs valid for 1 hour)
-
-#### `S3_PREFIX`
-
-Key prefix (folder) for uploaded objects.
-
-```env
-S3_PREFIX=uploads/         # Default
-S3_PREFIX=media/
-S3_PREFIX=user-content/
-```
-
-**Default**: `uploads/`
-
-#### Quick Setup by Provider
-
-**AWS S3:**
-```env
-S3_BUCKET=my-app-uploads
-S3_REGION=us-west-2
-S3_ACCESS_KEY_ID=AKIA...
-S3_SECRET_ACCESS_KEY=...
-```
-
-**Cloudflare R2:**
-```env
-S3_BUCKET=my-app-uploads
-S3_REGION=auto
-S3_ENDPOINT=https://abc123.r2.cloudflarestorage.com
-S3_ACCESS_KEY_ID=your-r2-key
-S3_SECRET_ACCESS_KEY=your-r2-secret
-S3_PUBLIC_URL=https://uploads.example.com
-```
-
-**MinIO:**
-```env
-S3_BUCKET=uploads
-S3_ENDPOINT=http://localhost:9000
-S3_ACCESS_KEY_ID=minioadmin
-S3_SECRET_ACCESS_KEY=minioadmin
-```
-
----
-
-## Configuration Loading
-
-### Priority Order
-
-1. Environment variables (highest priority)
-2. `.env` file
-3. Defaults (lowest priority)
-
-### Example
-
-```env
-# .env file
-SERVER_PORT=3000
-```
-
-```bash
-# Override with environment variable
-SERVER_PORT=8080 cargo run
-# → Server runs on port 8080
-```
-
-### Loading Process
-
-```rust
-use chopin_core::Config;
-
-let config = Config::from_env()?;
-```
-
-Chopin automatically:
-1. Reads `.env` file via `dotenvy`
-2. Parses environment variables
-3. Applies defaults for missing values
-4. Validates required fields
-
----
-
-## Environment-Specific Configuration
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REDIS_URL` | *(none)* | Redis URL (e.g. `redis://127.0.0.1:6379`). Requires `redis` feature. |
+
+### File Storage
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `UPLOAD_DIR` | `./uploads` | Local upload directory |
+| `MAX_UPLOAD_SIZE` | `10485760` | Max file size in bytes (default 10 MB) |
+
+### S3-Compatible Storage
+
+Requires the `s3` feature flag.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `S3_BUCKET` | *(none)* | S3 bucket name (enables S3 storage) |
+| `S3_REGION` | *(none)* | AWS region (e.g. `us-east-1`) |
+| `S3_ENDPOINT` | *(none)* | Custom endpoint (for R2, MinIO, etc.) |
+| `S3_ACCESS_KEY_ID` | *(none)* | Access key (falls back to AWS credential chain) |
+| `S3_SECRET_ACCESS_KEY` | *(none)* | Secret key |
+| `S3_PUBLIC_URL` | *(none)* | Public base URL for objects (e.g. CDN URL) |
+| `S3_PREFIX` | *(none)* | Key prefix / folder (e.g. `uploads/`) |
+
+## Example `.env` Files
 
 ### Development
 
-`.env` (local, gitignored):
 ```env
 DATABASE_URL=sqlite://dev.db?mode=rwc
 JWT_SECRET=dev-secret-not-for-production
-JWT_EXPIRY_HOURS=168
-SERVER_PORT=3000
-SERVER_HOST=127.0.0.1
 ENVIRONMENT=development
+SERVER_HOST=127.0.0.1
+SERVER_PORT=3000
 ```
 
-### Production
+### Production (Standard Mode)
 
-Set via environment variables (no .env file):
-```bash
-export DATABASE_URL="postgres://user:pass@db-host/prod"
-export JWT_SECRET="$(openssl rand -base64 32)"
-export JWT_EXPIRY_HOURS=24
-export SERVER_PORT=8080
-export SERVER_HOST=0.0.0.0
-export ENVIRONMENT=production
+```env
+DATABASE_URL=postgres://user:pass@db-host:5432/myapp
+JWT_SECRET=a-very-long-random-secret-string-here
+JWT_EXPIRY_HOURS=8
+ENVIRONMENT=production
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8080
+REDIS_URL=redis://redis-host:6379
 ```
 
-### Testing
+### Production (Performance Mode)
 
-Tests use in-memory SQLite automatically:
-```rust
-// No .env needed for tests
-let app = TestApp::new().await;
+```env
+DATABASE_URL=postgres://user:pass@db-host:5432/myapp
+JWT_SECRET=a-very-long-random-secret-string-here
+ENVIRONMENT=production
+SERVER_MODE=performance
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8080
 ```
 
-Override in tests:
-```rust
-std::env::set_var("JWT_EXPIRY_HOURS", "1");
-let config = Config::from_env()?;
-```
+## Accessing Config in Handlers
 
----
-
-## Advanced Configuration
-
-### Custom Configuration
-
-Extend `Config` struct:
-
-```rust
-// In your app
-pub struct AppConfig {
-    pub chopin: chopin_core::Config,
-    pub stripe_key: String,
-    pub redis_url: String,
-}
-
-impl AppConfig {
-    pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(AppConfig {
-            chopin: chopin_core::Config::from_env()?,
-            stripe_key: std::env::var("STRIPE_KEY")?,
-            redis_url: std::env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://localhost".to_string()),
-        })
-    }
-}
-```
-
-### Runtime Configuration
-
-Access config in handlers:
+Configuration is available as `Arc<Config>` through the `AppState`:
 
 ```rust
 use axum::extract::State;
+use chopin_core::controllers::AppState;
 
-async fn handler(State(app): State<AppState>) -> impl IntoResponse {
-    let db_url = &app.config.database_url;
-    // Use config...
+async fn my_handler(State(state): State<AppState>) -> String {
+    format!("Running on port {}", state.config.server_port)
 }
 ```
 
----
-
-## Database Configuration
-
-### Connection Pool
-
-Default settings (good for most apps):
-- Max connections: 100
-- Min connections: 5
-- Connect timeout: 8s
-- Idle timeout: 8s
-
-Customize via URL query params:
-```env
-DATABASE_URL=postgres://user:pass@host/db?max_connections=200&min_connections=10
-```
-
-### SQLite Options
-
-```env
-# Read-write-create mode
-DATABASE_URL=sqlite://app.db?mode=rwc
-
-# Read-only mode
-DATABASE_URL=sqlite://app.db?mode=ro
-
-# In-memory database
-DATABASE_URL=sqlite::memory:
-
-# WAL mode (better concurrency)
-DATABASE_URL=sqlite://app.db?mode=rwc&journal_mode=wal
-```
-
-### PostgreSQL Options
-
-```env
-# SSL required
-DATABASE_URL=postgres://user:pass@host/db?sslmode=require
-
-# Specific schema
-DATABASE_URL=postgres://user:pass@host/db?search_path=myschema
-
-# Connection timeout
-DATABASE_URL=postgres://user:pass@host/db?connect_timeout=10
-```
-
-### MySQL Options
-
-```env
-# SSL mode
-DATABASE_URL=mysql://user:pass@host/db?ssl_mode=required
-
-# Timezone
-DATABASE_URL=mysql://user:pass@host/db?time_zone=%2B00:00
-```
-
----
-
-## Security Best Practices
-
-### ✅ DO
-
-- Use strong, random `JWT_SECRET` in production
-- Store secrets in environment variables, not code
-- Use different secrets per environment
-- Rotate secrets periodically
-- Use `.gitignore` to exclude `.env`
-- Use SSL/TLS for database connections in production
-- Limit JWT expiry time
-
-### ❌ DON'T
-
-- Commit `.env` to version control
-- Use default secrets in production
-- Share secrets between environments
-- Log sensitive configuration values
-- Expose secrets in error messages
-- Use weak or predictable secrets
-
----
-
-## Configuration Validation
-
-Chopin validates configuration at startup:
+## Config Struct Reference
 
 ```rust
-let config = Config::from_env()?;
-// Error if required fields missing or invalid
+pub struct Config {
+    pub server_mode: ServerMode,       // Standard or Performance
+    pub database_url: String,
+    pub jwt_secret: String,
+    pub jwt_expiry_hours: u64,
+    pub server_host: String,
+    pub server_port: u16,
+    pub environment: String,           // development, production, test
+    pub redis_url: Option<String>,
+    pub upload_dir: String,
+    pub max_upload_size: u64,
+    pub s3_bucket: Option<String>,
+    pub s3_region: Option<String>,
+    pub s3_endpoint: Option<String>,
+    pub s3_access_key_id: Option<String>,
+    pub s3_secret_access_key: Option<String>,
+    pub s3_public_url: Option<String>,
+    pub s3_prefix: Option<String>,
+}
 ```
 
-**Validation checks**:
-- `DATABASE_URL` is parseable
-- `JWT_SECRET` is non-empty
-- `SERVER_PORT` is valid (1-65535)
-- `JWT_EXPIRY_HOURS` is positive
+### Helper Methods
 
----
-
-## .env.example
-
-Always commit a `.env.example` template:
-
-```env
-# Database
-DATABASE_URL=sqlite://app.db?mode=rwc
-
-# JWT
-JWT_SECRET=your-secret-key-here
-JWT_EXPIRY_HOURS=24
-
-# Server
-SERVER_PORT=3000
-SERVER_HOST=127.0.0.1
-
-# Environment
-ENVIRONMENT=development
+```rust
+config.is_dev()       // true when environment == "development"
+config.has_s3()       // true when s3_bucket is set
+config.server_addr()  // "127.0.0.1:3000"
 ```
-
-Team members copy to `.env` and customize.
-
----
-
-## Troubleshooting
-
-### "Failed to load .env file"
-
-**Cause**: `.env` file not found.
-
-**Solution**: Create `.env` in project root or set environment variables.
-
-### "DATABASE_URL must be set"
-
-**Cause**: Missing required configuration.
-
-**Solution**: Add to `.env`:
-```env
-DATABASE_URL=sqlite://app.db?mode=rwc
-```
-
-### "Failed to connect to database"
-
-**Cause**: Invalid connection string or database unavailable.
-
-**Solutions**:
-- Check `DATABASE_URL` format
-- Verify database server is running
-- Check network connectivity
-- Verify credentials
-
-### Token Validation Fails
-
-**Cause**: `JWT_SECRET` changed after tokens issued.
-
-**Solution**: Regenerate tokens (users must log in again).
-
----
-
-## Examples
-
-### Minimal Production Config
-
-```bash
-export DATABASE_URL="postgres://appuser:$(cat /secrets/db-password)@db-primary.internal:5432/production"
-export JWT_SECRET="$(cat /secrets/jwt-secret)"
-export JWT_EXPIRY_HOURS=6
-export SERVER_HOST=0.0.0.0
-export SERVER_PORT=8080
-export ENVIRONMENT=production
-```
-
-### Docker Compose
-
-```yaml
-version: '3.8'
-services:
-  app:
-    image: my-chopin-app
-    environment:
-      DATABASE_URL: postgres://user:password@db:5432/myapp
-      JWT_SECRET: ${JWT_SECRET}
-      SERVER_PORT: 8080
-      SERVER_HOST: 0.0.0.0
-      ENVIRONMENT: production
-    ports:
-      - "8080:8080"
-  
-  db:
-    image: postgres:16
-    environment:
-      POSTGRES_DB: myapp
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-```
-
-### Kubernetes ConfigMap
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: chopin-config
-data:
-  DATABASE_URL: postgres://user:password@postgres-service:5432/prod
-  SERVER_PORT: "8080"
-  SERVER_HOST: 0.0.0.0
-  ENVIRONMENT: production
-  JWT_EXPIRY_HOURS: "6"
-```
-
----
-
-## Summary
-
-✅ Use `.env` for local development  
-✅ Use environment variables in production  
-✅ Keep secrets in `.env` (gitignored)  
-✅ Document all options in `.env.example`  
-✅ Validate configuration at startup  
-✅ Use strong secrets in production  
-
-Chopin's configuration system is simple, secure, and production-ready.

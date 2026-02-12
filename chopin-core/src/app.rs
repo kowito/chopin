@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use axum::Router;
 use axum::routing::get;
-use axum::response::Json as AxumJson;
+use axum::http::header;
+use axum::response::IntoResponse;
 use sea_orm::DatabaseConnection;
 use sea_orm_migration::MigratorTrait;
+use serde::Serialize;
 use tower_http::cors::CorsLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
@@ -10,10 +14,11 @@ use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::cache::CacheService;
-use crate::config::Config;
+use crate::config::{Config, ServerMode};
 use crate::controllers::AppState;
 use crate::migrations::Migrator;
 use crate::openapi::ApiDoc;
+use crate::perf;
 use crate::routing;
 
 /// The main Chopin application.
@@ -74,55 +79,78 @@ impl App {
         CacheService::in_memory()
     }
 
-    /// Build the Axum router with all middleware and routes.
+    /// Build the Axum router for API routes only.
+    ///
+    /// Note: `/json` and `/plaintext` benchmark endpoints are handled directly
+    /// by the hyper server layer (see `server.rs`) and never touch this Router.
     pub fn router(&self) -> Router {
+        let config = Arc::new(self.config.clone());
+        let is_dev = self.config.is_dev();
+
         let state = AppState {
             db: self.db.clone(),
-            config: self.config.clone(),
+            config: config.clone(),
             cache: self.cache.clone(),
         };
 
-        let config = self.config.clone();
-        let api_routes = routing::build_routes().with_state(state);
+        // Initialize cached Date header (updated every 500ms by background task)
+        perf::init_date_cache();
 
-        // Request ID header name
-        let x_request_id = axum::http::HeaderName::from_static("x-request-id");
-
-        Router::new()
+        let mut router = Router::new()
             .route("/", get(welcome))
-            .merge(api_routes)
+            .merge(routing::build_routes().with_state(state))
             .merge(Scalar::with_url("/api-docs", ApiDoc::openapi()))
             .route("/api-docs/openapi.json", get(openapi_json))
-            // Inject Config into request extensions so AuthUser extractor can access it
-            .layer(axum::middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {
-                let config = config.clone();
-                async move {
-                    req.extensions_mut().insert(config);
-                    next.run(req).await
-                }
-            }))
-            .layer(SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid))
-            .layer(PropagateRequestIdLayer::new(x_request_id))
-            .layer(CorsLayer::permissive())
-            .layer(TraceLayer::new_for_http())
+            .layer(axum::Extension(config))
+            .layer(CorsLayer::permissive());
+
+        // Only add expensive tracing/request-id middleware in development mode.
+        if is_dev {
+            let x_request_id = axum::http::HeaderName::from_static("x-request-id");
+            router = router
+                .layer(SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid))
+                .layer(PropagateRequestIdLayer::new(x_request_id))
+                .layer(TraceLayer::new_for_http());
+        }
+
+        router
     }
 
     /// Run the application server.
+    ///
+    /// Behaviour depends on [`ServerMode`]:
+    ///
+    /// - **Standard** — `axum::serve` with full middleware, graceful shutdown.
+    ///   Easy to use, great for development and typical production.
+    /// - **Performance** — Raw hyper HTTP/1.1 server with SO_REUSEPORT,
+    ///   multi-core accept loops, and pre-baked static responses on `/json`
+    ///   and `/plaintext`. All other routes still go through Axum.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         let addr = self.config.server_addr();
+        let mode = self.config.server_mode;
         let router = self.router();
 
         println!("\n🎹 Chopin server is running!");
-        println!("   → Server: http://{}", addr);
+        println!("   → Mode:    {}", mode);
+        println!("   → Server:  http://{}", addr);
         println!("   → API docs: http://{}/api-docs\n", addr);
-        
-        tracing::info!("Chopin server running on http://{}", addr);
-        tracing::info!("API docs available at http://{}/api-docs", addr);
 
-        let listener = tokio::net::TcpListener::bind(&addr).await?;
-        axum::serve(listener, router)
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+        tracing::info!("Chopin server running on http://{} (mode: {})", addr, mode);
+
+        match mode {
+            ServerMode::Standard => {
+                // ─── Easy mode: full Axum pipeline ───
+                let listener = tokio::net::TcpListener::bind(&addr).await?;
+                axum::serve(listener, router)
+                    .with_graceful_shutdown(shutdown_signal())
+                    .await?;
+            }
+            ServerMode::Performance => {
+                // ─── Performance mode: raw hyper + SO_REUSEPORT ───
+                let socket_addr: std::net::SocketAddr = addr.parse()?;
+                crate::server::run_reuseport(socket_addr, router, shutdown_signal()).await?;
+            }
+        }
 
         Ok(())
     }
@@ -135,13 +163,27 @@ async fn shutdown_signal() {
     tracing::info!("Shutting down Chopin server...");
 }
 
+// ═══ Application endpoints (served through Axum) ═══
+
+#[derive(Serialize)]
+struct WelcomeMessage {
+    message: &'static str,
+    docs: &'static str,
+    status: &'static str,
+}
+
 /// Welcome page at `/`.
-async fn welcome() -> AxumJson<serde_json::Value> {
-    AxumJson(serde_json::json!({
-        "message": "Welcome to Chopin! 🎹",
-        "docs": "/api-docs",
-        "status": "running"
-    }))
+async fn welcome() -> impl IntoResponse {
+    let msg = WelcomeMessage {
+        message: "Welcome to Chopin! 🎹",
+        docs: "/api-docs",
+        status: "running",
+    };
+    let bytes = sonic_rs::to_vec(&msg).unwrap_or_default();
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        bytes,
+    )
 }
 
 /// Serve the raw OpenAPI JSON spec.

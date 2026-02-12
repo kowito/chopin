@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use sea_orm::DatabaseConnection;
 
 use crate::cache::CacheService;
@@ -7,7 +9,7 @@ use crate::config::Config;
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
-    pub config: Config,
+    pub config: Arc<Config>,
     pub cache: CacheService,
 }
 

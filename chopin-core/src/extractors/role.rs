@@ -5,6 +5,8 @@ use axum::{
     response::Response,
 };
 
+use std::sync::Arc;
+
 use crate::auth;
 use crate::config::Config;
 use crate::error::ChopinError;
@@ -43,9 +45,10 @@ where
             .strip_prefix("Bearer ")
             .ok_or_else(|| ChopinError::Unauthorized("Invalid Authorization header format".to_string()))?;
 
+        // Get JWT secret from Arc<Config> in extensions (cheap Arc clone per request)
         let config = parts
             .extensions
-            .get::<Config>()
+            .get::<Arc<Config>>()
             .ok_or_else(|| ChopinError::Internal("Config not found in request".to_string()))?;
 
         let claims = auth::validate_token(token, &config.jwt_secret)?;

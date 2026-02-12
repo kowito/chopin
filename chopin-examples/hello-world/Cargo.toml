@@ -1,0 +1,11 @@
+[package]
+name = "chopin-hello-world"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Minimal Chopin example — one file, zero config"
+
+[dependencies]
+chopin-core = { path = "../../chopin-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing-subscriber = "0.3"

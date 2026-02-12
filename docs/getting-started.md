@@ -1,254 +1,136 @@
-# Getting Started with Chopin
+# Getting Started
 
 ## Prerequisites
 
-- **Rust** (1.75 or later): [Install Rust](https://www.rust-lang.org/tools/install)
-- **SQLite** (included by default) or **PostgreSQL/MySQL** for production
+- **Rust** 1.75+ (install via [rustup](https://rustup.rs/))
+- **SQLite** (included by default) or PostgreSQL/MySQL for production
 
 ## Installation
 
-Install the Chopin CLI:
+### Install the CLI
 
 ```bash
 cargo install chopin-cli
 ```
 
-## Create Your First Project
+### Create a New Project
 
 ```bash
-chopin new my-api
-cd my-api
+chopin new my-app
+cd my-app
 ```
 
-This creates:
+This generates:
 
 ```
-my-api/
+my-app/
+├── Cargo.toml
+├── .env
 ├── src/
-│   ├── main.rs           # Entry point
-│   ├── models/           # Database models
-│   └── controllers/      # API controllers
-├── .cargo/config.toml    # ARM optimization flags
-├── Cargo.toml            # Dependencies
-├── .env                  # Environment config
-├── .env.example          # Template
-└── README.md
+│   ├── main.rs
+│   ├── controllers/
+│   │   └── mod.rs
+│   ├── models/
+│   │   └── mod.rs
+│   └── migrations/
+│       └── mod.rs
+└── tests/
+    └── integration_tests.rs
 ```
 
-## Start the Server
+### Run the Server
 
 ```bash
 cargo run
 ```
 
-The server starts at `http://127.0.0.1:3000`.
+Output:
 
-API documentation is served at `http://127.0.0.1:3000/api-docs`.
-
-## Built-in Authentication
-
-Chopin ships with a complete authentication system out of the box.
-
-### Sign Up
-
-```bash
-curl -X POST http://localhost:3000/api/auth/signup \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "user@example.com",
-    "username": "john",
-    "password": "secret123"
-  }'
+```
+🎹 Chopin server is running!
+   → Mode:    standard
+   → Server:  http://127.0.0.1:3000
+   → API docs: http://127.0.0.1:3000/api-docs
 ```
 
-Response:
+### Built-in Endpoints
 
-```json
-{
-  "success": true,
-  "data": {
-    "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-    "user": {
-      "id": 1,
-      "email": "user@example.com",
-      "username": "john",
-      "is_active": true,
-      "created_at": "2026-02-11T00:00:00"
-    }
-  }
-}
-```
+Every Chopin app ships with:
 
-### Log In
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Welcome JSON response |
+| `/api/auth/signup` | POST | Create a new user |
+| `/api/auth/login` | POST | Login and get JWT token |
+| `/api-docs` | GET | Interactive Scalar API docs |
+| `/api-docs/openapi.json` | GET | Raw OpenAPI 3.1 spec |
 
-```bash
-curl -X POST http://localhost:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "user@example.com",
-    "password": "secret123"
-  }'
-```
+In **performance mode**, these are also available:
 
-### Using the Token
-
-Include the JWT token in the `Authorization` header for protected endpoints:
-
-```bash
-curl -X GET http://localhost:3000/api/posts \
-  -H "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGc..."
-```
-
-## Generate a Model
-
-Chopin's CLI generates models, migrations, and controllers in one command:
-
-```bash
-chopin generate model Post title:string body:text author_id:i32
-```
-
-This creates three files:
-- `src/models/post.rs` — SeaORM entity with all fields
-- `src/controllers/post.rs` — CRUD endpoints with utoipa annotations
-- `src/migrations/m<timestamp>_create_posts_table.rs` — Database migration
-
-### Supported Field Types
-
-| Shorthand               | Rust Type       |
-|--------------------------|-----------------|
-| `string`, `str`          | `String`        |
-| `text`                   | `String`        |
-| `i32`, `int`, `integer`  | `i32`           |
-| `i64`, `bigint`          | `i64`           |
-| `f32`, `float`           | `f32`           |
-| `f64`, `double`          | `f64`           |
-| `bool`, `boolean`        | `bool`          |
-| `datetime`, `timestamp`  | `NaiveDateTime` |
-| `uuid`                   | `Uuid`          |
-
-### Register Generated Code
-
-After generating, add the module to your `src/models/mod.rs`:
-
-```rust
-pub mod post;
-```
-
-And add the routes in `src/routing.rs` (or `src/controllers/mod.rs`).
-
-## Generate a Controller (Standalone)
-
-```bash
-chopin generate controller comments
-```
-
-Creates `src/controllers/comments.rs` with list and get-by-id endpoints.
-
-## Database Migrations
-
-Migrations run **automatically on startup**. You can also trigger them manually:
-
-```bash
-chopin db migrate
-```
-
-### Supported Databases
-
-| Database   | Connection URL                              |
-|------------|---------------------------------------------|
-| SQLite     | `sqlite://app.db?mode=rwc`                  |
-| PostgreSQL | `postgres://user:pass@localhost/mydb`        |
-| MySQL      | `mysql://user:pass@localhost/mydb`           |
-
-Set `DATABASE_URL` in your `.env` file.
-
-## API Documentation
-
-Chopin auto-generates OpenAPI documentation from your handler annotations.
-
-- **Interactive docs**: `http://localhost:3000/api-docs`
-- **OpenAPI JSON**: `http://localhost:3000/api-docs/openapi.json`
-
-Export the spec to a file:
-
-```bash
-chopin docs export --format json --output openapi.json
-chopin docs export --format yaml --output openapi.yaml
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/json` | GET | `{"message":"Hello, World!"}` (zero-alloc) |
+| `/plaintext` | GET | `Hello, World!` (zero-alloc) |
 
 ## Configuration
 
-All configuration is via environment variables (`.env` file):
+Create a `.env` file in your project root:
 
 ```env
-# Database
 DATABASE_URL=sqlite://app.db?mode=rwc
-
-# JWT
-JWT_SECRET=your-secret-key-here
-JWT_EXPIRY_HOURS=24
-
-# Server
-SERVER_PORT=3000
+JWT_SECRET=change-me-in-production
 SERVER_HOST=127.0.0.1
-
-# Environment (development, production, test)
+SERVER_PORT=3000
 ENVIRONMENT=development
-
-# Logging (trace, debug, info, warn, error)
-# Set to 'debug' for development, 'info' for production
-RUST_LOG=debug
 ```
 
-> **💡 Tip:** Use `RUST_LOG=debug` during development to see detailed logs including database queries, cache hits, and request handling. For production, use `RUST_LOG=info` or `RUST_LOG=warn`.
+See [Configuration](configuration.md) for all options.
 
-## Testing
+## Your First Controller
 
-Chopin provides test utilities for integration testing:
+Generate a controller with the CLI:
+
+```bash
+chopin generate controller posts
+```
+
+Or create one manually:
 
 ```rust
-use chopin_core::TestApp;
+use axum::{Router, routing::get, extract::State};
+use chopin_core::{ApiResponse, controllers::AppState};
 
-#[tokio::test]
-async fn test_create_post() {
-    let app = TestApp::new().await;
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/posts", get(list_posts))
+}
 
-    // Create and authenticate a user
-    let (token, _user) = app.create_user("test@example.com", "testuser", "password123").await;
-
-    // Make authenticated requests
-    let res = app.client
-        .post_with_auth(
-            &app.url("/api/posts"),
-            &token,
-            r#"{"title": "Hello", "body": "World"}"#,
-        )
-        .await;
-
-    assert_eq!(res.status, 200);
-    assert!(res.is_success());
+async fn list_posts(State(state): State<AppState>) -> ApiResponse<Vec<String>> {
+    ApiResponse::success(vec!["Hello from Chopin!".to_string()])
 }
 ```
 
-`TestApp` automatically:
-- Creates an in-memory SQLite database
-- Runs all migrations
-- Starts the server on a random port
-- Provides helper methods for auth flows
+Register it in `src/main.rs`:
 
-## Build for Production
-
-```bash
-cargo build --release
+```rust
+let app = chopin_core::App::new().await?;
+// The router is built automatically with auth routes + OpenAPI docs
+app.run().await?;
 ```
 
-On Apple Silicon, the release build includes:
-- Full Link-Time Optimization (LTO)
-- ARM NEON SIMD instructions for JSON
-- Hardware AES acceleration for JWT
-- Native CPU targeting
+## Your First Model
+
+Generate a model:
+
+```bash
+chopin generate model post title:string body:text published:boolean
+```
+
+This creates both the SeaORM entity and a migration. See [Models & Database](models-database.md) for details.
 
 ## Next Steps
 
-- [API Reference](api.md) — Request/response format, error codes, pagination
-- [Examples](../chopin-examples/) — Working example projects
+- [Architecture](architecture.md) — Understand how Chopin works
+- [Controllers & Routing](controllers-routing.md) — Build your API endpoints
+- [Performance](performance.md) — Enable performance mode for benchmarks
+- [Testing](testing.md) — Write integration tests

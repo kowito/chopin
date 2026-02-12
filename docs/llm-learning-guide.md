@@ -1,869 +1,513 @@
-# Chopin Framework - LLM Learning Guide
+# Chopin Framework — LLM Learning Guide
 
-This document is designed for Large Language Models (LLMs like ChatGPT, Claude, etc.) to learn about the Chopin framework and help users build applications with it.
+> This document is designed for AI assistants (ChatGPT, Claude, Copilot, etc.) to understand the Chopin framework completely. It contains everything needed to help users build applications with Chopin.
 
----
+## What is Chopin?
 
-## Framework Overview
+Chopin is a **high-performance Rust web framework** built on Axum, SeaORM, and Tokio. It provides:
 
-**Chopin** is a Rust REST API framework built on top of:
-- **Axum** (web framework)
-- **SeaORM** (database ORM)
-- **Tokio** (async runtime)
-- **PostgreSQL/MySQL/SQLite** (database support)
-- **JWT** authentication with Argon2 password hashing
+- Dual server modes: **Standard** (easy, full middleware) and **Performance** (raw hyper, zero-alloc hot path)
+- Built-in JWT authentication with Argon2id password hashing
+- Role-based access control (User, Moderator, Admin, SuperAdmin)
+- SeaORM database ORM with auto-migrations
+- OpenAPI 3.1 documentation with Scalar UI
+- In-memory and Redis caching
+- Local and S3 file uploads
+- Optional GraphQL via async-graphql
+- CLI for project scaffolding and code generation
+- Integration testing utilities
 
-### Key Characteristics
+## Technology Stack
 
-1. **Type-Safe**: Rust's type system ensures memory safety and prevents entire classes of bugs
-2. **Fast**: ~85-90k requests/second on Apple M4, optimized for ARM64
-3. **Batteries Included**: Built-in auth, ORM, migrations, OpenAPI documentation
-4. **Convention Over Configuration**: Sensible defaults, less boilerplate
-5. **Developer Experience**: CLI scaffolding, auto-generated API docs, clear error messages
+| Component | Library | Version |
+|-----------|---------|---------|
+| HTTP server | Axum | 0.8 |
+| Raw HTTP | Hyper | 1.x |
+| Async runtime | Tokio | 1.x |
+| ORM | SeaORM | 1.x |
+| JSON | sonic-rs | 0.3 (SIMD-optimized) |
+| Auth | jsonwebtoken + argon2 | 9 / 0.5 |
+| API docs | utoipa + utoipa-scalar | 5 / 0.3 |
+| Caching | DashMap / Redis | — / 0.27 |
+| Storage | Local / AWS S3 | — / 1.x |
+| GraphQL | async-graphql | 7.x (optional) |
 
----
+## Project Structure
 
-## Project Creation
-
-When a user wants to create a Chopin app:
-
-```bash
-# 1. Install CLI
-cargo install chopin-cli
-
-# 2. Create new project
-chopin new my-app
-cd my-app
-
-# 3. Start development
-cargo run
-```
-
-Default setup includes:
-- Port: 3000
-- Database: SQLite (can change in .env)
-- Auth: JWT with user table
-- API Docs: Available at http://localhost:3000/api-docs
-
----
-
-## Architecture Overview
-
-### Request Flow
+When a user creates a Chopin project, it follows this structure:
 
 ```
-HTTP Request
-    ↓
-Axum Router (routes incoming requests)
-    ↓
-Middleware Stack (auth, logging, compression, CORS)
-    ↓
-Handler/Controller (process request, extract data)
-    ↓
-Extractor (AuthUser, Json<T>, State, etc.)
-    ↓
-Service Layer (business logic, database queries)
-    ↓
-Models/Database (SeaORM entities, queries)
-    ↓
-Response (JSON serialized, with ApiResponse wrapper)
+my-app/
+├── Cargo.toml
+├── .env
+├── .cargo/
+│   └── config.toml          # CPU-specific rustflags
+├── src/
+│   ├── main.rs              # Entry point
+│   ├── controllers/
+│   │   ├── mod.rs           # Controller module exports
+│   │   └── posts.rs         # Example controller
+│   ├── models/
+│   │   ├── mod.rs           # Model module exports
+│   │   └── post.rs          # SeaORM entity
+│   └── migrations/
+│       ├── mod.rs           # Migrator
+│       └── m20250211_*.rs   # Migration files
+└── tests/
+    └── integration_tests.rs
 ```
-
-### File Structure
-
-```
-src/
-├── main.rs              - Entry point, creates App and runs server
-├── config.rs            - Loads .env variables, SERVER_PORT, DATABASE_URL, JWT_SECRET
-├── app.rs               - AppState struct, database setup, middleware
-├── error.rs             - ChopinError enum, error handling
-├── response.rs          - ApiResponse<T> struct, HTTP response wrapper
-├── db.rs                - Database connection pool setup
-├── models/              - SeaORM entities
-│   ├── user.rs          - User entity with JWT auth
-│   ├── post.rs          - Example model
-│   └── mod.rs           - Export all models
-├── controllers/         - HTTP handlers/route logic
-│   ├── auth.rs          - Login, signup, logout
-│   ├── post.rs          - CRUD endpoints for posts
-│   └── mod.rs           - Export all controllers
-├── extractors/          - Custom request extractors
-│   ├── auth_user.rs     - AuthUser(user_id) - requires JWT token
-│   ├── json.rs          - Validated JSON extraction
-│   └── mod.rs           - Export all extractors
-├── auth/                - Authentication logic
-│   ├── jwt.rs           - JWT token creation/validation
-│   ├── password.rs      - Argon2 hashing
-│   └── mod.rs           - Export
-├── migrations/          - Database schema migrations
-│   ├── m20250211_000001_create_users_table.rs
-│   └── mod.rs           - List migrations
-├── openapi.rs           - OpenAPI/Swagger schema generation
-└── routing.rs           - Route definitions
-```
-
----
 
 ## Core Concepts
 
-### 1. AppState
-
-The application state holds shared resources:
+### 1. App Initialization
 
 ```rust
-pub struct AppState {
-    pub db: DatabaseConnection,
-    // Add more fields as needed for services, caches, etc.
-}
-```
+use chopin_core::App;
 
-Every handler receives `State(app): State<AppState>` to access database and services.
-
-### 2. ApiResponse<T>
-
-Standard response wrapper for all endpoints:
-
-```rust
-pub struct ApiResponse<T: Serialize> {
-    pub success: bool,
-    pub data: Option<T>,
-    pub error: Option<ErrorDetail>,
-}
-
-// Success:
-ApiResponse::success(data)
-
-// Error:
-ApiResponse::error("ERROR_CODE", "message")
-```
-
-### 3. ChopinError
-
-All errors are `ChopinError` enum:
-
-```rust
-pub enum ChopinError {
-    NotFound(String),
-    Unauthorized,
-    BadRequest(String),
-    InternalServerError(String),
-    DatabaseError(DbErr),
-    ValidationError(Vec<String>),
-}
-```
-
-Automatically converts to HTTP response with proper status codes.
-
-### 4. AuthUser Extractor
-
-Validates JWT token and extracts user_id:
-
-```rust
-#[get("/api/current-user")]
-pub async fn handler(AuthUser(user_id): AuthUser) -> Result<...> {
-    // user_id is guaranteed valid (401 if invalid token)
-    let user = User::find_by_id(user_id).one(&db).await?;
-}
-```
-
-### 5. Models (SeaORM)
-
-Database entities defined with derive macros:
-
-```rust
-#[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(table_name = "users")]
-pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: i32,
-    pub email: String,
-    pub username: String,
-    pub password_hash: String,
-    pub created_at: DateTime,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(has_many = "super::post::Entity")]
-    Posts,
-}
-```
-
-### 6. Database Operations
-
-```rust
-// Create
-let user = user::ActiveModel {
-    email: Set("user@example.com".to_string()),
-    username: Set("john".to_string()),
-    password_hash: Set(hash),
-    ..Default::default()
-};
-user.insert(&db).await?;
-
-// Read
-let user = User::find_by_id(1).one(&db).await?;
-
-// Update
-let mut user: user::ActiveModel = user.into();
-user.email = Set("new@example.com".to_string());
-user.update(&db).await?;
-
-// Delete
-user::Entity::delete_by_id(1).exec(&db).await?;
-
-// Query with filter
-let posts = Post::find()
-    .filter(post::Column::UserId.eq(user_id))
-    .all(&db)
-    .await?;
-
-// Pagination
-let posts = Post::find()
-    .paginate(&db, 10)
-    .fetch_page(0)
-    .await?;
-```
-
----
-
-## Common Patterns
-
-### Pattern 1: Simple GET Endpoint
-
-```rust
-#[utoipa::path(
-    get,
-    path = "/api/posts/{id}",
-    responses((status = 200, body = ApiResponse<Post>))
-)]
-pub async fn get_post(
-    Path(id): Path<i32>,
-    State(app): State<AppState>,
-) -> Result<ApiResponse<Post>, ChopinError> {
-    let post = Post::find_by_id(id)
-        .one(&app.db)
-        .await?
-        .ok_or(ChopinError::NotFound("Post not found".to_string()))?;
-    
-    Ok(ApiResponse::success(post))
-}
-```
-
-### Pattern 2: Protected POST Endpoint
-
-```rust
-#[utoipa::path(
-    post,
-    path = "/api/posts",
-    request_body = CreatePostRequest,
-    responses((status = 201, body = ApiResponse<Post>))
-)]
-pub async fn create_post(
-    AuthUser(user_id): AuthUser,  // Requires valid JWT
-    State(app): State<AppState>,
-    Json(payload): Json<CreatePostRequest>,
-) -> Result<ApiResponse<Post>, ChopinError> {
-    let post = post::ActiveModel {
-        user_id: Set(user_id),
-        title: Set(payload.title),
-        body: Set(payload.body),
-        ..Default::default()
-    };
-    
-    let post = post.insert(&app.db).await?;
-    Ok(ApiResponse::success(post))
-}
-```
-
-### Pattern 3: Validation
-
-```rust
-use validator::Validate;
-
-#[derive(Deserialize, Validate)]
-pub struct CreatePostRequest {
-    #[validate(length(min = 1, max = 255))]
-    pub title: String,
-    
-    #[validate(length(min = 1))]
-    pub body: String,
-}
-
-pub async fn create_post(
-    AuthUser(user_id): AuthUser,
-    State(app): State<AppState>,
-    Json(payload): Json<CreatePostRequest>,
-) -> Result<ApiResponse<Post>, ChopinError> {
-    payload.validate()?;  // Returns ChopinError::ValidationError if invalid
-    
-    // ... rest of handler
-}
-```
-
-### Pattern 4: Database Transactions
-
-```rust
-pub async fn transfer_posts(
-    user1_id: i32,
-    user2_id: i32,
-    db: &DatabaseConnection,
-) -> Result<(), ChopinError> {
-    let txn = db.begin().await?;
-    
-    // Update all posts from user1 to user2
-    post::Entity::update_many()
-        .col_expr(post::Column::UserId, Expr::value(user2_id))
-        .filter(post::Column::UserId.eq(user1_id))
-        .exec(&txn)
-        .await?;
-    
-    txn.commit().await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
+    let app = App::new().await?;
+    app.run().await?;
     Ok(())
 }
 ```
 
-### Pattern 5: Service Layer
+`App::new()` does:
+1. Loads config from `.env` + environment variables
+2. Connects to the database
+3. Runs pending migrations
+4. Initializes cache (in-memory or Redis)
 
-For business logic, create services:
+`App::run()` does:
+1. Builds the Axum router
+2. Checks `config.server_mode`:
+   - **Standard** → `axum::serve(listener, router)`
+   - **Performance** → `server::run_reuseport(addr, router, shutdown)` with SO_REUSEPORT × N cores
+
+### 2. Server Modes
+
+**Standard Mode** (default, `SERVER_MODE=standard`):
+- Full Axum pipeline
+- CORS middleware
+- Tracing + request-id middleware (dev only)
+- `axum::serve` with graceful shutdown
+- Best for: development, typical production
+
+**Performance Mode** (`SERVER_MODE=performance`):
+- Raw hyper HTTP/1.1 service
+- SO_REUSEPORT — N TCP listeners (one per CPU core)
+- `/json` and `/plaintext` bypass Axum entirely → zero allocation
+- Pre-computed static response bodies and headers
+- Cached Date header (500ms refresh)
+- TCP_NODELAY, backlog 8192
+- HTTP/1.1 keep-alive + pipeline_flush
+- Best for: benchmarks, extreme throughput
+
+### 3. Configuration
+
+All config comes from environment variables:
 
 ```rust
-// src/services/post_service.rs
-pub struct PostService;
-
-impl PostService {
-    pub async fn get_user_posts(
-        user_id: i32,
-        db: &DatabaseConnection,
-    ) -> Result<Vec<post::Model>, ChopinError> {
-        Post::find()
-            .filter(post::Column::UserId.eq(user_id))
-            .all(db)
-            .await
-            .map_err(Into::into)
-    }
-    
-    pub async fn publish_post(
-        post_id: i32,
-        db: &DatabaseConnection,
-    ) -> Result<(), ChopinError> {
-        let mut post: post::ActiveModel = Post::find_by_id(post_id)
-            .one(db)
-            .await?
-            .ok_or(ChopinError::NotFound("Post not found".to_string()))?
-            .into();
-        
-        post.published = Set(true);
-        post.update(db).await?;
-        Ok(())
-    }
+pub struct Config {
+    pub server_mode: ServerMode,       // standard / performance
+    pub database_url: String,          // sqlite://app.db?mode=rwc
+    pub jwt_secret: String,            // HMAC-SHA256 signing key
+    pub jwt_expiry_hours: u64,         // 24
+    pub server_host: String,           // 127.0.0.1
+    pub server_port: u16,              // 3000
+    pub environment: String,           // development / production / test
+    pub redis_url: Option<String>,
+    pub upload_dir: String,            // ./uploads
+    pub max_upload_size: u64,          // 10485760 (10MB)
+    pub s3_bucket: Option<String>,
+    pub s3_region: Option<String>,
+    pub s3_endpoint: Option<String>,
+    pub s3_access_key_id: Option<String>,
+    pub s3_secret_access_key: Option<String>,
+    pub s3_public_url: Option<String>,
+    pub s3_prefix: Option<String>,
 }
 ```
 
----
+### 4. AppState
 
-## CLI Command Reference
-
-### Generate Model
-
-```bash
-chopin generate model Post title:string body:text published:bool author_id:i32
-```
-
-Creates:
-- `src/models/post.rs` - SeaORM entity
-- Database migration file
-
-### Generate Controller
-
-```bash
-chopin generate controller post
-```
-
-Creates:
-- `src/controllers/post.rs` - CRUD endpoints
-
-### Run Migrations
-
-```bash
-chopin db migrate
-```
-
-Applies pending database migrations.
-
-### Start Dev Server
-
-```bash
-chopin run
-```
-
-Runs server on localhost:3000, watches for changes.
-
----
-
-## Database Schema Design
-
-### User Table (Auto-created)
-
-```sql
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    username VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### Adding Custom Tables
-
-1. Create migration manually or use CLI
-2. Define SeaORM entity in `models/`
-3. Run `chopin db migrate`
-
-Example custom table:
-
-```sql
-CREATE TABLE posts (
-    id SERIAL PRIMARY KEY,
-    user_id INT NOT NULL REFERENCES users(id),
-    title VARCHAR(255) NOT NULL,
-    body TEXT NOT NULL,
-    published BOOLEAN DEFAULT false,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_posts_user_id ON posts(user_id);
-```
-
-Corresponding model:
+Shared state available in all handlers:
 
 ```rust
-#[derive(Clone, Debug, DeriveEntityModel)]
+#[derive(Clone)]
+pub struct AppState {
+    pub db: DatabaseConnection,     // SeaORM connection pool
+    pub config: Arc<Config>,        // Shared config (Arc, not cloned)
+    pub cache: CacheService,        // In-memory or Redis
+}
+```
+
+### 5. Routing
+
+Chopin auto-registers:
+- `GET /` — Welcome JSON
+- `POST /api/auth/signup` — User registration
+- `POST /api/auth/login` — User login
+- `GET /api-docs` — Scalar OpenAPI UI
+- `GET /api-docs/openapi.json` — Raw OpenAPI spec
+
+In performance mode, also:
+- `GET /json` — `{"message":"Hello, World!"}` (zero-alloc)
+- `GET /plaintext` — `Hello, World!` (zero-alloc)
+
+User routes are added by merging into the router:
+
+```rust
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/posts", get(list).post(create))
+        .route("/api/posts/:id", get(show).put(update).delete(destroy))
+}
+```
+
+### 6. Response Format
+
+**ApiResponse\<T\>** — wraps any serializable data:
+
+```rust
+// Success (200)
+ApiResponse::success(data)         // { "success": true, "data": {...} }
+// Created (201)
+ApiResponse::created(data)         // { "success": true, "data": {...} }
+// Message only
+ApiResponse::success_message("ok") // { "success": true, "message": "ok" }
+```
+
+**ChopinError** — maps to HTTP error codes:
+
+```rust
+ChopinError::NotFound(msg)        // 404
+ChopinError::BadRequest(msg)      // 400
+ChopinError::Unauthorized(msg)    // 401
+ChopinError::Forbidden(msg)       // 403
+ChopinError::Validation(errors)   // 422
+ChopinError::Conflict(msg)        // 409
+ChopinError::Internal(msg)        // 500
+ChopinError::Database(err)        // 500 (from SeaORM DbErr)
+```
+
+### 7. Authentication
+
+**Signup flow:**
+1. Client POSTs `{email, username, password}` to `/api/auth/signup`
+2. Password hashed with Argon2id
+3. User row inserted (role = User)
+4. JWT token created (HMAC-SHA256, includes user_id + role)
+5. Returns `{access_token, user}`
+
+**Login flow:**
+1. Client POSTs `{email, password}` to `/api/auth/login`
+2. User looked up by email
+3. Password verified against Argon2id hash
+4. JWT token created
+5. Returns `{access_token, user}`
+
+**Protecting endpoints:**
+```rust
+use chopin_core::extractors::AuthUser;
+
+async fn protected(user: AuthUser) -> ApiResponse<String> {
+    // user.user_id and user.role are available
+    ApiResponse::success(format!("Hello user {}", user.user_id))
+}
+```
+
+The `AuthUser` extractor:
+1. Reads `Authorization: Bearer <token>` header
+2. Validates JWT signature
+3. Extracts `user_id` and `role` from claims
+4. Returns 401 if missing/invalid
+
+### 8. Roles
+
+```rust
+pub enum Role {
+    User       = 0,
+    Moderator  = 1,
+    Admin      = 2,
+    SuperAdmin = 3,
+}
+```
+
+**AuthUserWithRole** — restrict to minimum role:
+```rust
+async fn admin_only(user: AuthUserWithRole<{ Role::Admin as u8 }>) -> ApiResponse<String> { ... }
+```
+
+**require_role middleware** — protect route groups:
+```rust
+router.layer(middleware::from_fn(require_role(Role::Admin)))
+```
+
+### 9. Models (SeaORM)
+
+Entity definition:
+```rust
+#[derive(DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "posts")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    pub user_id: i32,
     pub title: String,
     pub body: String,
-    pub published: bool,
-    pub created_at: DateTime,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::user::Entity",
-        from = "Column::UserId",
-        to = "super::user::Column::Id"
-    )]
-    User,
-}
-
-impl Related<super::user::Entity> for Entity {
-    fn to() -> RelationToProcedure {
-        Relation::User.def()
-    }
-}
-
-impl ActiveModelBehavior for ActiveModel {}
-```
-
----
-
-## Request/Response Examples
-
-### Authentication Flow
-
-**Signup:**
-```
-POST /api/auth/signup
-Content-Type: application/json
-
-{
-  "email": "user@example.com",
-  "username": "john",
-  "password": "secure123"
-}
-
-Response 200:
-{
-  "success": true,
-  "data": {
-    "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-    "user": {
-      "id": 1,
-      "email": "user@example.com",
-      "username": "john"
-    }
-  },
-  "error": null
+    pub created_at: chrono::NaiveDateTime,
 }
 ```
 
-**Login:**
-```
-POST /api/auth/login
-Content-Type: application/json
+CRUD operations:
+```rust
+// Create
+let model = posts::ActiveModel { title: Set("Hello".into()), ..Default::default() };
+let result = model.insert(&db).await?;
 
-{
-  "email": "user@example.com",
-  "password": "secure123"
-}
+// Read
+let post = posts::Entity::find_by_id(1).one(&db).await?;
+let all = posts::Entity::find().all(&db).await?;
 
-Response 200:
-{
-  "success": true,
-  "data": {
-    "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-    "user": { ... }
-  },
-  "error": null
-}
+// Update
+let mut active: posts::ActiveModel = post.into_active_model();
+active.title = Set("Updated".into());
+active.update(&db).await?;
+
+// Delete
+post.delete(&db).await?;
 ```
 
-**Protected Request:**
-```
-GET /api/posts
-Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGc...
+### 10. Extractors
 
-Response 200:
-{
-  "success": true,
-  "data": [
-    { "id": 1, "title": "Post 1", "body": "...", "user_id": 1 },
-    { "id": 2, "title": "Post 2", "body": "...", "user_id": 1 }
-  ],
-  "error": null
-}
-```
+| Extractor | Purpose | Usage |
+|-----------|---------|-------|
+| `Json<T>` | Deserialize JSON body (sonic-rs) | `Json(body): Json<CreateReq>` |
+| `AuthUser` | JWT auth → user_id + role | `user: AuthUser` |
+| `AuthUserWithRole<N>` | Auth with minimum role | `user: AuthUserWithRole<{Role::Admin as u8}>` |
+| `Pagination` | Parse `?page=1&per_page=20` | `pagination: Pagination` |
+| `State<AppState>` | Shared application state | `State(state): State<AppState>` |
+| `Path<T>` | URL path parameters | `Path(id): Path<i32>` |
+| `Query<T>` | Query string parameters | `Query(params): Query<SearchParams>` |
 
-**Unauthorized (401):**
-```
-GET /api/posts
-(no Authorization header)
-
-Response 401:
-{
-  "success": false,
-  "data": null,
-  "error": {
-    "code": "UNAUTHORIZED",
-    "message": "Missing or invalid authentication token"
-  }
-}
-```
-
-**Not Found (404):**
-```
-Response 404:
-{
-  "success": false,
-  "data": null,
-  "error": {
-    "code": "NOT_FOUND",
-    "message": "Post not found"
-  }
-}
-```
-
----
-
-## Environment Configuration
-
-`.env` file variables:
-
-```env
-# Server
-SERVER_PORT=3000
-SERVER_HOST=127.0.0.1
-
-# Database
-DATABASE_URL=sqlite:./chopin.db  # or postgres://... or mysql://...
-
-# Authentication
-JWT_SECRET=your-secret-key-min-32-chars
-JWT_EXPIRY_HOURS=24
-
-# Environment
-ENVIRONMENT=development  # or production
-RUST_LOG=debug  # or info, warn, error
-```
-
----
-
-## Testing
-
-### Unit Test Example
+### 11. Caching
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_password_hashing() {
-        let password = "secure123";
-        let hash = hash_password(password).unwrap();
-        assert!(verify_password(password, &hash).unwrap());
-    }
-}
+// Get
+let val: Option<String> = state.cache.get("key").await;
+
+// Set with 5 minute TTL
+state.cache.set("key", "value", Some(300)).await;
+
+// Delete
+state.cache.delete("key").await;
 ```
 
-### Integration Test Example
+Backends:
+- **In-memory** (default) — `DashMap` with lazy TTL expiration
+- **Redis** (feature: `redis`) — uses `SETEX` for TTL, auto-reconnect
+
+### 12. File Uploads
 
 ```rust
+use chopin_core::storage::FileUploadService;
+
+let service = FileUploadService::new(&config);
+let result = service.upload("photo.jpg", &bytes, "image/jpeg").await?;
+// result.path, result.url
+```
+
+Backends:
+- **Local** (default) — saves to `UPLOAD_DIR` with UUID filenames
+- **S3** (feature: `s3`) — uploads to configured S3 bucket
+
+### 13. Testing
+
+```rust
+use chopin_core::testing::TestApp;
+
 #[tokio::test]
-async fn test_create_post() {
-    let app = TestApp::new().await;
-    let user = app.create_user("test@example.com", "password").await;
-    let token = app.login_as(&user).await;
-    
-    let response = app
-        .client()
-        .post("/api/posts")
-        .bearer_auth(&token)
-        .json(&json!({
-            "title": "Test Post",
-            "body": "Test body"
-        }))
-        .send()
-        .await;
-    
-    assert_eq!(response.status(), 201);
+async fn test_signup() {
+    let app = TestApp::new().await;  // In-memory SQLite, random port
+    let res = app.client.post(&app.url("/api/auth/signup"), r#"{"email":"a@b.com","username":"alice","password":"secret123"}"#).await;
+    assert_eq!(res.status, 201);
 }
 ```
 
----
+Helpers:
+```rust
+let (token, user) = app.create_user("email", "username", "password").await;
+let token = app.login("email", "password").await;
+let res = app.client.get_with_token(&app.url("/api/me"), &token).await;
+```
 
-## Middleware & Routing
+### 14. OpenAPI
 
-### Built-in Middleware
-
-1. **Authentication** - Validates JWT tokens on protected routes
-2. **CORS** - Handles cross-origin requests
-3. **Compression** - gzip/brotli compression for responses
-4. **Logging** - Request/response logging with tracing
-5. **Error Handling** - Converts ChopinError to HTTP responses
-
-### Custom Routes
+Chopin auto-generates OpenAPI 3.1 specs. Add annotations:
 
 ```rust
-pub fn routes(db: DatabaseConnection) -> Router<AppState> {
-    Router::new()
-        // Public routes
-        .route("/api/auth/signup", post(auth::signup))
-        .route("/api/auth/login", post(auth::login))
-        
-        // Protected routes
-        .route("/api/posts", get(post::list).post(post::create))
-        .route("/api/posts/:id", get(post::get).patch(post::update).delete(post::delete))
-        
-        // API docs
-        .route("/api-docs", get(utoipa::Scalar::oas_ui))
-        .route("/api-docs/openapi.json", get(api_doc::handle))
-}
+#[utoipa::path(get, path = "/api/posts", tag = "posts",
+    responses((status = 200, body = ApiResponse<Vec<PostResponse>>)))]
+async fn list_posts(...) { ... }
 ```
 
----
+Register in an OpenApi struct:
+```rust
+#[derive(OpenApi)]
+#[openapi(paths(list_posts, create_post), components(schemas(PostResponse)))]
+pub struct ApiDoc;
+```
 
-## Performance Tips
+### 15. Feature Flags
 
-1. **Database Indexes** - Add indexes to frequently queried columns
-2. **Connection Pooling** - SeaORM uses sqlx connection pool (default 10 connections)
-3. **Caching** - Cache frequently accessed data
-4. **Query Optimization** - Use select() to fetch only needed columns
-5. **Async/Await** - Use async handlers, never block
-6. **Release Build** - Always use `--release` in production
+| Feature | Cargo Flag | Effect |
+|---------|-----------|--------|
+| Redis | `--features redis` | Redis-backed CacheService |
+| GraphQL | `--features graphql` | async-graphql routes |
+| S3 | `--features s3` | AWS S3 file storage |
+| Performance | `--features perf` | mimalloc global allocator |
 
----
+### 16. Performance Architecture
 
-## Deployment
+The performance mode stack:
 
-### Local PostgreSQL Setup
+```
+SO_REUSEPORT × N CPU cores  (kernel distributes connections)
+  → per-core TcpListener (backlog 8192, SO_REUSEADDR)
+    → TCP_NODELAY on accept
+      → hyper::http1::Builder (keep_alive, pipeline_flush, max_buf_size=8192)
+        → ChopinService::call(req)
+          → /json      → pre-baked Bytes::from_static (27 bytes) + cached Date header
+          → /plaintext → pre-baked Bytes::from_static (13 bytes) + cached Date header
+          → *          → Axum Router with full middleware
+```
+
+JSON serialization everywhere uses **sonic-rs** (ARM NEON / x86 AVX2 optimized).
+
+Release profile: `opt-level=3`, `lto="fat"`, `codegen-units=1`, `strip=true`, `panic="abort"`.
+
+## CLI Commands
 
 ```bash
-# Install PostgreSQL
-# macOS: brew install postgresql
-# Linux: sudo apt-get install postgresql
-
-# Create database
-createdb chopin_app
-
-# Update .env
-DATABASE_URL=postgresql://user:password@localhost/chopin_app
-
-# Run migrations
-chopin db migrate
-
-# Start app
-cargo run --release
+chopin new <name>                          # Create project
+chopin generate model <name> [fields...]   # Generate model + migration
+chopin generate controller <name>          # Generate CRUD controller
+chopin db migrate                          # Run migrations
+chopin db rollback                         # Rollback last migration
+chopin db reset                            # Drop & recreate
+chopin db seed                             # Seed data
+chopin db status                           # Migration status
+chopin run                                 # Start dev server
+chopin createsuperuser                     # Create admin user
+chopin docs export <file>                  # Export OpenAPI spec
+chopin info                                # Framework info
 ```
 
-### Docker Deployment
+## Common Patterns
 
-```dockerfile
-FROM rust:1.75 as builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release
-
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y libpq5 ca-certificates
-COPY --from=builder /app/target/release/chopin_app /usr/local/bin/
-ENV RUST_LOG=info
-EXPOSE 3000
-CMD ["chopin_app"]
-```
-
-### Environment Variables in Production
-
-```env
-ENVIRONMENT=production
-RUST_LOG=info
-DATABASE_URL=postgresql://user:pass@prod-db:5432/db
-JWT_SECRET=use-strong-random-key
-SERVER_PORT=8080
-```
-
----
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `main.rs` | App initialization, server startup |
-| `config.rs` | Environment variable loading |
-| `app.rs` | AppState, middleware setup |
-| `error.rs` | Error handling, error types |
-| `response.rs` | Response wrapper (ApiResponse<T>) |
-| `models/` | Database entities (SeaORM) |
-| `controllers/` | HTTP handlers/routes |
-| `extractors/` | Custom request extractors |
-| `auth/` | JWT, password hashing logic |
-| `migrations/` | Database schema changes |
-
----
-
-## Dependencies Overview
-
-Key crates and their purposes:
-
-- **axum** - Web framework, routing, middleware
-- **tokio** - Async runtime
-- **sea-orm** - ORM, database operations
-- **serde/serde_json** - JSON serialization
-- **jsonwebtoken** - JWT token creation/validation
-- **argon2** - Password hashing
-- **utoipa** - OpenAPI documentation generation
-- **tower** - Middleware framework
-- **chrono** - DateTime handling
-- **uuid** - UUID generation
-
----
-
-## Common Error Patterns
-
-### Error: `DatabaseError`
-- **Cause** - Query execution failed
-- **Solution** - Check SQL syntax, table exists, foreign keys valid
-
-### Error: `Unauthorized`
-- **Cause** - Missing or invalid JWT token
-- **Solution** - Include `Authorization: Bearer <token>` header
-
-### Error: `ValidationError`
-- **Cause** - Request body validation failed
-- **Solution** - Check field constraints (length, format, etc.)
-
-### Error: `NotFound`
-- **Cause** - Resource doesn't exist
-- **Solution** - Verify ID exists in database
-
----
-
-## Learning Path for LLMs Helping Users
-
-When a user asks how to build something with Chopin, use this guide to:
-
-1. **Understand the Request** - What do they want to build?
-2. **Check Architecture** - What pieces do they need? (Models, Controllers, Extractors)
-3. **Find Patterns** - What existing patterns apply?
-4. **Use Examples** - Reference the examples in this guide
-5. **Provide Complete Code** - Include all necessary imports and implementation
-6. **Follow Conventions** - Use established Chopin patterns (ApiResponse, ChopinError, etc.)
-7. **Test Suggestions** - Recommend how to test their code
-8. **Link to Docs** - Reference official documentation when relevant
-
----
-
-## Quick Code Templates
-
-### Minimal Endpoint
+### Full CRUD Controller
 
 ```rust
-#[get("/api/hello")]
-pub async fn hello() -> ApiResponse<String> {
-    ApiResponse::success("Hello, world!".to_string())
+use axum::{Router, routing::{get, post, put, delete}, extract::{State, Path}};
+use chopin_core::{ApiResponse, ChopinError, controllers::AppState, extractors::{Json, AuthUser, Pagination, PaginatedResponse}};
+use sea_orm::{EntityTrait, ActiveModelTrait, Set, PaginatorTrait, QueryOrder};
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/posts", get(list).post(create))
+        .route("/api/posts/:id", get(show).put(update).delete(destroy))
 }
-```
 
-### With Authentication
-
-```rust
-#[get("/api/profile")]
-pub async fn profile(
-    AuthUser(user_id): AuthUser,
-    State(app): State<AppState>,
-) -> Result<ApiResponse<User>, ChopinError> {
-    let user = User::find_by_id(user_id)
-        .one(&app.db)
+async fn list(State(state): State<AppState>, pagination: Pagination) -> Result<ApiResponse<PaginatedResponse<Vec<PostResponse>>>, ChopinError> {
+    let total = posts::Entity::find().count(&state.db).await? as u64;
+    let items = posts::Entity::find()
+        .order_by_desc(posts::Column::Id)
+        .offset(Some(pagination.offset()))
+        .limit(Some(pagination.limit()))
+        .all(&state.db)
         .await?
-        .ok_or(ChopinError::NotFound("User not found".to_string()))?;
-    
-    Ok(ApiResponse::success(user))
+        .into_iter()
+        .map(PostResponse::from)
+        .collect();
+    Ok(ApiResponse::success(pagination.response(items, total)))
 }
-```
 
-### With Request Body
-
-```rust
-#[post("/api/posts")]
-pub async fn create(
-    AuthUser(user_id): AuthUser,
-    State(app): State<AppState>,
-    Json(payload): Json<CreateRequest>,
-) -> Result<ApiResponse<Post>, ChopinError> {
-    let post = post::ActiveModel {
-        user_id: Set(user_id),
-        title: Set(payload.title),
+async fn create(State(state): State<AppState>, user: AuthUser, Json(body): Json<CreatePost>) -> Result<ApiResponse<PostResponse>, ChopinError> {
+    let model = posts::ActiveModel {
+        title: Set(body.title),
+        body: Set(body.body),
+        author_id: Set(user.user_id),
         ..Default::default()
     };
-    
-    let post = post.insert(&app.db).await?;
-    Ok(ApiResponse::success(post))
+    let result = model.insert(&state.db).await?;
+    Ok(ApiResponse::created(PostResponse::from(result)))
+}
+
+async fn show(State(state): State<AppState>, Path(id): Path<i32>) -> Result<ApiResponse<PostResponse>, ChopinError> {
+    let post = posts::Entity::find_by_id(id).one(&state.db).await?
+        .ok_or(ChopinError::NotFound("Post not found".into()))?;
+    Ok(ApiResponse::success(PostResponse::from(post)))
+}
+
+async fn update(State(state): State<AppState>, user: AuthUser, Path(id): Path<i32>, Json(body): Json<UpdatePost>) -> Result<ApiResponse<PostResponse>, ChopinError> {
+    let post = posts::Entity::find_by_id(id).one(&state.db).await?
+        .ok_or(ChopinError::NotFound("Post not found".into()))?;
+    let mut active: posts::ActiveModel = post.into();
+    if let Some(title) = body.title { active.title = Set(title); }
+    if let Some(body_text) = body.body { active.body = Set(body_text); }
+    let updated = active.update(&state.db).await?;
+    Ok(ApiResponse::success(PostResponse::from(updated)))
+}
+
+async fn destroy(State(state): State<AppState>, user: AuthUser, Path(id): Path<i32>) -> Result<ApiResponse<()>, ChopinError> {
+    let post = posts::Entity::find_by_id(id).one(&state.db).await?
+        .ok_or(ChopinError::NotFound("Post not found".into()))?;
+    post.delete(&state.db).await?;
+    Ok(ApiResponse::success_message("Deleted"))
 }
 ```
 
-### With Database Query
+### Custom Example App (not using App::new)
 
 ```rust
-pub async fn search(
-    State(app): State<AppState>,
-    Query(params): Query<SearchParams>,
-) -> Result<ApiResponse<Vec<Post>>, ChopinError> {
-    let posts = Post::find()
-        .filter(post::Column::Title.contains(&params.q))
-        .all(&app.db)
-        .await?;
-    
-    Ok(ApiResponse::success(posts))
+use std::sync::Arc;
+use axum::Router;
+use chopin_core::{config::Config, db, controllers::AppState, cache::CacheService};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::from_env()?;
+    let db = db::connect(&config).await?;
+    let cache = CacheService::in_memory();
+
+    let state = AppState {
+        db,
+        config: Arc::new(config.clone()),
+        cache,
+    };
+
+    let app = Router::new()
+        .merge(my_controllers::routes())
+        .with_state(state)
+        .layer(axum::Extension(Arc::new(config.clone())))
+        .layer(tower_http::cors::CorsLayer::permissive());
+
+    let listener = tokio::net::TcpListener::bind(&config.server_addr()).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
 }
 ```
 
----
+## Key Implementation Details for LLMs
 
-**End of LLM Learning Guide**
-
-This document contains everything LLMs need to help users build Chopin applications effectively.
+1. **Config is `Arc<Config>`** in AppState — never clone the full Config, always Arc.
+2. **JSON uses `sonic_rs`** — all `ApiResponse` and `ChopinError` serialize with `sonic_rs::to_vec()`, not `serde_json`.
+3. **The `Json` extractor** in `chopin_core::extractors` uses `sonic_rs::from_slice()` — it's NOT `axum::Json`.
+4. **Performance mode bypasses Axum** — the `ChopinService` in `server.rs` checks path before touching the Router.
+5. **SO_REUSEPORT uses `socket2`** — creates N `socket2::Socket` instances, converts to `tokio::TcpListener`.
+6. **mimalloc is optional** — only active with `--features perf`. Set via `#[global_allocator]` in `lib.rs`.
+7. **Date header is cached** — `perf::cached_date_header()` returns a cached `HeaderValue`, updated every 500ms.
+8. **Migrations auto-run** — both `App::new()` and `App::with_config()` call `Migrator::up()` on startup.
+9. **Role is an integer in the DB** — `Role::User = 0`, `Role::Admin = 2`, etc. Stored in the `role` column.
+10. **AuthUser reads from request Extensions** — the JWT middleware injects claims via `axum::Extension<Arc<Config>>`.

@@ -3,6 +3,8 @@ members = [
     "chopin-core",
     "chopin-cli",
     "chopin-examples/basic-api",
+    "chopin-examples/hello-world",
+    "chopin-examples/benchmark",
 ]
 resolver = "2"
 
@@ -16,3 +18,4 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
+panic = "abort"

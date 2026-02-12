@@ -1,127 +1,198 @@
-use axum::{extract::State, routing::get, Router};
-use chrono::Utc;
-use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, QueryOrder, Set};
+use axum::{Router, extract::{Path, State, Query}, routing::get};
+use axum::http::StatusCode;
+use sea_orm::*;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
-use chopin_core::extractors::{AuthUser, Json, Pagination};
-use chopin_core::{ChopinError, ApiResponse};
+use chopin_core::response::ApiResponse;
+use chopin_core::extractors::Pagination;
 
-use crate::models::post::{self, Entity as Post, PostResponse};
 use crate::AppState;
+use crate::models::post::{self, Entity as Post, PostResponse};
 
-// ── Request types ──
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct CreatePostRequest {
-    pub title: String,
-    pub body: String,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct UpdatePostRequest {
-    pub title: Option<String>,
-    pub body: Option<String>,
-}
-
-// ── Routes ──
+// ─── Routes ────────────────────────────────────────────────────
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/posts", get(list_posts).post(create_post))
-        .route("/posts/:id", get(get_post))
+        .route("/api/posts", get(list_posts).post(create_post))
+        .route("/api/posts/{id}", get(get_post).put(update_post).delete(delete_post))
 }
 
-// ── Handlers ──
+// ─── Request DTOs ──────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreatePostRequest {
+    /// Post title (required)
+    pub title: String,
+    /// Post body content (required)
+    pub body: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdatePostRequest {
+    /// Updated title (optional)
+    pub title: Option<String>,
+    /// Updated body (optional)
+    pub body: Option<String>,
+    /// Publish or unpublish (optional)
+    pub published: Option<bool>,
+}
+
+// ─── Handlers ──────────────────────────────────────────────────
 
 /// List all posts with pagination.
 #[utoipa::path(
     get,
     path = "/api/posts",
+    tag = "posts",
     params(Pagination),
     responses(
-        (status = 200, description = "List of posts", body = ApiResponse<Vec<PostResponse>>),
-    ),
-    tag = "posts",
-    security(("bearer_auth" = []))
+        (status = 200, description = "Paginated list of posts", body = ApiResponse<Vec<PostResponse>>)
+    )
 )]
-async fn list_posts(
+pub async fn list_posts(
     State(state): State<AppState>,
-    pagination: Pagination,
-) -> Result<ApiResponse<Vec<PostResponse>>, ChopinError> {
+    Query(pagination): Query<Pagination>,
+) -> Result<axum::Json<ApiResponse<Vec<PostResponse>>>, StatusCode> {
     let p = pagination.clamped();
 
-    // Use paginate for cleaner pagination
-    let page = p.offset / p.limit;
     let posts = Post::find()
         .order_by_desc(post::Column::CreatedAt)
-        .paginate(&state.db, p.limit)
-        .fetch_page(page)
-        .await?;
+        .offset(p.offset)
+        .limit(p.limit)
+        .all(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let response: Vec<PostResponse> = posts.into_iter().map(|p| p.into()).collect();
-    Ok(ApiResponse::success(response))
+    let items: Vec<PostResponse> = posts.into_iter().map(PostResponse::from).collect();
+    Ok(axum::Json(ApiResponse::success(items)))
 }
 
-/// Create a new post (requires authentication).
+/// Create a new post.
 #[utoipa::path(
     post,
     path = "/api/posts",
+    tag = "posts",
     request_body = CreatePostRequest,
     responses(
         (status = 201, description = "Post created", body = ApiResponse<PostResponse>),
-        (status = 400, description = "Invalid input"),
-        (status = 401, description = "Not authenticated")
-    ),
-    tag = "posts",
-    security(("bearer_auth" = []))
+        (status = 400, description = "Invalid input")
+    )
 )]
-async fn create_post(
+pub async fn create_post(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
-    Json(payload): Json<CreatePostRequest>,
-) -> Result<ApiResponse<PostResponse>, ChopinError> {
-    if payload.title.is_empty() {
-        return Err(ChopinError::Validation("Title is required".to_string()));
-    }
-
-    let now = Utc::now().naive_utc();
+    axum::Json(payload): axum::Json<CreatePostRequest>,
+) -> Result<(StatusCode, axum::Json<ApiResponse<PostResponse>>), StatusCode> {
+    let now = chrono::Utc::now().naive_utc();
 
     let new_post = post::ActiveModel {
         title: Set(payload.title),
         body: Set(payload.body),
-        author_id: Set(user_id),
+        published: Set(false),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
     };
 
-    let post_model = new_post.insert(&state.db).await?;
-    Ok(ApiResponse::success(PostResponse::from(post_model)))
+    let result = new_post
+        .insert(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok((StatusCode::CREATED, axum::Json(ApiResponse::success(PostResponse::from(result)))))
 }
 
 /// Get a single post by ID.
 #[utoipa::path(
     get,
     path = "/api/posts/{id}",
-    params(
-        ("id" = i32, Path, description = "Post ID")
-    ),
+    tag = "posts",
+    params(("id" = i32, Path, description = "Post ID")),
     responses(
         (status = 200, description = "Post found", body = ApiResponse<PostResponse>),
         (status = 404, description = "Post not found")
-    ),
-    tag = "posts"
+    )
 )]
-async fn get_post(
+pub async fn get_post(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<i32>,
-) -> Result<ApiResponse<PostResponse>, ChopinError> {
+    Path(id): Path<i32>,
+) -> Result<axum::Json<ApiResponse<PostResponse>>, StatusCode> {
     let post = Post::find_by_id(id)
         .one(&state.db)
-        .await?
-        .ok_or_else(|| ChopinError::NotFound(format!("Post with id {} not found", id)))?;
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
 
-    Ok(ApiResponse::success(PostResponse::from(post)))
+    Ok(axum::Json(ApiResponse::success(PostResponse::from(post))))
+}
+
+/// Update an existing post.
+#[utoipa::path(
+    put,
+    path = "/api/posts/{id}",
+    tag = "posts",
+    params(("id" = i32, Path, description = "Post ID")),
+    request_body = UpdatePostRequest,
+    responses(
+        (status = 200, description = "Post updated", body = ApiResponse<PostResponse>),
+        (status = 404, description = "Post not found")
+    )
+)]
+pub async fn update_post(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    axum::Json(payload): axum::Json<UpdatePostRequest>,
+) -> Result<axum::Json<ApiResponse<PostResponse>>, StatusCode> {
+    let existing = Post::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let mut active: post::ActiveModel = existing.into();
+
+    if let Some(title) = payload.title {
+        active.title = Set(title);
+    }
+    if let Some(body) = payload.body {
+        active.body = Set(body);
+    }
+    if let Some(published) = payload.published {
+        active.published = Set(published);
+    }
+    active.updated_at = Set(chrono::Utc::now().naive_utc());
+
+    let updated = active
+        .update(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(axum::Json(ApiResponse::success(PostResponse::from(updated))))
+}
+
+/// Delete a post by ID.
+#[utoipa::path(
+    delete,
+    path = "/api/posts/{id}",
+    tag = "posts",
+    params(("id" = i32, Path, description = "Post ID")),
+    responses(
+        (status = 200, description = "Post deleted"),
+        (status = 404, description = "Post not found")
+    )
+)]
+pub async fn delete_post(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<StatusCode, StatusCode> {
+    let result = Post::delete_by_id(id)
+        .exec(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if result.rows_affected == 0 {
+        Err(StatusCode::NOT_FOUND)
+    } else {
+        Ok(StatusCode::OK)
+    }
 }

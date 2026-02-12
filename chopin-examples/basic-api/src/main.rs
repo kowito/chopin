@@ -1,40 +1,37 @@
-mod controllers;
-mod models;
-mod migrations;
+//! # Chopin Basic API Example
+//!
+//! A complete CRUD API with authentication, pagination, and OpenAPI docs.
+
+use std::sync::Arc;
 
 use axum::Router;
-use sea_orm::DatabaseConnection;
 use sea_orm_migration::MigratorTrait;
-use tracing_subscriber;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 
 use chopin_core::{config::Config, db};
-
-/// Application state shared across all handlers.
-#[derive(Clone)]
-pub struct AppState {
-    pub db: DatabaseConnection,
-    pub config: Config,
-}
+use chopin_basic_api::{AppState, controllers, models, migrations};
 
 /// OpenAPI documentation for the example API.
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "Chopin Example API",
+        title = "Chopin Basic API",
         version = "0.1.0",
-        description = "A complete example application built with Chopin"
+        description = "A complete CRUD example built with Chopin — auth, pagination, OpenAPI"
     ),
     paths(
         controllers::posts::list_posts,
         controllers::posts::create_post,
         controllers::posts::get_post,
+        controllers::posts::update_post,
+        controllers::posts::delete_post,
     ),
     components(
         schemas(
             models::post::PostResponse,
             controllers::posts::CreatePostRequest,
+            controllers::posts::UpdatePostRequest,
             chopin_core::response::ApiResponse<models::post::PostResponse>,
             chopin_core::response::ApiResponse<Vec<models::post::PostResponse>>,
             chopin_core::extractors::Pagination,
@@ -71,16 +68,12 @@ impl utoipa::Modify for SecurityAddon {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    // Load configuration
     let config = Config::from_env()?;
     let database_conn = db::connect(&config).await?;
 
-    // Run example-specific migrations
-    tracing::info!("Running example migrations...");
+    // Run migrations
+    tracing::info!("Running migrations...");
     migrations::Migrator::up(&database_conn, None).await?;
-
-    // Also run core migrations for User table
-    tracing::info!("Running core migrations...");
     chopin_core::migrations::Migrator::up(&database_conn, None).await?;
 
     let state = AppState {
@@ -88,7 +81,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: config.clone(),
     };
 
-    // Build router with example routes
     let app = Router::new()
         .merge(controllers::posts::routes())
         .merge(Scalar::with_url("/api-docs", ApiDoc::openapi()))
@@ -97,12 +89,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             axum::routing::get(|| async { axum::Json(ApiDoc::openapi()) }),
         )
         .with_state(state)
+        .layer(axum::Extension(Arc::new(config.clone())))
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
     let addr = config.server_addr();
-    tracing::info!("Example API server running on http://{}", addr);
-    tracing::info!("API docs available at http://{}/api-docs", addr);
+    println!("\n🎹 Chopin Basic API Example");
+    println!("   → Server:   http://{}", addr);
+    println!("   → API docs: http://{}/api-docs\n", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app)
@@ -116,5 +110,4 @@ async fn shutdown_signal() {
     tokio::signal::ctrl_c()
         .await
         .expect("Failed to install CTRL+C signal handler");
-    tracing::info!("Shutting down example server...");
 }

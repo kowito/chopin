@@ -1,556 +1,160 @@
-# Chopin Architecture
-
-## Design Philosophy
-
-Chopin is built on three core principles:
-
-1. **Convention over Configuration** - Sensible defaults that work out of the box
-2. **Performance without Complexity** - Optimized for speed while maintaining simplicity
-3. **Developer Experience First** - Intuitive APIs that feel natural to web developers
-
-## Framework Stack
-
-```
-┌─────────────────────────────────────────┐
-│         Your Application Code           │
-│    (Models, Controllers, Handlers)      │
-└─────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────┐
-│           Chopin Core                   │
-│  (App, Routing, Auth, Extractors)      │
-└─────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────┐
-│           Web Framework                 │
-│         (Axum + Tower)                  │
-└─────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────┐
-│          ORM & Database                 │
-│     (SeaORM + SQLx)                     │
-└─────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────┐
-│         Runtime & Async                 │
-│            (Tokio)                      │
-└─────────────────────────────────────────┘
-```
-
-## Core Components
-
-### 1. App (Application)
-
-The `App` struct is the heart of Chopin. It:
-- Loads configuration from environment variables
-- Establishes database connection pool
-- Runs pending migrations
-- Builds the route tree
-- Starts the HTTP server
-
-**Location**: `chopin-core/src/app.rs`
-
-```rust
-pub struct App {
-    pub config: Config,
-    pub db: DatabaseConnection,
-}
-
-impl App {
-    pub async fn new() -> Result<Self, Box<dyn Error>>;
-    pub fn router(&self) -> Router;
-    pub async fn run(self) -> Result<(), Box<dyn Error>>;
-}
-```
-
-### 2. Config (Configuration)
-
-Configuration is loaded from environment variables via the `.env` file.
-
-**Location**: `chopin-core/src/config.rs`
-
-```rust
-pub struct Config {
-    pub database_url: String,
-    pub jwt_secret: String,
-    pub jwt_expiry_hours: u64,
-    pub server_host: String,
-    pub server_port: u16,
-    pub environment: String,
-}
-```
-
-### 3. Database
-
-SeaORM provides the ORM layer with:
-- Type-safe query builder
-- Automatic migrations
-- Connection pooling
-- Multi-database support (SQLite, PostgreSQL, MySQL)
-
-**Location**: `chopin-core/src/db.rs`
-
-### 4. Routing
-
-Routes are organized hierarchically:
-
-```
-/api
-├── /auth
-│   ├── POST /signup
-│   └── POST /login
-└── /{resource}
-    ├── GET    /          (list)
-    ├── POST   /          (create)
-    ├── GET    /:id       (get)
-    ├── PUT    /:id       (update)
-    └── DELETE /:id       (delete)
-```
-
-**Location**: `chopin-core/src/routing.rs`
-
-### 5. Controllers
-
-Controllers contain handler functions that process requests:
-
-```rust
-async fn create(
-    State(state): State<AppState>,
-    Json(payload): Json<CreateRequest>,
-) -> Result<ApiResponse<Response>, ChopinError> {
-    // Business logic here
-}
-```
-
-**Location**: `chopin-core/src/controllers/`
-
-### 6. Extractors
-
-Custom Axum extractors provide convenient request handling:
-
-- `Json<T>` - Fast JSON deserialization (sonic-rs)
-- `AuthUser` - Extracts authenticated user from JWT
-- `Pagination` - Extracts limit/offset from query params
-
-**Location**: `chopin-core/src/extractors/`
-
-### 7. Middleware Stack
-
-Applied to all routes in order:
-
-1. **Request ID** - Adds `x-request-id` header
-2. **CORS** - Cross-origin resource sharing
-3. **Compression** - gzip/brotli response compression
-4. **Tracing** - Request/response logging
-
-**Location**: `chopin-core/src/app.rs` (router method)
-
-## Request Lifecycle
-
-```
-1. HTTP Request arrives
-   ↓
-2. Middleware Stack (in order)
-   → Request ID
-   → CORS
-   → Tracing (start)
-   ↓
-3. Route Matching (matchit)
-   ↓
-4. Extractors
-   → Parse JSON body
-   → Validate JWT token
-   → Extract query params
-   ↓
-5. Handler Function
-   → Business logic
-   → Database queries
-   → Response building
-   ↓
-6. Response Serialization
-   → JSON encoding (sonic-rs)
-   → Error handling
-   ↓
-7. Middleware Stack (reverse order)
-   → Tracing (end)
-   → Compression
-   ↓
-8. HTTP Response sent
-```
-
-## Data Flow
-
-### Request → Handler
-
-```
-HTTP POST /api/posts
-{
-  "title": "Hello",
-  "body": "World"
-}
-   ↓
-Json<CreatePostRequest>  (extractor deserializes)
-   ↓
-Handler receives typed struct
-   ↓
-Validation happens automatically via serde
-```
-
-### Handler → Response
-
-```
-Handler returns Result<ApiResponse<T>, ChopinError>
-   ↓
-Ok path:
-  ApiResponse::success(data)
-  → Serialized to standardized JSON
-  → HTTP 200 with { success: true, data: ... }
-
-Err path:
-  ChopinError::NotFound(..)
-  → Converted to ApiResponse
-  → HTTP 404 with { success: false, error: ... }
-```
-
-## Authentication Architecture
-
-```
-┌──────────────┐    signup/login     ┌──────────────┐
-│   Client     │ ──────────────────→ │   Server     │
-│              │                      │              │
-│              │ ←────────────────── │              │
-│              │   JWT token          │              │
-└──────────────┘                      └──────────────┘
-       │                                      ↑
-       │  Subsequent requests with            │
-       │  Authorization: Bearer <token>       │
-       └──────────────────────────────────────┘
-```
-
-### JWT Token Structure
-
-```json
-{
-  "sub": 1,              // User ID
-  "exp": 1707782400      // Expiration timestamp
-}
-```
-
-Token is:
-- Signed with HMAC-SHA256
-- Uses hardware AES acceleration (ring crate)
-- Contains minimal payload for performance
-
-### Password Hashing
-
-- Algorithm: **Argon2id** (memory-hard, resistant to GPU attacks)
-- Salt: Automatically generated per-password
-- Parameters: Balanced for security and performance
-
-## Error Handling
-
-All errors flow through the `ChopinError` enum:
-
-```rust
-pub enum ChopinError {
-    Unauthorized(String),
-    NotFound(String),
-    Conflict(String),
-    Validation(String),
-    Database(DbErr),
-    Internal(String),
-}
-```
-
-Errors implement `IntoResponse`, automatically converting to JSON:
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "NOT_FOUND",
-    "message": "Post with id 42 not found"
-  }
-}
-```
-
-**Location**: `chopin-core/src/error.rs`
-
-## Database Architecture
-
-### Connection Pool
-
-SeaORM manages connection pooling automatically:
-
-```rust
-Database::connect(&config.database_url)
-    .await?
-```
-
-Default settings:
-- Max connections: 100
-- Min connections: 5
-- Connection timeout: 8s
-- Idle timeout: 8s
-
-### Migrations
-
-Migrations are embedded in the binary and run on startup:
-
-```rust
-pub struct Migrator;
-
-#[async_trait]
-impl MigratorTrait for Migrator {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![
-            Box::new(m20250211_000001_create_users_table::Migration),
-            // ... more migrations
-        ]
-    }
-}
-```
-
-**Location**: `chopin-core/src/migrations/mod.rs`
-
-### Entity-First Design
-
-Models are defined as SeaORM entities:
-
-```rust
-#[derive(DeriveEntityModel)]
-#[sea_orm(table_name = "users")]
-pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: i32,
-    pub email: String,
-    // ...
-}
-```
-
-Queries are type-safe and composable:
-
-```rust
-User::find()
-    .filter(user::Column::Email.eq("user@example.com"))
-    .one(&db)
-    .await?
-```
-
-## Performance Optimizations
-
-### 1. Apple Silicon NEON
-
-**sonic-rs** uses ARM NEON SIMD instructions for JSON:
-- 10-15% faster than serde_json
-- Enabled via `.cargo/config.toml` rustflags
-
-### 2. Hardware AES
-
-**ring** crate uses native AES instructions:
-- 5-10% faster JWT token operations
-- Reduced CPU usage for crypto
-
-### 3. Compile-Time Optimizations
-
-```toml
-[profile.release]
-opt-level = 3              # Maximum optimization
-lto = "fat"               # Full link-time optimization
-codegen-units = 1          # Single codegen unit
-strip = true              # Strip debug symbols
-```
-
-### 4. Connection Pooling
-
-Reused database connections eliminate connection overhead.
-
-### 5. Zero-Copy Deserialization
-
-sonic-rs minimizes allocations during JSON parsing.
-
-## Testing Architecture
-
-### TestApp
-
-Provides isolated test environment:
-
-```rust
-pub struct TestApp {
-    pub addr: SocketAddr,
-    pub db: DatabaseConnection,
-    pub client: TestClient,
-}
-```
-
-Each test gets:
-- Fresh in-memory database
-- Random port
-- Helper methods for common operations
-
-**Location**: `chopin-core/src/testing.rs`
-
-### Integration Tests
-
-Tests make real HTTP requests:
-
-```rust
-#[tokio::test]
-async fn test_signup() {
-    let app = TestApp::new().await;
-    let response = app.client
-        .post(&app.url("/api/auth/signup"))
-        .json(&signup_payload)
-        .send()
-        .await;
-    
-    assert_eq!(response.status, 200);
-}
-```
-
-## Code Organization
-
-### Workspace Structure
+# Architecture
+
+## Overview
+
+Chopin is a full-stack Rust web framework built on top of proven libraries:
+
+| Layer | Library | Purpose |
+|-------|---------|---------|
+| HTTP server | **Axum 0.8** / **Hyper 1.x** | Request routing and middleware |
+| Database ORM | **SeaORM 1.x** | Models, migrations, queries |
+| Async runtime | **Tokio** | Multi-threaded async I/O |
+| Serialization | **sonic-rs** | ARM NEON optimized JSON |
+| Auth | **jsonwebtoken** + **argon2** | JWT tokens + password hashing |
+| API docs | **utoipa** + **Scalar** | OpenAPI 3.1 auto-generation |
+| Caching | In-memory / **Redis** | Key-value cache abstraction |
+| Storage | Local / **AWS S3** | File upload handling |
+
+## Workspace Structure
 
 ```
 chopin/
-├── chopin-core/       # Framework library (pub)
-├── chopin-cli/        # CLI tool (bin)
-└── chopin-examples/   # Example apps
+├── chopin-core/       # The framework library
+│   └── src/
+│       ├── app.rs          # App struct, router builder, server runner
+│       ├── config.rs       # ServerMode enum, Config from env vars
+│       ├── server.rs       # Raw hyper server (performance mode)
+│       ├── perf.rs         # Date header caching, perf utilities
+│       ├── lib.rs          # Module exports, mimalloc allocator
+│       ├── routing.rs      # Route builder (nests auth routes)
+│       ├── response.rs     # ApiResponse<T> (sonic-rs serialization)
+│       ├── error.rs        # ChopinError → HTTP status codes
+│       ├── db.rs           # SeaORM connection pool
+│       ├── cache.rs        # CacheService (in-memory + Redis)
+│       ├── storage.rs      # FileUploadService (local + S3)
+│       ├── openapi.rs      # OpenAPI doc definition
+│       ├── graphql.rs      # async-graphql integration (optional)
+│       ├── testing.rs      # TestApp, TestClient helpers
+│       ├── auth/           # JWT + password hashing
+│       ├── controllers/    # Built-in auth handlers + AppState
+│       ├── extractors/     # AuthUser, Pagination, Role, Json
+│       ├── migrations/     # Core migrations (users table)
+│       └── models/         # User entity + Role enum
+├── chopin-cli/        # CLI tool (chopin new, generate, etc.)
+├── chopin-examples/   # Example applications
+│   ├── hello-world/   # Minimal server
+│   ├── basic-api/     # CRUD API with auth
+│   └── benchmark/     # Performance mode showcase
+└── docs/              # Documentation
 ```
 
-### Module Boundaries
+## Dual-Mode Server Architecture
 
-- **Public API**: `chopin_core::*` exports
-- **Internal**: Types not re-exported from lib.rs
-- **CLI**: Completely separate from core library
+Chopin runs in one of two modes, controlled by the `SERVER_MODE` environment variable:
 
-### Dependency Management
+### Standard Mode (default)
 
-Core dependencies:
-- `axum` - Web framework
-- `sea-orm` - ORM
-- `tokio` - Async runtime
-- `serde` - Serialization
-- `sonic-rs` - Fast JSON
-- `jsonwebtoken` - JWT
-- `argon2` - Password hashing
-- `utoipa` - OpenAPI
+```
+CLIENT → tokio::TcpListener → axum::serve
+           → CorsLayer
+           → TraceLayer (dev only)
+           → RequestId (dev only)
+           → Router
+             → /            → welcome()
+             → /api/auth/*  → auth controllers
+             → /api-docs    → Scalar UI
+             → user routes  → your controllers
+```
 
-## Extension Points
+This is the **easy mode**. Full middleware stack, tracing, OpenAPI docs. Best for development and typical production.
 
-### Custom Controllers
+### Performance Mode
 
-Add your own routes:
+```
+CLIENT → SO_REUSEPORT × N CPU cores
+           → per-core TcpListener (backlog 8192)
+             → TCP_NODELAY
+               → hyper HTTP/1.1 (keep_alive + pipeline_flush)
+                 → ChopinService::call(req)
+                   → /json      → 27-byte static response (ZERO alloc)
+                   → /plaintext → 13-byte static response (ZERO alloc)
+                   → *          → Axum Router (full middleware)
+```
+
+The **fast mode**. Key differences:
+
+| Feature | Standard | Performance |
+|---------|----------|-------------|
+| Server | `axum::serve` | Raw `hyper::http1` |
+| Accept loops | 1 | N (one per CPU core) |
+| SO_REUSEPORT | No | Yes |
+| `/json`, `/plaintext` | Through Axum | Bypass Axum entirely |
+| Middleware on bench endpoints | Yes | Zero |
+| Allocator | System | mimalloc (with `perf` feature) |
+| Date header | Per-request | Cached (500ms refresh) |
+
+## Request Lifecycle
+
+### Standard Mode
+
+1. `tokio::TcpListener::accept()` → TCP connection
+2. `axum::serve` creates a hyper service
+3. Middleware layers execute (CORS, tracing, request-id)
+4. Axum Router matches the path
+5. Handler extracts `State`, `Json`, `AuthUser`, etc.
+6. Handler returns `ApiResponse<T>` or `ChopinError`
+7. `IntoResponse` serializes with `sonic_rs`
+8. Response sent to client
+
+### Performance Mode
+
+1. Kernel distributes connection to a core via SO_REUSEPORT
+2. `TcpListener::accept()` on that core
+3. `TCP_NODELAY` set on the socket
+4. `ChopinService::call()` checks path:
+   - `/json` → pre-computed static `Bytes` + cached Date header → response
+   - `/plaintext` → same, zero allocation
+   - Everything else → Axum Router (same as standard mode)
+5. `hyper::http1` sends response with `pipeline_flush`
+
+## AppState
+
+All handlers share state through Axum's `State` extractor:
 
 ```rust
-pub fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/custom", get(handler))
+#[derive(Clone)]
+pub struct AppState {
+    pub db: DatabaseConnection,     // SeaORM connection pool
+    pub config: Arc<Config>,        // Shared configuration
+    pub cache: CacheService,        // Cache backend
 }
 ```
 
-Register in main router:
+## Feature Flags
 
-```rust
-app.router()
-    .nest("/api/custom", custom::routes())
+| Feature | Cargo Flag | What it enables |
+|---------|-----------|-----------------|
+| Redis caching | `--features redis` | Redis-backed `CacheService` |
+| GraphQL | `--features graphql` | `async-graphql` integration |
+| S3 storage | `--features s3` | AWS S3 / R2 file uploads |
+| Performance | `--features perf` | mimalloc global allocator |
+
+## Compilation Profile
+
+The workspace uses an aggressive release profile:
+
+```toml
+[profile.release]
+opt-level = 3        # Maximum optimization
+lto = "fat"          # Full link-time optimization
+codegen-units = 1    # Single codegen unit (slower compile, faster binary)
+strip = true         # Strip debug symbols
+panic = "abort"      # No unwinding (smaller binary)
 ```
 
-### Custom Middleware
+Combined with `.cargo/config.toml` targeting native CPU features:
 
-Use Tower middleware:
-
-```rust
-.layer(middleware::from_fn(my_middleware))
+```toml
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+aes,+neon"]
 ```
-
-### Custom Extractors
-
-Implement `FromRequestParts`:
-
-```rust
-#[async_trait]
-impl<S> FromRequestParts<S> for MyExtractor
-where
-    S: Send + Sync,
-{
-    type Rejection = ChopinError;
-    
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        // Extract logic
-    }
-}
-```
-
-## Design Decisions
-
-### Why Axum?
-
-- Type-safe extractors
-- Composable middleware (Tower)
-- Excellent performance
-- Growing ecosystem
-- Good ergonomics
-
-### Why SeaORM?
-
-- Async-first design
-- Type-safe queries
-- Migration support
-- Multi-database
-- Active development
-
-### Why sonic-rs?
-
-- ARM NEON SIMD optimization
-- Drop-in serde replacement
-- Faster than serde_json on Apple Silicon
-
-### Why JWT?
-
-- Stateless (no session storage)
-- Horizontally scalable
-- Standard format
-- Hardware-accelerated crypto
-
-### Why Convention over Configuration?
-
-- Faster onboarding
-- Less boilerplate
-- Consistent patterns
-- Easy to scaffold
-
-## Recently Added
-
-Chopin has recently gained several powerful features:
-
-- **Permissions system** - Role-based access control (RBAC) with User, Admin, and Superuser roles. See [Roles & Permissions](roles-permissions.md)
-- **Caching layer** - Redis and in-memory caching with cache-aside patterns. See [Caching](caching.md)
-- **GraphQL** - Optional GraphQL API support via async-graphql. See [GraphQL](graphql.md)
-- **File uploads** - Multipart upload handling with LocalStorage or S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, etc.). See [File Uploads](file-uploads.md)
-
-## Future Architecture
-
-Planned additions:
-
-- **Background jobs** - Async task queue
-- **WebSockets** - Real-time communication
-- **Rate limiting** - Request throttling
-
----
-
-## Summary
-
-Chopin's architecture prioritizes:
-
-✅ **Simplicity** - Clear layers, minimal abstractions  
-✅ **Performance** - Hardware-optimized, zero-cost patterns  
-✅ **Safety** - Type-safe queries, compile-time errors  
-✅ **Ergonomics** - Intuitive APIs, sensible defaults  
-✅ **Extensibility** - Easy to add custom functionality  
-
-The modular design allows you to use Chopin's components à la carte or embrace the full framework experience.
