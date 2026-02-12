@@ -4,13 +4,13 @@ A purpose-built server for throughput benchmarking. Uses **Performance mode** �
 
 ## What Gets Benchmarked
 
-| Endpoint       | Path          | Handled By  | Notes                        |
-|----------------|---------------|-------------|------------------------------|
-| JSON           | `GET /json`   | Raw hyper   | Pre-computed, zero-alloc     |
-| Plaintext      | `GET /plaintext` | Raw hyper | Pre-computed, zero-alloc     |
-| Welcome (Axum) | `GET /`       | Axum router | Standard middleware pipeline |
+| Endpoint       | Path          | Handled By  | Notes                                     |
+|----------------|---------------|-------------|-------------------------------------------|
+| JSON           | `GET /json`   | Raw hyper   | ChopinBody zero-alloc, direct headers     |
+| Plaintext      | `GET /plaintext` | Raw hyper | ChopinBody zero-alloc, direct headers     |
+| Welcome (Axum) | `GET /`       | Axum router | Standard middleware pipeline              |
 
-The `/json` and `/plaintext` endpoints bypass Axum entirely — they are intercepted by `ChopinService` in `server.rs` and return pre-computed static byte slices with cached Date headers.
+The `/json` and `/plaintext` endpoints bypass Axum entirely — they are intercepted by `ChopinService` in `server.rs` and return `ChopinBody::Fast(Option<Bytes>)` with headers built directly from individual `HeaderValue`s (no `HeaderMap` clone) and a cached Date header.
 
 ## Quick Start
 

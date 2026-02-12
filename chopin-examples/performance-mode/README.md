@@ -19,7 +19,8 @@ SERVER_MODE=performance cargo run -p chopin-performance-mode --release
 Chopin's **Performance Mode** bypasses Axum's router for `/json` and `/plaintext` endpoints, routing them through a raw hyper `ChopinService` with:
 
 - **SO_REUSEPORT** — Multiple TCP listeners (one per CPU core), kernel load balances
-- **Pre-computed responses** — Static `Bytes` + `HeaderValue` constants, zero allocation
+- **ChopinBody zero-alloc** — `ChopinBody::Fast(Option<Bytes>)` inline on stack, no `Box` heap allocation
+- **Direct header building** — Headers built directly from individual `HeaderValue`s, no `HeaderMap` clone
 - **Cached Date headers** — Updated every 500ms by async task (avoids allocation)
 - **mimalloc** — Microsoft's high-concurrency memory allocator
 - **Native CPU** — Compiled with `target-cpu=native` and fat LTO

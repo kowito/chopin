@@ -46,12 +46,11 @@ app.run().await?;
 ```
 
 Under the hood, `FastRoute` pre-computes everything at registration time:
-- Body as `Bytes::from_static` (embedded in binary's `.rodata`)
-- `Content-Type`, `Content-Length`, `Server` headers in a pre-built `HeaderMap`
-- Only the `Date` header is inserted per-request (cached, updated every 500ms)
+- **Body:** `Bytes::from_static` embedded in binary's `.rodata` section, stored as `ChopinBody::Fast(Option<Bytes>)` inline — **zero heap allocation** (avoids the `Box::new(Full::new(bytes))` that `Body::from(Bytes)` does)
+- **Headers:** Individual `HeaderValue`s stored. At request time, built directly on the response — **no `HeaderMap` clone**. `Content-Type` from `from_static` is a pointer-copy (~8 bytes).
+- **Date header:** Only header inserted per-request, cached and updated every 500ms
 
-No heap allocation occurs on the hot path — the `ChopinFuture::Ready` variant
-returns the response inline without `Box::pin`.
+The `ChopinFuture::Ready` variant returns the response inline without `Box::pin` heap allocation.
 
 ### Date Header Caching
 
@@ -106,15 +105,17 @@ Create `.cargo/config.toml` in your project:
 
 ```toml
 # For Apple Silicon (M1/M2/M3/M4)
-[target.aarch64-apple-darwin]
+[target.'cfg(target_arch = "aarch64")']
 rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+aes,+neon"]
 
-# For x86_64 Linux servers
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+avx2,+aes"]
+# For x86_64 Linux/macOS servers (Intel/AMD)
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+avx2,+aes,+sse4.2"]
 ```
 
-This enables `sonic-rs` to use SIMD instructions (NEON on ARM, AVX2 on x86) for JSON serialization.
+This enables `sonic-rs` to use SIMD instructions:
+- **NEON** on ARM (aarch64) for 2-4× faster JSON serialization
+- **AVX2** on x86_64 for 2-4× faster JSON serialization
 
 ## JSON Serialization
 

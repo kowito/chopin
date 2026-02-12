@@ -35,7 +35,8 @@ use std::task::{Context, Poll};
 
 use axum::body::Body;
 use bytes::Bytes;
-use hyper::http::{Request, Response, header, HeaderMap, HeaderValue};
+use http_body::Frame;
+use hyper::http::{Request, Response, header, HeaderValue};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::Service;
@@ -77,9 +78,10 @@ pub struct FastRoute {
     path: Box<str>,
     /// Pre-computed response body (embedded in binary if `&'static [u8]`).
     body: Bytes,
-    /// Pre-built headers: Content-Type, Content-Length, Server.
-    /// Cloned per-request (single memcpy), then Date is inserted.
-    base_headers: HeaderMap,
+    /// Pre-computed Content-Type header (`from_static` — clone is pointer copy).
+    content_type: HeaderValue,
+    /// Pre-computed Content-Length header.
+    content_length: HeaderValue,
 }
 
 impl FastRoute {
@@ -91,16 +93,11 @@ impl FastRoute {
         let bytes = Bytes::from_static(body);
         let len = body.len().to_string();
 
-        let mut headers = HeaderMap::with_capacity(4);
-        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-        // content-length from the body length — computed once at startup
-        headers.insert(header::CONTENT_LENGTH, HeaderValue::from_str(&len).unwrap());
-        headers.insert(header::SERVER, SERVER_NAME.clone());
-
         FastRoute {
             path: path.into(),
             body: bytes,
-            base_headers: headers,
+            content_type: HeaderValue::from_static(content_type),
+            content_length: HeaderValue::from_str(&len).unwrap(),
         }
     }
 
@@ -127,13 +124,22 @@ impl FastRoute {
         Self::new(path, body, "text/html; charset=utf-8")
     }
 
-    /// Build the HTTP response. Only cost: HeaderMap clone + Date insert.
+    /// Build the HTTP response.
+    ///
+    /// **Zero-alloc body:** Uses `ChopinBody::Fast` (inline `Option<Bytes>`)
+    /// instead of `Body::from(Bytes)` which Box-allocates.
+    ///
+    /// **No HeaderMap clone:** Headers are built directly on the response
+    /// from individual `HeaderValue`s (pointer-copy for `from_static`).
     #[inline(always)]
-    fn respond(&self) -> Response<Body> {
-        let mut headers = self.base_headers.clone();
+    fn respond(&self) -> Response<ChopinBody> {
+        let mut res = Response::new(ChopinBody::Fast(Some(self.body.clone())));
+        let headers = res.headers_mut();
+        headers.reserve(4);
+        headers.insert(header::CONTENT_TYPE, self.content_type.clone());
+        headers.insert(header::CONTENT_LENGTH, self.content_length.clone());
+        headers.insert(header::SERVER, SERVER_NAME.clone());
         headers.insert(header::DATE, perf::cached_date_header());
-        let mut res = Response::new(Body::from(self.body.clone()));
-        *res.headers_mut() = headers;
         res
     }
 }
@@ -153,6 +159,70 @@ impl std::fmt::Display for FastRoute {
     }
 }
 
+// ═════════════════════════════════════════════════════════════════
+// ChopinBody — zero-allocation body for FastRoute, boxed for Axum
+//
+// Eliminates the `Box::pin` heap allocation in `Body::from(Bytes)` on
+// the fast path. The body is stored inline as `Option<Bytes>` (~32
+// bytes on the stack) instead of going through axum's BoxBody wrapper.
+// For Axum router responses, the standard Body is used.
+// ═════════════════════════════════════════════════════════════════
+
+/// Response body that avoids heap allocation for FastRoute endpoints.
+///
+/// - `Fast`: body is `Option<Bytes>` directly on the stack. `Bytes::clone()`
+///   for `from_static` data is a plain pointer+length copy (no Arc increment).
+///   This eliminates the `Box::new(Full::new(bytes))` allocation that
+///   `axum::body::Body::from(Bytes)` performs.
+/// - `Axum`: standard axum Body (boxed) for Router-handled responses.
+pub enum ChopinBody {
+    /// Fast path: static body bytes. Zero heap allocation.
+    Fast(Option<Bytes>),
+    /// Slow path: Axum router response body.
+    Axum(Body),
+}
+
+impl http_body::Body for ChopinBody {
+    type Data = Bytes;
+    type Error = Box<dyn std::error::Error + Send + Sync>;
+
+    #[inline]
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        // Both variants are Unpin (Bytes is Unpin, Body wraps Pin<Box<_>>).
+        match self.get_mut() {
+            ChopinBody::Fast(data) => Poll::Ready(data.take().map(|b| Ok(Frame::data(b)))),
+            ChopinBody::Axum(body) => {
+                Pin::new(body).poll_frame(cx).map(|opt| {
+                    opt.map(|res| {
+                        res.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
+                    })
+                })
+            },
+        }
+    }
+
+    #[inline]
+    fn is_end_stream(&self) -> bool {
+        match self {
+            ChopinBody::Fast(data) => data.is_none(),
+            ChopinBody::Axum(body) => body.is_end_stream(),
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> http_body::SizeHint {
+        match self {
+            ChopinBody::Fast(data) => {
+                http_body::SizeHint::with_exact(data.as_ref().map_or(0, |b| b.len()) as u64)
+            }
+            ChopinBody::Axum(body) => http_body::Body::size_hint(body),
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // ChopinService — hyper Service with ZERO-ALLOC fast path
 //
@@ -168,27 +238,23 @@ impl std::fmt::Display for FastRoute {
 /// - `Router`: boxed Axum future (only for normal API routes).
 pub enum ChopinFuture {
     /// Fast path — response already computed, zero heap allocation.
-    Ready(Option<Response<Body>>),
+    Ready(Option<Response<ChopinBody>>),
     /// Slow path — delegate to Axum Router (boxed because Router::Future is opaque).
-    Router(Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>),
+    Router(Pin<Box<dyn Future<Output = Result<Response<ChopinBody>, Infallible>> + Send>>),
 }
 
 impl Future for ChopinFuture {
-    type Output = Result<Response<Body>, Infallible>;
+    type Output = Result<Response<ChopinBody>, Infallible>;
 
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: structural pin projection.
-        // - Ready holds an Option<Response>, not a self-referential future.
-        // - Router holds a Pin<Box<...>> which manages its own pinning.
-        // Neither variant is moved after pinning.
-        unsafe {
-            match self.get_unchecked_mut() {
-                ChopinFuture::Ready(res) => {
-                    Poll::Ready(Ok(res.take().expect("ChopinFuture::Ready polled after completion")))
-                }
-                ChopinFuture::Router(fut) => fut.as_mut().poll(cx),
+        // All variants are Unpin: Option<Response<_>> is Unpin,
+        // Pin<Box<dyn Future>> is Unpin (Box manages the pinning).
+        match self.get_mut() {
+            ChopinFuture::Ready(res) => {
+                Poll::Ready(Ok(res.take().expect("ChopinFuture::Ready polled after completion")))
             }
+            ChopinFuture::Router(fut) => fut.as_mut().poll(cx),
         }
     }
 }
@@ -204,7 +270,7 @@ struct ChopinService {
 }
 
 impl Service<Request<Incoming>> for ChopinService {
-    type Response = Response<Body>;
+    type Response = Response<ChopinBody>;
     type Error = Infallible;
     type Future = ChopinFuture;
 
@@ -226,9 +292,10 @@ impl Service<Request<Incoming>> for ChopinService {
         ChopinFuture::Router(Box::pin(async move {
             let (parts, incoming) = req.into_parts();
             let req = Request::from_parts(parts, Body::new(incoming));
-            Ok(tower::Service::call(&mut router, req)
+            let response = tower::Service::call(&mut router, req)
                 .await
-                .unwrap_or_else(|err| match err {}))
+                .unwrap_or_else(|err| match err {});
+            Ok(response.map(ChopinBody::Axum))
         }))
     }
 }

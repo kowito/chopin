@@ -32,12 +32,12 @@ cd my-fast-api
 mkdir -p .cargo
 cat > .cargo/config.toml << 'EOF'
 # For Apple Silicon (M1/M2/M3/M4)
-[target.aarch64-apple-darwin]
+[target.'cfg(target_arch = "aarch64")']
 rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+aes,+neon"]
 
-# For x86_64 Linux servers (Intel/AMD)
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+avx2,+aes"]
+# For x86_64 Linux/macOS servers (Intel/AMD)
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+avx2,+aes,+sse4.2"]
 EOF
 
 # Configure for performance mode
@@ -86,16 +86,12 @@ Create `.cargo/config.toml` in your project root:
 
 ```toml
 # For Apple Silicon (M1/M2/M3/M4)
-[target.aarch64-apple-darwin]
+[target.'cfg(target_arch = "aarch64")']
 rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+aes,+neon"]
 
-# For x86_64 Linux servers (Intel/AMD)
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+avx2,+aes"]
-
-# For ARM64 Linux (AWS Graviton, etc.)
-[target.aarch64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+aes,+neon"]
+# For x86_64 Linux/macOS servers (Intel/AMD)
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+avx2,+aes,+sse4.2"]
 ```
 
 **Why?** Enables SIMD instructions (NEON/AVX2) in `sonic-rs` for 2-4x faster JSON serialization.
@@ -1010,11 +1006,11 @@ let app = App::new().await?
 ```
 
 **How FastRoute works:**
-- Body embedded in binary's `.rodata` section (zero allocation)
-- Headers pre-computed at startup (single `HeaderMap` clone per request)
-- Only `Date` header inserted per-request (cached, updated every 500ms)
-- Bypasses Axum Router entirely in performance mode
-- Falls back to Axum Router if path doesn't match
+- **Body:** Embedded in binary's `.rodata` section, stored as `ChopinBody::Fast(Option<Bytes>)` inline on the stack — **zero heap allocation** (no `Box` like `Body::from(Bytes)` does)
+- **Headers:** Built directly on the response from individual `HeaderValue`s — **no `HeaderMap` clone**. `Content-Type` from `from_static` is a pointer-copy.
+- **Date header:** Cached and updated every 500ms by background task
+- **Routing:** Bypasses Axum Router entirely in performance mode (linear scan over 1-5 routes)
+- **Fallback:** All other paths go through Axum Router with full middleware
 
 ### High-Performance Feed Controller
 

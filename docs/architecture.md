@@ -78,8 +78,8 @@ CLIENT → SO_REUSEPORT × N CPU cores
              → TCP_NODELAY
                → hyper HTTP/1.1 (keep_alive + pipeline_flush)
                  → ChopinService::call(req)
-                   → /json      → 27-byte static response (ZERO alloc)
-                   → /plaintext → 13-byte static response (ZERO alloc)
+                   → /json      → ChopinBody::Fast (zero heap alloc)
+                   → /plaintext → ChopinBody::Fast (zero heap alloc)
                    → *          → Axum Router (full middleware)
 ```
 
@@ -114,8 +114,8 @@ The **fast mode**. Key differences:
 2. `TcpListener::accept()` on that core
 3. `TCP_NODELAY` set on the socket
 4. `ChopinService::call()` checks path:
-   - `/json` → pre-computed static `Bytes` + cached Date header → response
-   - `/plaintext` → same, zero allocation
+   - `/json` → `ChopinBody::Fast(Option<Bytes>)` inline (zero heap alloc) + headers built directly + cached Date → response
+   - `/plaintext` → same, zero heap allocation
    - Everything else → Axum Router (same as standard mode)
 5. `hyper::http1` sends response with `pipeline_flush`
 
@@ -157,6 +157,11 @@ panic = "abort"      # No unwinding (smaller binary)
 Combined with `.cargo/config.toml` targeting native CPU features:
 
 ```toml
-[target.aarch64-apple-darwin]
+[target.'cfg(target_arch = "aarch64")']
 rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+aes,+neon"]
+
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+avx2,+aes,+sse4.2"]
 ```
+
+Enables SIMD (NEON/AVX2) in `sonic-rs` for 2-4× faster JSON serialization.

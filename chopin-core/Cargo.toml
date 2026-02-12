@@ -55,6 +55,7 @@ utoipa-scalar = { version = "0.3", features = ["axum"] }
 dotenvy = "0.15"
 
 # Performance
+http-body = "1"
 httpdate = "1"
 mimalloc = { version = "0.1", optional = true }
 socket2 = { version = "0.5", features = ["all"] }
