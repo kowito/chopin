@@ -24,8 +24,6 @@ impl Role {
         }
     }
 
-
-
     /// Check if this role has at least the given permission level.
     pub fn has_permission(&self, required: &Role) -> bool {
         self.level() >= required.level()
