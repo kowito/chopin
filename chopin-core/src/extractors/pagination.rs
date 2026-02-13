@@ -59,7 +59,7 @@ impl Default for Pagination {
 impl Pagination {
     /// Clamp limit to max 100 and resolve page-based to offset-based.
     pub fn clamped(&self) -> Self {
-        let limit = self.per_page.unwrap_or(self.limit).min(100).max(1);
+        let limit = self.per_page.unwrap_or(self.limit).clamp(1, 100);
         let offset = if let Some(page) = self.page {
             (page.max(1) - 1) * limit
         } else {
@@ -85,7 +85,7 @@ impl Pagination {
     /// Calculate total pages.
     pub fn total_pages(&self, total_items: u64) -> u64 {
         let limit = self.per_page.unwrap_or(self.limit).max(1);
-        (total_items + limit - 1) / limit
+        total_items.div_ceil(limit)
     }
 }
 
@@ -131,7 +131,7 @@ impl<T: Serialize> PaginatedResponse<T> {
             total,
             page: pagination.current_page(),
             per_page,
-            total_pages: (total + per_page - 1) / per_page,
+            total_pages: total.div_ceil(per_page),
         }
     }
 }

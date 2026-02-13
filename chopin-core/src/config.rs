@@ -9,10 +9,11 @@ use serde::Deserialize;
 /// - **Performance** — Raw hyper HTTP/1.1 server with SO_REUSEPORT, pre-baked
 ///   static responses on `/json` and `/plaintext`, and multi-core accept loops.
 ///   All other routes still go through Axum, but the bench hot-path is ZERO-alloc.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ServerMode {
     /// Full Axum pipeline (default). Easy to use, full middleware.
+    #[default]
     Standard,
     /// Raw hyper hot-path for maximum throughput.
     Performance,
@@ -20,12 +21,6 @@ pub enum ServerMode {
     /// Only FastRoute endpoints are served (no Axum router, no middleware).
     /// Use for benchmarks and ultra-high-throughput static responses.
     Raw,
-}
-
-impl Default for ServerMode {
-    fn default() -> Self {
-        ServerMode::Standard
-    }
 }
 
 impl std::fmt::Display for ServerMode {
