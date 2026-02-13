@@ -82,6 +82,7 @@ where
 ///         require_role(Role::Admin),
 ///     ))
 /// ```
+#[allow(clippy::type_complexity)]
 pub fn require_role(
     required: Role,
 ) -> impl Fn(
@@ -124,7 +125,7 @@ pub fn require_role(
                 .map_err(|e| ChopinError::Internal(e.to_string()))?
                 .ok_or_else(|| ChopinError::Unauthorized("User not found".to_string()))?;
 
-            let user_role = Role::from_str(&user.role);
+            let user_role = user.role.parse::<Role>().unwrap_or(Role::User);
 
             if !user_role.has_permission(&required) {
                 return Err(ChopinError::Forbidden(format!(

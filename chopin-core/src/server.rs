@@ -172,7 +172,7 @@ impl FastRoute {
     /// - `insert(DATE, ...)`:   1 hash + insert (~5ns)
     /// - `body.clone()`:        pointer copy for static (~2ns)
     /// - `Response::new()`:     stack init (~3ns)
-    /// Total: ~35ns (vs ~50ns with 4 individual inserts)
+    ///   Total: ~35ns (vs ~50ns with 4 individual inserts)
     #[inline(always)]
     fn respond(&self) -> Response<ChopinBody> {
         let mut headers = self.base_headers.clone();

@@ -1,6 +1,7 @@
 use chrono::NaiveDateTime;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use utoipa::ToSchema;
 
 /// User roles for permissions.
@@ -23,13 +24,7 @@ impl Role {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "admin" => Role::Admin,
-            "superuser" => Role::Superuser,
-            _ => Role::User,
-        }
-    }
+
 
     /// Check if this role has at least the given permission level.
     pub fn has_permission(&self, required: &Role) -> bool {
@@ -41,6 +36,19 @@ impl Role {
             Role::User => 0,
             Role::Admin => 1,
             Role::Superuser => 2,
+        }
+    }
+}
+
+impl FromStr for Role {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "admin" => Ok(Role::Admin),
+            "superuser" => Ok(Role::Superuser),
+            "user" => Ok(Role::User),
+            _ => Ok(Role::User),
         }
     }
 }

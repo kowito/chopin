@@ -235,10 +235,8 @@ async fn handle_raw_connection(
                     break;
                 }
             }
-            if !matched {
-                if stream.write_all(RAW_404).await.is_err() {
-                    return;
-                }
+            if !matched && stream.write_all(RAW_404).await.is_err() {
+                return;
             }
         } else {
             // Malformed request
