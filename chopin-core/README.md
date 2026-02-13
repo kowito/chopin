@@ -64,4 +64,4 @@ See the [main repository](https://github.com/kowito/chopin) for comprehensive gu
 
 ## License
 
-MIT
+WTFPL (Do What The Fuck You Want To Public License)

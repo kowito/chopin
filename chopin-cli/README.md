@@ -3,7 +3,7 @@
 [![Build status](https://github.com/kowito/chopin/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/kowito/chopin/actions/workflows/CI.yml)
 [![Crates.io](https://img.shields.io/crates/v/chopin-cli)](https://crates.io/crates/chopin-cli)
 [![Downloads](https://img.shields.io/crates/d/chopin-cli.svg)](https://crates.io/crates/chopin-cli)
-[![License](https://img.shields.io/crates/l/chopin-cli.svg)](https://github.com/kowito/chopin/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-WTFPL-blue.svg)](https://github.com/kowito/chopin/blob/main/LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-blue.svg)](https://www.rust-lang.org)
 [![GitHub stars](https://img.shields.io/github/stars/kowito/chopin.svg)](https://github.com/kowito/chopin)
 
@@ -76,4 +76,4 @@ For more information, see the [main repository](https://github.com/kowito/chopin
 
 ## License
 
-MIT
+WTFPL (Do What The Fuck You Want To Public License)
