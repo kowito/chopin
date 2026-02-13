@@ -442,9 +442,14 @@ pub async fn run_until(
 
 /// Run the Chopin server with **SO_REUSEPORT** multi-core accept loops.
 ///
-/// Creates N listeners (one per CPU core) on the same address.
-/// The kernel distributes incoming connections across cores, eliminating
-/// the single accept-loop bottleneck.
+/// Each CPU core gets its own **`current_thread` tokio runtime** and
+/// SO_REUSEPORT listener. This eliminates the work-stealing overhead of
+/// the multi-thread runtime: no cross-thread task migration, no scheduler
+/// mutex contention, perfect cache locality per core.
+///
+/// This matches the architecture used by top TechEmpower Rust entries
+/// (Axum, Salvo, Ohkami) — per-core single-threaded runtimes with
+/// kernel-level connection distribution.
 ///
 /// User-registered `FastRoute`s are shared via `Arc<[FastRoute]>` across
 /// all cores — one Arc increment per connection, zero per request.
@@ -460,12 +465,12 @@ pub async fn run_reuseport(
 
     if fast_routes.is_empty() {
         tracing::info!(
-            "Performance mode: {} accept loops (SO_REUSEPORT), no fast routes",
+            "Performance mode: {} cores (per-core current_thread runtime + SO_REUSEPORT), no fast routes",
             num_cores
         );
     } else {
         tracing::info!(
-            "Performance mode: {} accept loops (SO_REUSEPORT), {} fast route(s): [{}]",
+            "Performance mode: {} cores (per-core current_thread runtime + SO_REUSEPORT), {} fast route(s): [{}]",
             num_cores,
             fast_routes.len(),
             fast_routes
@@ -476,49 +481,133 @@ pub async fn run_reuseport(
         );
     }
 
+    // Shutdown coordination: a watch channel visible to all cores.
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut handles = Vec::with_capacity(num_cores);
+    let mut thread_handles = Vec::with_capacity(num_cores);
 
+    // Spawn N-1 worker threads, each with its own current_thread runtime
+    // and SO_REUSEPORT listener. The main thread also participates.
     for i in 0..num_cores {
-        let socket = socket2::Socket::new(
-            if addr.is_ipv4() {
-                socket2::Domain::IPV4
-            } else {
-                socket2::Domain::IPV6
-            },
-            socket2::Type::STREAM,
-            Some(socket2::Protocol::TCP),
-        )?;
-        socket.set_reuse_address(true)?;
-        #[cfg(not(windows))]
-        socket.set_reuse_port(true)?;
-        socket.set_nonblocking(true)?;
-        socket.bind(&addr.into())?;
-        socket.listen(16384)?;
-
-        let std_listener: std::net::TcpListener = socket.into();
-        let tokio_listener = TcpListener::from_std(std_listener)?;
-
         let router = router.clone();
         let fast_routes = fast_routes.clone();
         let rx = shutdown_rx.clone();
 
-        let handle = tokio::spawn(async move {
-            tracing::debug!("Accept loop {} started", i);
-            accept_loop(tokio_listener, fast_routes, router, rx).await;
-            tracing::debug!("Accept loop {} stopped", i);
-        });
-        handles.push(handle);
+        let handle = std::thread::Builder::new()
+            .name(format!("chopin-worker-{}", i))
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create per-core tokio runtime");
+
+                rt.block_on(async move {
+                    // Each core binds its own SO_REUSEPORT listener.
+                    let listener = create_reuseport_listener(addr)
+                        .expect("Failed to create SO_REUSEPORT listener");
+
+                    tracing::debug!("Core {} accept loop started", i);
+                    accept_loop(listener, fast_routes, router, rx).await;
+                    tracing::debug!("Core {} accept loop stopped", i);
+                });
+            })?;
+
+        thread_handles.push(handle);
     }
 
-    // Wait for shutdown signal, then notify all accept loops
+    // Wait for shutdown signal on the caller's runtime, then notify all cores.
     shutdown.await;
     tracing::info!("Shutting down Chopin server ({} cores)...", num_cores);
     let _ = shutdown_tx.send(true);
 
-    for handle in handles {
-        let _ = handle.await;
+    for handle in thread_handles {
+        let _ = handle.join();
     }
 
     Ok(())
+}
+
+/// Create a SO_REUSEPORT TCP listener bound to the given address.
+///
+/// Tuned for maximum throughput:
+/// - `SO_REUSEPORT`: kernel distributes connections across cores
+/// - `SO_REUSEADDR`: fast restart without TIME_WAIT delays
+/// - `TCP_NODELAY`: set on the socket (inherited by accepted connections on some OS)
+/// - Backlog of 4096: matches top TFB entries
+fn create_reuseport_listener(
+    addr: std::net::SocketAddr,
+) -> Result<TcpListener, Box<dyn std::error::Error + Send + Sync>> {
+    let socket = socket2::Socket::new(
+        if addr.is_ipv4() {
+            socket2::Domain::IPV4
+        } else {
+            socket2::Domain::IPV6
+        },
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    socket.set_reuse_address(true)?;
+    #[cfg(not(windows))]
+    socket.set_reuse_port(true)?;
+    socket.set_nodelay(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(4096)?;
+
+    let std_listener: std::net::TcpListener = socket.into();
+    Ok(TcpListener::from_std(std_listener)?)
+}
+
+/// Start a multi-core server using per-thread `current_thread` runtimes.
+///
+/// This is the recommended entry point for maximum-throughput benchmarks.
+/// Each CPU core gets its own single-threaded tokio runtime and SO_REUSEPORT
+/// listener, eliminating all cross-thread synchronization overhead.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use chopin_core::{App, FastRoute};
+///
+/// fn main() {
+///     chopin_core::server::start_multicore(serve);
+/// }
+///
+/// async fn serve() {
+///     let app = App::new().await.unwrap()
+///         .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
+///         .fast_route(FastRoute::text("/plaintext", b"Hello, World!"));
+///     app.run().await.unwrap();
+/// }
+/// ```
+pub fn start_multicore<Fut>(f: fn() -> Fut)
+where
+    Fut: std::future::Future<Output = ()> + 'static,
+{
+    let num_cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+
+    // Spawn N-1 worker threads with current_thread runtimes.
+    let mut handles = Vec::with_capacity(num_cores - 1);
+    for _ in 1..num_cores {
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create per-core tokio runtime");
+            rt.block_on(f());
+        });
+        handles.push(handle);
+    }
+
+    // Run on the main thread too.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create main tokio runtime");
+    rt.block_on(f());
+
+    for handle in handles {
+        let _ = handle.join();
+    }
 }
