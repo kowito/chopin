@@ -92,7 +92,7 @@
 //! SERVER_MODE=standard
 //! DATABASE_URL=sqlite:./app.db
 //! JWT_SECRET=your-secret-key
-//! 
+//!
 //! # Performance mode
 //! SERVER_MODE=performance
 //! DATABASE_URL=sqlite::memory:
@@ -128,7 +128,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n🎹 Chopin Performance Mode Example");
     println!("   → Mode: {}", server_mode);
-    println!("   → Run with: SERVER_MODE=performance cargo run -p chopin-performance-mode --release");
+    println!(
+        "   → Run with: SERVER_MODE=performance cargo run -p chopin-performance-mode --release"
+    );
     println!();
 
     if std::env::var("DATABASE_URL").is_err() {
@@ -138,7 +140,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("JWT_SECRET", "perf-example-secret");
     }
 
-    let app = App::new().await?
+    let app = App::new()
+        .await?
         // Register benchmark endpoints as FastRoutes (zero-alloc in performance mode)
         .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
         .fast_route(FastRoute::text("/plaintext", b"Hello, World!"));

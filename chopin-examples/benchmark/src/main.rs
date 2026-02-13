@@ -53,7 +53,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("JWT_SECRET", "benchmark-secret");
     }
 
-    let app = App::new().await?
+    let app = App::new()
+        .await?
         // Register benchmark endpoints as FastRoutes.
         // These bypass Axum entirely — zero allocation, maximum throughput.
         .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))

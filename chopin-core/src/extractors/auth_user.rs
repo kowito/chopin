@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    extract::FromRequestParts,
-    http::request::Parts,
-};
+use axum::{extract::FromRequestParts, http::request::Parts};
 
 use crate::auth;
 use crate::config::Config;
@@ -32,16 +29,12 @@ where
             .headers
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| {
-                ChopinError::Unauthorized("Missing Authorization header".to_string())
-            })?;
+            .ok_or_else(|| ChopinError::Unauthorized("Missing Authorization header".to_string()))?;
 
         // Expect "Bearer <token>"
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| {
-                ChopinError::Unauthorized("Invalid Authorization header format".to_string())
-            })?;
+        let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+            ChopinError::Unauthorized("Invalid Authorization header format".to_string())
+        })?;
 
         // Get JWT secret from Arc<Config> in extensions (cheap Arc clone per request)
         let config = parts

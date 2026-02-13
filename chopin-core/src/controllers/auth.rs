@@ -108,7 +108,11 @@ async fn signup(
     let user_model = new_user.insert(&state.db).await?;
 
     // Generate JWT
-    let token = create_token(user_model.id, &state.config.jwt_secret, state.config.jwt_expiry_hours)?;
+    let token = create_token(
+        user_model.id,
+        &state.config.jwt_secret,
+        state.config.jwt_expiry_hours,
+    )?;
 
     Ok(ApiResponse::success(AuthResponse {
         access_token: token,
@@ -154,7 +158,11 @@ async fn login(
     }
 
     // Generate JWT
-    let token = create_token(user_model.id, &state.config.jwt_secret, state.config.jwt_expiry_hours)?;
+    let token = create_token(
+        user_model.id,
+        &state.config.jwt_secret,
+        state.config.jwt_expiry_hours,
+    )?;
 
     Ok(ApiResponse::success(AuthResponse {
         access_token: token,

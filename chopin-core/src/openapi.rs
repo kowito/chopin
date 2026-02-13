@@ -1,8 +1,6 @@
 use utoipa::OpenApi;
 
-use crate::controllers::auth::{
-    AuthResponse, LoginRequest, SignupRequest,
-};
+use crate::controllers::auth::{AuthResponse, LoginRequest, SignupRequest};
 use crate::models::user::UserResponse;
 
 /// Auto-generated OpenAPI documentation for Chopin.

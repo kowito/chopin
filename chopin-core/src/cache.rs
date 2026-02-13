@@ -73,8 +73,9 @@ impl CacheService {
     pub async fn get_json<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, ChopinError> {
         match self.backend.get(key).await? {
             Some(raw) => {
-                let value: T = serde_json::from_str(&raw)
-                    .map_err(|e| ChopinError::Internal(format!("Cache deserialize error: {}", e)))?;
+                let value: T = serde_json::from_str(&raw).map_err(|e| {
+                    ChopinError::Internal(format!("Cache deserialize error: {}", e))
+                })?;
                 Ok(Some(value))
             }
             None => Ok(None),
@@ -99,7 +100,12 @@ impl CacheService {
     }
 
     /// Set a raw string in the cache.
-    pub async fn set(&self, key: &str, value: &str, ttl: Option<Duration>) -> Result<(), ChopinError> {
+    pub async fn set(
+        &self,
+        key: &str,
+        value: &str,
+        ttl: Option<Duration>,
+    ) -> Result<(), ChopinError> {
         self.backend.set(key, value, ttl).await
     }
 

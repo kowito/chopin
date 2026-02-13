@@ -58,10 +58,22 @@ async fn test_openapi_has_schemas() {
 
     let schemas = &json["components"]["schemas"];
 
-    assert!(schemas["SignupRequest"].is_object(), "Missing SignupRequest schema");
-    assert!(schemas["LoginRequest"].is_object(), "Missing LoginRequest schema");
-    assert!(schemas["AuthResponse"].is_object(), "Missing AuthResponse schema");
-    assert!(schemas["UserResponse"].is_object(), "Missing UserResponse schema");
+    assert!(
+        schemas["SignupRequest"].is_object(),
+        "Missing SignupRequest schema"
+    );
+    assert!(
+        schemas["LoginRequest"].is_object(),
+        "Missing LoginRequest schema"
+    );
+    assert!(
+        schemas["AuthResponse"].is_object(),
+        "Missing AuthResponse schema"
+    );
+    assert!(
+        schemas["UserResponse"].is_object(),
+        "Missing UserResponse schema"
+    );
 }
 
 #[tokio::test]
@@ -72,6 +84,8 @@ async fn test_swagger_ui_accessible() {
 
     // Scalar UI serves HTML
     assert_eq!(res.status, 200);
-    assert!(res.body.contains("html") || res.body.contains("script"),
-        "Swagger/Scalar UI should return HTML");
+    assert!(
+        res.body.contains("html") || res.body.contains("script"),
+        "Swagger/Scalar UI should return HTML"
+    );
 }

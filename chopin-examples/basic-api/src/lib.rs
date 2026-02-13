@@ -1,9 +1,9 @@
 pub mod controllers;
-pub mod models;
 pub mod migrations;
+pub mod models;
 
-use sea_orm::DatabaseConnection;
 use chopin_core::config::Config;
+use sea_orm::DatabaseConnection;
 
 /// Shared application state for all handlers.
 #[derive(Clone)]

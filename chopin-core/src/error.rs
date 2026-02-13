@@ -110,7 +110,11 @@ impl FieldError {
     }
 
     /// Create a new field error with a code.
-    pub fn with_code(field: impl Into<String>, message: impl Into<String>, code: impl Into<String>) -> Self {
+    pub fn with_code(
+        field: impl Into<String>,
+        message: impl Into<String>,
+        code: impl Into<String>,
+    ) -> Self {
         FieldError {
             field: field.into(),
             message: message.into(),
@@ -127,12 +131,11 @@ impl axum::response::IntoResponse for ChopinError {
             _ => None,
         };
         let message = match &self {
-            ChopinError::ValidationErrors(errs) => {
-                errs.iter()
-                    .map(|e| format!("{}: {}", e.field, e.message))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            }
+            ChopinError::ValidationErrors(errs) => errs
+                .iter()
+                .map(|e| format!("{}: {}", e.field, e.message))
+                .collect::<Vec<_>>()
+                .join("; "),
             _ => self.to_string(),
         };
         let body: ApiResponse<()> = ApiResponse {

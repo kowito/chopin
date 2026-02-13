@@ -39,19 +39,18 @@ pub use async_graphql_axum;
 /// - `POST /graphql` — the GraphQL endpoint
 /// - `GET /graphql` — GraphQL Playground UI
 #[cfg(feature = "graphql")]
-pub fn graphql_routes<Q, M, S>(
-    schema: async_graphql::Schema<Q, M, S>,
-) -> axum::Router
+pub fn graphql_routes<Q, M, S>(schema: async_graphql::Schema<Q, M, S>) -> axum::Router
 where
     Q: async_graphql::ObjectType + 'static,
     M: async_graphql::ObjectType + 'static,
     S: async_graphql::SubscriptionType + 'static,
 {
-    use axum::routing::{get, post};
     use axum::response::{Html, IntoResponse};
+    use axum::routing::{get, post};
 
     async fn graphql_playground() -> impl IntoResponse {
-        Html(r#"<!DOCTYPE html>
+        Html(
+            r#"<!DOCTYPE html>
 <html>
 <head>
     <title>Chopin GraphQL Playground</title>
@@ -70,7 +69,8 @@ where
         );
     </script>
 </body>
-</html>"#)
+</html>"#,
+        )
     }
 
     async fn graphql_handler<Q2, M2, S2>(

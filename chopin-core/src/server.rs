@@ -36,8 +36,8 @@ use std::task::{Context, Poll};
 use axum::body::Body;
 use bytes::Bytes;
 use http_body::Frame;
-use hyper::http::{Request, Response, HeaderMap, header, HeaderValue};
 use hyper::body::Incoming;
+use hyper::http::{header, HeaderMap, HeaderValue, Request, Response};
 use hyper::server::conn::http1;
 use hyper::service::Service;
 use hyper_util::rt::TokioIo;
@@ -233,13 +233,11 @@ impl http_body::Body for ChopinBody {
         // Both variants are Unpin (Bytes is Unpin, Body wraps Pin<Box<_>>).
         match self.get_mut() {
             ChopinBody::Fast(data) => Poll::Ready(data.take().map(|b| Ok(Frame::data(b)))),
-            ChopinBody::Axum(body) => {
-                Pin::new(body).poll_frame(cx).map(|opt| {
-                    opt.map(|res| {
-                        res.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
-                    })
+            ChopinBody::Axum(body) => Pin::new(body).poll_frame(cx).map(|opt| {
+                opt.map(|res| {
+                    res.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
                 })
-            },
+            }),
         }
     }
 
@@ -290,9 +288,9 @@ impl Future for ChopinFuture {
         // All variants are Unpin: Option<Response<_>> is Unpin,
         // Pin<Box<dyn Future>> is Unpin (Box manages the pinning).
         match self.get_mut() {
-            ChopinFuture::Ready(res) => {
-                Poll::Ready(Ok(res.take().expect("ChopinFuture::Ready polled after completion")))
-            }
+            ChopinFuture::Ready(res) => Poll::Ready(Ok(res
+                .take()
+                .expect("ChopinFuture::Ready polled after completion"))),
             ChopinFuture::Router(fut) => fut.as_mut().poll(cx),
         }
     }
@@ -484,13 +482,20 @@ pub async fn run_reuseport(
         .unwrap_or(1);
 
     if fast_routes.is_empty() {
-        tracing::info!("Performance mode: {} accept loops (SO_REUSEPORT), no fast routes", num_cores);
+        tracing::info!(
+            "Performance mode: {} accept loops (SO_REUSEPORT), no fast routes",
+            num_cores
+        );
     } else {
         tracing::info!(
             "Performance mode: {} accept loops (SO_REUSEPORT), {} fast route(s): [{}]",
             num_cores,
             fast_routes.len(),
-            fast_routes.iter().map(|r| r.path.as_ref()).collect::<Vec<_>>().join(", "),
+            fast_routes
+                .iter()
+                .map(|r| r.path.as_ref())
+                .collect::<Vec<_>>()
+                .join(", "),
         );
     }
 

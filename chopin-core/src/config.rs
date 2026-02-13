@@ -117,17 +117,14 @@ impl Config {
                 .unwrap_or_else(|_| "24".to_string())
                 .parse()
                 .unwrap_or(24),
-            server_host: std::env::var("SERVER_HOST")
-                .unwrap_or_else(|_| "127.0.0.1".to_string()),
+            server_host: std::env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             server_port: std::env::var("SERVER_PORT")
                 .unwrap_or_else(|_| "3000".to_string())
                 .parse()
                 .unwrap_or(3000),
-            environment: std::env::var("ENVIRONMENT")
-                .unwrap_or_else(|_| "development".to_string()),
+            environment: std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string()),
             redis_url: std::env::var("REDIS_URL").ok(),
-            upload_dir: std::env::var("UPLOAD_DIR")
-                .unwrap_or_else(|_| "./uploads".to_string()),
+            upload_dir: std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "./uploads".to_string()),
             max_upload_size: std::env::var("MAX_UPLOAD_SIZE")
                 .unwrap_or_else(|_| "10485760".to_string()) // 10MB
                 .parse()

@@ -41,9 +41,9 @@ where
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| ChopinError::Unauthorized("Missing Authorization header".to_string()))?;
 
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| ChopinError::Unauthorized("Invalid Authorization header format".to_string()))?;
+        let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+            ChopinError::Unauthorized("Invalid Authorization header format".to_string())
+        })?;
 
         // Get JWT secret from Arc<Config> in extensions (cheap Arc clone per request)
         let config = parts
@@ -88,8 +88,9 @@ pub fn require_role(
     State<crate::controllers::AppState>,
     axum::extract::Request,
     Next,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, ChopinError>> + Send>>
-       + Clone
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<Response, ChopinError>> + Send>,
+> + Clone
        + Send {
     move |State(state): State<crate::controllers::AppState>,
           mut req: axum::extract::Request,
@@ -101,11 +102,13 @@ pub fn require_role(
                 .headers()
                 .get("Authorization")
                 .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| ChopinError::Unauthorized("Missing Authorization header".to_string()))?;
+                .ok_or_else(|| {
+                    ChopinError::Unauthorized("Missing Authorization header".to_string())
+                })?;
 
-            let token = auth_header
-                .strip_prefix("Bearer ")
-                .ok_or_else(|| ChopinError::Unauthorized("Invalid Authorization header format".to_string()))?;
+            let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+                ChopinError::Unauthorized("Invalid Authorization header format".to_string())
+            })?;
 
             let claims = auth::validate_token(token, &state.config.jwt_secret)?;
 

@@ -108,10 +108,7 @@ impl TestApp {
         );
 
         let json: serde_json::Value = serde_json::from_str(&res.body).unwrap();
-        let token = json["data"]["access_token"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let token = json["data"]["access_token"].as_str().unwrap().to_string();
         let user = json["data"]["user"].clone();
         (token, user)
     }
@@ -131,10 +128,7 @@ impl TestApp {
         assert_eq!(res.status, 200, "Login failed: {}", res.body);
 
         let json: serde_json::Value = serde_json::from_str(&res.body).unwrap();
-        json["data"]["access_token"]
-            .as_str()
-            .unwrap()
-            .to_string()
+        json["data"]["access_token"].as_str().unwrap().to_string()
     }
 }
 

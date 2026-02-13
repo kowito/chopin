@@ -1,21 +1,28 @@
-use axum::{Router, extract::{Path, State, Query}, routing::get};
 use axum::http::StatusCode;
+use axum::{
+    extract::{Path, Query, State},
+    routing::get,
+    Router,
+};
 use sea_orm::*;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
-use chopin_core::response::ApiResponse;
 use chopin_core::extractors::Pagination;
+use chopin_core::response::ApiResponse;
 
-use crate::AppState;
 use crate::models::post::{self, Entity as Post, PostResponse};
+use crate::AppState;
 
 // ─── Routes ────────────────────────────────────────────────────
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/posts", get(list_posts).post(create_post))
-        .route("/api/posts/{id}", get(get_post).put(update_post).delete(delete_post))
+        .route(
+            "/api/posts/{id}",
+            get(get_post).put(update_post).delete(delete_post),
+        )
 }
 
 // ─── Request DTOs ──────────────────────────────────────────────
@@ -99,7 +106,10 @@ pub async fn create_post(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok((StatusCode::CREATED, axum::Json(ApiResponse::success(PostResponse::from(result)))))
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(ApiResponse::success(PostResponse::from(result))),
+    ))
 }
 
 /// Get a single post by ID.
@@ -167,7 +177,9 @@ pub async fn update_post(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(axum::Json(ApiResponse::success(PostResponse::from(updated))))
+    Ok(axum::Json(ApiResponse::success(PostResponse::from(
+        updated,
+    ))))
 }
 
 /// Delete a post by ID.

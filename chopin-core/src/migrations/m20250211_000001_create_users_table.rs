@@ -30,11 +30,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .unique_key(),
                     )
-                    .col(
-                        ColumnDef::new(Users::PasswordHash)
-                            .string()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Users::PasswordHash).string().not_null())
                     .col(
                         ColumnDef::new(Users::Role)
                             .string()
@@ -47,16 +43,8 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(true),
                     )
-                    .col(
-                        ColumnDef::new(Users::CreatedAt)
-                            .timestamp()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Users::UpdatedAt)
-                            .timestamp()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Users::CreatedAt).timestamp().not_null())
+                    .col(ColumnDef::new(Users::UpdatedAt).timestamp().not_null())
                     .to_owned(),
             )
             .await

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use axum::Router;
-use axum::routing::get;
 use axum::http::header;
 use axum::response::IntoResponse;
+use axum::routing::get;
+use axum::Router;
 use sea_orm::DatabaseConnection;
 use sea_orm_migration::MigratorTrait;
 use serde::Serialize;
@@ -44,7 +44,12 @@ impl App {
         // Initialize cache (in-memory by default, Redis if configured)
         let cache = Self::init_cache(&config).await;
 
-        Ok(App { config, db, cache, fast_routes: Vec::new() })
+        Ok(App {
+            config,
+            db,
+            cache,
+            fast_routes: Vec::new(),
+        })
     }
 
     /// Create a new Chopin application with a given config.
@@ -59,7 +64,12 @@ impl App {
         // Initialize cache
         let cache = Self::init_cache(&config).await;
 
-        Ok(App { config, db, cache, fast_routes: Vec::new() })
+        Ok(App {
+            config,
+            db,
+            cache,
+            fast_routes: Vec::new(),
+        })
     }
 
     /// Initialize the cache backend based on config.
@@ -72,7 +82,10 @@ impl App {
                     return CacheService::new(redis_cache);
                 }
                 Err(e) => {
-                    tracing::warn!("Redis connection failed, falling back to in-memory cache: {}", e);
+                    tracing::warn!(
+                        "Redis connection failed, falling back to in-memory cache: {}",
+                        e
+                    );
                 }
             }
         }
@@ -110,7 +123,10 @@ impl App {
         if is_dev {
             let x_request_id = axum::http::HeaderName::from_static("x-request-id");
             router = router
-                .layer(SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid))
+                .layer(SetRequestIdLayer::new(
+                    x_request_id.clone(),
+                    MakeRequestUuid,
+                ))
                 .layer(PropagateRequestIdLayer::new(x_request_id))
                 .layer(TraceLayer::new_for_http());
         }
@@ -201,7 +217,8 @@ impl App {
             ServerMode::Performance => {
                 // ─── Performance mode: raw hyper + SO_REUSEPORT ───
                 let socket_addr: std::net::SocketAddr = addr.parse()?;
-                crate::server::run_reuseport(socket_addr, fast_routes, router, shutdown_signal()).await?;
+                crate::server::run_reuseport(socket_addr, fast_routes, router, shutdown_signal())
+                    .await?;
             }
             ServerMode::Raw => {
                 // ─── Raw mode: hyper completely bypassed ───
@@ -211,7 +228,8 @@ impl App {
                     return Err("Raw mode requires at least one FastRoute. Use .fast_route() or .fast_json().".into());
                 }
                 let socket_addr: std::net::SocketAddr = addr.parse()?;
-                crate::fast_http::run_raw_reuseport(socket_addr, &fast_routes, shutdown_signal()).await?;
+                crate::fast_http::run_raw_reuseport(socket_addr, &fast_routes, shutdown_signal())
+                    .await?;
             }
         }
 
@@ -243,10 +261,7 @@ async fn welcome() -> impl IntoResponse {
         status: "running",
     };
     let bytes = sonic_rs::to_vec(&msg).unwrap_or_default();
-    (
-        [(header::CONTENT_TYPE, "application/json")],
-        bytes,
-    )
+    ([(header::CONTENT_TYPE, "application/json")], bytes)
 }
 
 /// Serve the raw OpenAPI JSON spec.

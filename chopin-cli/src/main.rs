@@ -225,7 +225,9 @@ fn generate_model(name: &str, fields: &[String]) {
 
     println!("  ✓ Model, migration, and controller generated.");
     println!();
-    println!("  Next: Register the new module in your `src/models/mod.rs` and `src/controllers/mod.rs`");
+    println!(
+        "  Next: Register the new module in your `src/models/mod.rs` and `src/controllers/mod.rs`"
+    );
 }
 
 fn generate_model_file(
@@ -253,7 +255,9 @@ fn generate_model_file(
         ));
     }
 
-    let needs_chrono = fields.iter().any(|(_, t)| *t == "datetime" || *t == "timestamp");
+    let needs_chrono = fields
+        .iter()
+        .any(|(_, t)| *t == "datetime" || *t == "timestamp");
     let needs_uuid = fields.iter().any(|(_, t)| *t == "uuid");
 
     let mut extra_imports = String::new();
@@ -399,11 +403,7 @@ enum {iden_name} {{
     println!("  ✓ Created {}", path.display());
 }
 
-fn generate_controller_for_model(
-    model_name: &str,
-    snake_name: &str,
-    fields: &[(&str, &str)],
-) {
+fn generate_controller_for_model(model_name: &str, snake_name: &str, fields: &[(&str, &str)]) {
     let controllers_dir = Path::new("src/controllers");
     if !controllers_dir.exists() {
         fs::create_dir_all(controllers_dir).expect("Failed to create src/controllers");
@@ -837,7 +837,9 @@ fn create_superuser() {
     // Run a cargo command that creates the superuser
     let status = Command::new("cargo")
         .args([
-            "run", "--quiet", "--",
+            "run",
+            "--quiet",
+            "--",
             "--create-superuser",
             &email,
             &username,
@@ -915,10 +917,24 @@ fn show_project_info() {
     if let Ok(content) = fs::read_to_string(cargo_toml) {
         for line in content.lines() {
             if line.starts_with("name") {
-                println!("  Project: {}", line.split('=').nth(1).unwrap_or("unknown").trim().trim_matches('"'));
+                println!(
+                    "  Project: {}",
+                    line.split('=')
+                        .nth(1)
+                        .unwrap_or("unknown")
+                        .trim()
+                        .trim_matches('"')
+                );
             }
             if line.starts_with("version") && !line.contains("workspace") {
-                println!("  Version: {}", line.split('=').nth(1).unwrap_or("unknown").trim().trim_matches('"'));
+                println!(
+                    "  Version: {}",
+                    line.split('=')
+                        .nth(1)
+                        .unwrap_or("unknown")
+                        .trim()
+                        .trim_matches('"')
+                );
             }
         }
     }
@@ -1001,9 +1017,7 @@ fn run_dev_server() {
     println!("🎹 Starting Chopin development server...");
     println!();
 
-    let status = Command::new("cargo")
-        .args(["run"])
-        .status();
+    let status = Command::new("cargo").args(["run"]).status();
 
     match status {
         Ok(s) if !s.success() => {
@@ -1028,13 +1042,7 @@ fn create_project(name: &str) {
     }
 
     // Create directory structure
-    let dirs = [
-        "",
-        "src",
-        "src/models",
-        "src/controllers",
-        "src/migrations",
-    ];
+    let dirs = ["", "src", "src/models", "src/controllers", "src/migrations"];
 
     for dir in &dirs {
         fs::create_dir_all(project_dir.join(dir)).expect("Failed to create directory");

@@ -60,7 +60,12 @@ async fn test_response_format() {
     let json = res.json();
 
     // Response should have the standard Chopin format
-    assert!(json.get("success").is_some(), "Response must have 'success' field");
-    assert!(json.get("data").is_some() || json.get("error").is_some(),
-        "Response must have either 'data' or 'error' field");
+    assert!(
+        json.get("success").is_some(),
+        "Response must have 'success' field"
+    );
+    assert!(
+        json.get("data").is_some() || json.get("error").is_some(),
+        "Response must have either 'data' or 'error' field"
+    );
 }

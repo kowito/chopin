@@ -304,9 +304,7 @@ mod s3_backend {
                 .content_type(content_type)
                 .send()
                 .await
-                .map_err(|e| {
-                    ChopinError::Internal(format!("S3 upload failed: {}", e))
-                })?;
+                .map_err(|e| ChopinError::Internal(format!("S3 upload failed: {}", e)))?;
 
             let path = match &self.public_url {
                 Some(base) => {
@@ -334,9 +332,7 @@ mod s3_backend {
                 .key(&key)
                 .send()
                 .await
-                .map_err(|e| {
-                    ChopinError::Internal(format!("S3 delete failed: {}", e))
-                })?;
+                .map_err(|e| ChopinError::Internal(format!("S3 delete failed: {}", e)))?;
 
             Ok(())
         }
@@ -391,9 +387,7 @@ mod s3_backend {
                         .key(&key)
                         .presigned(presigning)
                         .await
-                        .map_err(|e| {
-                            ChopinError::Internal(format!("S3 presign failed: {}", e))
-                        })?;
+                        .map_err(|e| ChopinError::Internal(format!("S3 presign failed: {}", e)))?;
 
                     Ok(presigned.uri().to_string())
                 }

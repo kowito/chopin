@@ -9,8 +9,8 @@ use sea_orm_migration::MigratorTrait;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 
+use chopin_basic_api::{controllers, migrations, models, AppState};
 use chopin_core::{config::Config, db};
-use chopin_basic_api::{AppState, controllers, models, migrations};
 
 /// OpenAPI documentation for the example API.
 #[derive(OpenApi)]
