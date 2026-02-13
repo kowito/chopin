@@ -1,6 +1,6 @@
-# Performance (v0.1.2)
+# Performance
 
-**Current Version:** 0.1.2 | **Last Updated:** February 2026
+**Last Updated:** February 2026
 
 ## Server Modes
 

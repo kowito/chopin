@@ -1,6 +1,6 @@
-# API Responses (v0.1.1)
+# API Responses
 
-**Current Version:** 0.1.1 | **Last Updated:** February 2026
+**Last Updated:** February 2026
 
 ## ApiResponse\<T\>
 

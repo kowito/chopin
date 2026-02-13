@@ -1,6 +1,6 @@
 # Building High-Performance Applications with Chopin
 
-**Current Version:** 0.1.1 | **Last Updated:** February 2026
+**Last Updated:** February 2026
 
 > **Goal:** This guide teaches you how to build production-ready, high-performance applications with Chopin. You'll learn architectural patterns, optimization techniques, and deployment strategies for maximum throughput and minimal latency.
 

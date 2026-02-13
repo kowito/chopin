@@ -1,8 +1,8 @@
-# Chopin Documentation (v0.1.1)
+# Chopin Documentation
 
 > Chopin: High-fidelity engineering for the modern virtuoso.
 >
-> **Current Version:** 0.1.1 | **Last Updated:** February 2026
+> **Last Updated:** February 2026
 
 ## Table of Contents
 

@@ -1,8 +1,8 @@
-# Chopin Framework — LLM Learning Guide (v0.1.1)
+# Chopin Framework — LLM Learning Guide
 
 > This document is designed for AI assistants (ChatGPT, Claude, Copilot, etc.) to understand the Chopin framework completely. It contains everything needed to help users build applications with Chopin.
 >
-> **Last Updated:** February 2026 | **Current Version:** 0.1.1
+> **Last Updated:** February 2026
 
 ## What is Chopin?
 

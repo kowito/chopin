@@ -1,6 +1,6 @@
-# Models & Database (v0.1.1)
+# Models & Database
 
-**Current Version:** 0.1.1 | **Last Updated:** February 2026
+**Last Updated:** February 2026
 
 ## Overview
 

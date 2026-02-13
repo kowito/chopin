@@ -1,6 +1,6 @@
-# Roles & Permissions (v0.1.1)
+# Roles & Permissions
 
-**Current Version:** 0.1.1 | **Last Updated:** February 2026
+**Last Updated:** February 2026
 
 ## Role Enum
 

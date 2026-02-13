@@ -1,6 +1,6 @@
-# Configuration (v0.1.1)
+# Configuration
 
-**Current Version:** 0.1.1 | **Last Updated:** February 2026
+**Last Updated:** February 2026
 
 Chopin loads configuration from environment variables with `.env` file support (via `dotenvy`).
 
