@@ -245,7 +245,7 @@ async fn welcome() -> impl IntoResponse {
         status: "running",
     };
     let mut buf = Vec::with_capacity(64);
-    let _ = serde_json::to_writer(&mut buf, &msg);
+    let _ = crate::json::to_writer(&mut buf, &msg);
     ([(header::CONTENT_TYPE, "application/json")], buf)
 }
 

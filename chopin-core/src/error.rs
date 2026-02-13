@@ -149,7 +149,7 @@ impl axum::response::IntoResponse for ChopinError {
         };
 
         let mut buf = Vec::with_capacity(256);
-        match serde_json::to_writer(&mut buf, &body) {
+        match crate::json::to_writer(&mut buf, &body) {
             Ok(()) => (
                 status,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],

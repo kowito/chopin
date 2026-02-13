@@ -15,6 +15,7 @@ pub mod error;
 pub mod extractors;
 #[cfg(feature = "graphql")]
 pub mod graphql;
+pub mod json;
 pub mod migrations;
 pub mod models;
 pub mod openapi;

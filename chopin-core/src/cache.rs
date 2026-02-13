@@ -73,7 +73,7 @@ impl CacheService {
     pub async fn get_json<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, ChopinError> {
         match self.backend.get(key).await? {
             Some(raw) => {
-                let value: T = serde_json::from_str(&raw).map_err(|e| {
+                let value: T = crate::json::from_str(&raw).map_err(|e| {
                     ChopinError::Internal(format!("Cache deserialize error: {}", e))
                 })?;
                 Ok(Some(value))
@@ -89,7 +89,7 @@ impl CacheService {
         value: &T,
         ttl: Option<Duration>,
     ) -> Result<(), ChopinError> {
-        let raw = serde_json::to_string(value)
+        let raw = crate::json::to_string(value)
             .map_err(|e| ChopinError::Internal(format!("Cache serialize error: {}", e)))?;
         self.backend.set(key, &raw, ttl).await
     }

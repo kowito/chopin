@@ -56,7 +56,7 @@ impl<T: Serialize> axum::response::IntoResponse for ApiResponse<T> {
         // Pre-allocate 256 bytes to avoid reallocs for typical small-medium responses.
         // serde_json::to_writer writes directly into the buffer without intermediate copies.
         let mut buf = Vec::with_capacity(256);
-        match serde_json::to_writer(&mut buf, &self) {
+        match crate::json::to_writer(&mut buf, &self) {
             Ok(()) => (
                 status,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],

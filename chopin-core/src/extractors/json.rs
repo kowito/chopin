@@ -29,7 +29,7 @@ where
             .await
             .map_err(|e| ChopinError::BadRequest(format!("Failed to read body: {}", e)))?;
 
-        let value: T = serde_json::from_slice(&bytes)
+        let value: T = crate::json::from_slice(&bytes)
             .map_err(|e| ChopinError::Validation(format!("Invalid JSON: {}", e)))?;
 
         Ok(Json(value))
@@ -41,7 +41,7 @@ impl<T: serde::Serialize> IntoResponse for Json<T> {
         // Use to_writer to serialize directly into a pre-allocated buffer.
         // This avoids the intermediate allocation that to_vec performs.
         let mut buf = Vec::with_capacity(128);
-        match serde_json::to_writer(&mut buf, &self.0) {
+        match crate::json::to_writer(&mut buf, &self.0) {
             Ok(()) => (
                 StatusCode::OK,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],
