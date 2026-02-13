@@ -1,5 +1,9 @@
 # 🎹 Chopin CLI
 
+[![Build status](https://github.com/kowito/chopin/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/kowito/chopin/actions/workflows/CI.yml)
+[![Crates.io](https://img.shields.io/crates/v/chopin-cli)](https://crates.io/crates/chopin-cli)
+[![Downloads](https://img.shields.io/crates/d/chopin-cli.svg)](https://crates.io/crates/chopin-cli)
+
 **Scaffolding and code generation tool for the Chopin web framework.**
 
 The Chopin CLI helps you quickly bootstrap new Chopin projects with sensible defaults, generate boilerplate code, and manage database migrations.
