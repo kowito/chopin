@@ -1,6 +1,6 @@
 # 🎹 Chopin (v0.1.2)
 
-**The high-performance Rust web framework for perfectionists with deadlines.**
+**Chopin: High-fidelity engineering for the modern virtuoso.**
 
 **Current Version:** 0.1.2 | **Last Updated:** February 2026
 

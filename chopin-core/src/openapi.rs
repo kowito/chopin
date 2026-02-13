@@ -11,7 +11,7 @@ use crate::models::user::UserResponse;
     info(
         title = "Chopin API",
         version = "0.1.0",
-        description = "The high-level Rust Web Framework for perfectionists with deadlines."
+        description = "Chopin: High-fidelity engineering for the modern virtuoso."
     ),
     paths(
         crate::controllers::auth::signup,

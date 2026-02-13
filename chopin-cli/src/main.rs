@@ -5,7 +5,7 @@ use std::process::Command;
 
 #[derive(Parser)]
 #[command(name = "chopin")]
-#[command(about = "The high-level Rust Web Framework for perfectionists with deadlines")]
+#[command(about = "Chopin: High-fidelity engineering for the modern virtuoso.")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
