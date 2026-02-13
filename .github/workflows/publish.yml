@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,10 +18,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       
+      - name: Check CARGO_TOKEN is set
+        run: |
+          if [ -z "${{ secrets.CARGO_TOKEN }}" ]; then
+            echo "❌ CARGO_TOKEN secret is not configured!"
+            echo "Add it in: Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+      
       - name: Publish chopin-core
         run: cargo publish -p chopin-core --token ${{ secrets.CARGO_TOKEN }}
       
+      - name: Wait for crates.io indexing
+        run: sleep 60
+      
       - name: Publish chopin-cli
         run: cargo publish -p chopin-cli --token ${{ secrets.CARGO_TOKEN }}
-        # Wait for chopin-core to be indexed (~1 minute)
-        if: success()
