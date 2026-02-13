@@ -96,13 +96,13 @@ Chopin provides custom extractors:
 
 ### Json Extractor
 
-Uses `serde_json` for deserialization:
+Uses Chopin's unified JSON abstraction (`crate::json`):
 
 ```rust
 use chopin_core::extractors::Json;
 
 async fn create(Json(body): Json<CreateRequest>) -> ApiResponse<Item> {
-    // body is deserialized with serde_json
+    // body is deserialized via crate::json (sonic-rs with perf, else serde_json)
 }
 ```
 

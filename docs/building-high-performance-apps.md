@@ -549,7 +549,9 @@ async fn update_multiple(State(state): State<AppState>, ids: Vec<i32>) -> Result
 
 ### Use ApiResponse Correctly
 
-Chopin's `ApiResponse` uses optimized `serde_json::to_writer` for fast JSON serialization:
+Chopin's `ApiResponse` uses optimized `crate::json::to_writer` for fast JSON serialization:
+- **With `perf` feature**: sonic-rs (SIMD-accelerated, ~40% faster)
+- **Without `perf`**: serde_json (stable fallback)
 
 ```rust
 // ✅ This is optimized
@@ -1196,7 +1198,7 @@ For maximum performance, ensure:
 - [x] Pagination on all list endpoints
 - [x] Cache frequently accessed data (5-10 min TTL)
 - [x] Batch database operations
-- [x] Use optimized `serde_json` via `ApiResponse` (automatic)
+- [x] Use optimized JSON via `ApiResponse` (sonic-rs with `perf` feature)
 - [x] System tuning: `ulimit -n 65536`, kernel params
 - [x] Nginx reverse proxy with keep-alive
 - [x] Health check endpoint for monitoring

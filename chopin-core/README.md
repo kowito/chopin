@@ -56,6 +56,7 @@ SERVER_MODE=performance cargo run --release --features perf
 Enables:
 - **SO_REUSEPORT** — N accept loops (one per CPU core)
 - **mimalloc** — Microsoft's high-performance allocator
+- **sonic-rs** — SIMD-accelerated JSON (40% faster serialization vs serde_json)
 - **Zero-alloc endpoints** — pre-baked static responses
 - **Cached Date header** — updated every 500ms
 - **TCP_NODELAY** — disable Nagle's algorithm

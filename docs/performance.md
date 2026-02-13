@@ -64,7 +64,7 @@ Performance (450ns):
 - **FastRoute zero-alloc**: Pre-built headers, `ChopinBody::Fast` avoids `Box::pin`
 - **Lock-free Date cache**: `AtomicU64` + `thread_local!` (~8ns vs ~25ns RwLock)
 - **mimalloc**: 10-20% better throughput under high concurrency
-- **serde_json `to_writer`**: Writes directly into pre-allocated buffer (avoids intermediate Vec)
+- **sonic-rs JSON**: SIMD-accelerated serialization (~40% faster than serde_json, via unified `crate::json::` API)
 
 ## Performance Mode Deep Dive
 
@@ -177,19 +177,32 @@ This enables better code generation:
 
 ## JSON Serialization
 
-Chopin uses **serde_json** with `to_writer` optimization for all JSON operations:
+Chopin uses a **unified JSON abstraction** (`crate::json::`) that automatically dispatches to the best backend:
 
-- `ApiResponse::into_response()` → `serde_json::to_writer()` into pre-allocated buffer
-- `ChopinError::into_response()` → `serde_json::to_writer()` into pre-allocated buffer
-- `Json` extractor → `serde_json::from_slice()` (zero-copy deserialization)
-- `Json` response → `serde_json::to_writer()` into pre-allocated buffer
+- **With `perf` feature**: Uses **sonic-rs** (SIMD-accelerated, ~40% faster serialization)
+- **Without `perf` feature**: Uses **serde_json** (stable, battle-tested)
 
-### Why serde_json over sonic-rs?
+All JSON operations use the optimized `to_writer` path:
 
-- **Stability**: serde_json is battle-tested across the entire Rust ecosystem
-- **Compatibility**: Works with every serde derive, no edge cases
-- **Optimized path**: Using `to_writer` with pre-allocated `Vec` avoids the extra allocation that `to_vec` performs
-- **Real-world**: For production APIs, the JSON serialization cost (~100ns) is dwarfed by database queries (~1ms+)
+- `ApiResponse::into_response()` → `crate::json::to_writer()` into pre-allocated buffer
+- `ChopinError::into_response()` → `crate::json::to_writer()` into pre-allocated buffer
+- `Json` extractor → `crate::json::from_slice()` (zero-copy deserialization)
+- `Json` response → `crate::json::to_writer()` into pre-allocated buffer
+
+### sonic-rs Performance Benefits
+
+When the `perf` feature is enabled, sonic-rs provides:
+
+- **SIMD acceleration**: Uses AVX2 (x86_64) or NEON (ARM64) vector instructions
+- **~40% faster** serialization compared to serde_json in benchmarks
+- **Drop-in compatible**: Same `serde::Serialize`/`Deserialize` traits
+- **Zero migration**: Transparent via `crate::json::` abstraction
+
+For maximum JSON throughput:
+
+```bash
+SERVER_MODE=performance cargo build --release --features perf
+```
 
 ## Benchmarking
 

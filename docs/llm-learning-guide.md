@@ -27,7 +27,7 @@ Chopin is a **high-performance Rust web framework** built on Axum, SeaORM, and T
 | Raw HTTP | Hyper | 1.x |
 | Async runtime | Tokio | 1.x |
 | ORM | SeaORM | 1.x |
-| JSON | serde_json | 1.x |
+| JSON | sonic-rs / serde_json | 0.5 / 1.x (via crate::json) |
 | Auth | jsonwebtoken + argon2 | 9 / 0.5 |
 | API docs | utoipa + utoipa-scalar | 5 / 0.3 |
 | Caching | DashMap / Redis | — / 0.27 |
@@ -287,7 +287,7 @@ post.delete(&db).await?;
 
 | Extractor | Purpose | Usage |
 |-----------|---------|-------|
-| `Json<T>` | Deserialize JSON body (serde_json) | `Json(body): Json<CreateReq>` |
+| `Json<T>` | Deserialize JSON body (crate::json) | `Json(body): Json<CreateReq>` |
 | `AuthUser` | JWT auth → user_id + role | `user: AuthUser` |
 | `AuthUserWithRole<N>` | Auth with minimum role | `user: AuthUserWithRole<{Role::Admin as u8}>` |
 | `Pagination` | Parse `?page=1&per_page=20` | `pagination: Pagination` |
@@ -397,9 +397,13 @@ SO_REUSEPORT × N CPU cores  (kernel distributes connections)
           → no match        → Axum Router with full middleware
 ```
 
-JSON serialization uses optimized **serde_json** (`to_writer` into pre-allocated buffers).
+JSON serialization uses **crate::json** abstraction:
+- **With `perf` feature**: sonic-rs (SIMD-accelerated, ~40% faster)
+- **Without `perf`**: serde_json (stable fallback)
 
-Release profile: `opt-level=3`, `lto="fat"`, `codegen-units=1`, `strip=true`, `panic="abort"`.
+All serialization via `to_writer` into pre-allocated buffers.
+
+Release profile: `opt-level=3`, `lto="fat"`, `codegen-units=1`, `strip=true`, `panic="abort"`, `overflow-checks=false`.
 
 > **📚 For a complete guide on building high-performance applications**, see [building-high-performance-apps.md](./building-high-performance-apps.md) which covers setup, optimization patterns, caching strategies, and production deployment.
 
@@ -518,8 +522,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Key Implementation Details for LLMs
 
 1. **Config is `Arc<Config>`** in AppState — never clone the full Config, always Arc.
-2. **JSON uses `serde_json`** — all `ApiResponse` and `ChopinError` serialize with `serde_json::to_writer()` into pre-allocated buffers for zero intermediate allocations.
-3. **The `Json` extractor** in `chopin_core::extractors` uses `serde_json::from_slice()` — it's NOT `axum::Json`.
+2. **JSON uses `crate::json::`** — dispatches to sonic-rs (with `perf`) or serde_json (fallback). All `ApiResponse` and `ChopinError` serialize with `crate::json::to_writer()` into pre-allocated buffers.
+3. **The `Json` extractor** in `chopin_core::extractors` uses `crate::json::from_slice()` — it's NOT `axum::Json`.
 4. **FastRoute bypasses Axum** — `ChopinService` checks user-registered `FastRoute`s before the Router. No hardcoded paths.
 5. **`ChopinFuture` avoids `Box::pin`** — fast routes return `ChopinFuture::Ready` (stack-allocated), only Router path boxes.
 6. **SO_REUSEPORT uses `socket2`** — creates N `socket2::Socket` instances, converts to `tokio::TcpListener`.
