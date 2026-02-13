@@ -1,6 +1,6 @@
 # Performance Mode Example
 
-Deep dive into Chopin's dual-mode architecture with hands-on benchmarking.
+Deep dive into Chopin's **three server modes** with hands-on benchmarking.
 
 ## Quick Start
 
@@ -14,16 +14,41 @@ cargo run -p chopin-performance-mode
 SERVER_MODE=performance cargo run -p chopin-performance-mode --release
 ```
 
+**Raw Mode** (hyper bypassed, maximum throughput):
+```bash
+SERVER_MODE=raw cargo run -p chopin-performance-mode --release --features perf
+```
+
+## Server Mode Comparison
+
+| Mode | Per-request | Use Case |
+|------|-------------|----------|
+| **Standard** | ~800ns | Development, typical APIs |
+| **Performance** | ~450ns | Production high-load |
+| **Raw** | ~240ns | Benchmarks, >1M req/s |
+
 ## What is Performance Mode?
 
-Chopin's **Performance Mode** bypasses Axum's router for `/json` and `/plaintext` endpoints, routing them through a raw hyper `ChopinService` with:
+Chopin's **Performance Mode** bypasses Axum's router for FastRoute endpoints (`/json`, `/plaintext`), routing them through a raw hyper `ChopinService` with:
 
 - **SO_REUSEPORT** — Multiple TCP listeners (one per CPU core), kernel load balances
 - **ChopinBody zero-alloc** — `ChopinBody::Fast(Option<Bytes>)` inline on stack, no `Box` heap allocation
-- **Direct header building** — Headers built directly from individual `HeaderValue`s, no `HeaderMap` clone
-- **Cached Date headers** — Updated every 500ms by async task (avoids allocation)
+- **Pre-built headers** — HeaderMap cloned once (3 headers), then Date inserted
+- **Lock-free date cache** — thread_local + atomic epoch (~8ns per request)
 - **mimalloc** — Microsoft's high-concurrency memory allocator
 - **Native CPU** — Compiled with `target-cpu=native` and fat LTO
+
+## What is Raw Mode?
+
+**Raw Mode** completely bypasses hyper and writes pre-serialized HTTP responses directly to TCP sockets:
+
+- **No HTTP parser** — Only path extracted (~10ns)
+- **Pre-serialized responses** — HTTP bytes assembled at startup
+- **Zero per-request allocs** — Reusable connection buffers
+- **Single syscall writes** — Entire response in one `write_all()`
+- **~45% faster than Performance mode** — 240ns vs 450ns per request
+
+**Limitations:** Only FastRoute endpoints (no Axum router, no middleware).
 
 ## Benchmark
 
@@ -65,15 +90,27 @@ wrk -t4 -c256 -d10s http://127.0.0.1:3000/
 
 ### Expected Results
 
-Typical results on Apple M-series (adjust for your hardware):
+Typical results on Apple M-series or modern x86_64 (adjust for your hardware):
 
-| Endpoint | Mode | Req/sec | Latency (avg) |
-|----------|------|---------|---------------|
-| `/json` | Performance | 500K–1.7M+ | <1ms |
-| `/plaintext` | Performance | 500K–1.7M+ | <1ms |
-| `/` | Standard | 150K–300K | 1-5ms |
+#### Standard Mode
+| Endpoint | Req/sec | Latency (avg) |
+|----------|---------|---------------|
+| `/` (Axum) | 150K–300K | 1-5ms |
 
-**Note:** Performance mode's `/json` bypasses the entire Axum stack—it's just a pre-computed byte response. This is for benchmarking purposes; real APIs use Axum routes.
+#### Performance Mode
+| Endpoint | Req/sec | Latency (avg) |
+|----------|---------|---------------|
+| `/json` | 500K–700K | <1ms |
+| `/plaintext` | 500K–700K | <1ms |
+| `/` (Axum) | 150K–300K | 1-5ms |
+
+#### Raw Mode
+| Endpoint | Req/sec | Latency (avg) |
+|----------|---------|---------------|
+| `/json` | **900K–1.2M+** | <500µs |
+| `/plaintext` | **2M–2.5M+** | <500µs |
+
+**Note:** Raw mode only serves FastRoute endpoints. No Axum fallback.
 
 ## Code Patterns
 

@@ -8,7 +8,7 @@ Chopin gives you the full-stack experience — auth, database, caching, file upl
 
 ## Features
 
-- **Dual Server Modes** — Standard (easy, full middleware) or Performance (raw hyper, SO_REUSEPORT, zero-alloc)
+- **Triple Server Modes** — Standard (full middleware) | Performance (hyper + SO_REUSEPORT) | Raw (hyper bypassed, max speed)
 - **FastRoute API** — Zero-allocation endpoints via `ChopinBody` + direct header manipulation for extreme performance
 - **Built-in Auth** — JWT + Argon2id with signup/login endpoints out of the box
 - **Role-Based Access** — User, Moderator, Admin, SuperAdmin with extractors and middleware
@@ -41,21 +41,36 @@ cargo run
    → API docs: http://127.0.0.1:3000/api-docs
 ```
 
-## Performance Mode
+## Server Modes
 
-For maximum throughput:
+### Performance Mode
+
+For maximum throughput with full Axum compatibility:
 
 ```bash
 SERVER_MODE=performance cargo run --release --features perf
 ```
 
-This enables:
 - **SO_REUSEPORT** — N accept loops (one per CPU core)
 - **mimalloc** — Microsoft's high-performance allocator
-- **Zero-alloc /json and /plaintext** — pre-baked static responses bypass Axum entirely
-- **Cached Date header** — updated every 500ms by background task
+- **Zero-alloc FastRoutes** — pre-baked static responses bypass Axum
+- **Lock-free date cache** — thread_local + atomic epoch (8ns per request)
 - **TCP_NODELAY** — disable Nagle's algorithm
 - **HTTP/1.1 pipeline_flush** — immediate response flushing
+
+### Raw Mode (NEW)
+
+For absolute maximum throughput (benchmarks only):
+
+```bash
+SERVER_MODE=raw cargo run --release --features perf
+```
+
+- **Hyper completely bypassed** — raw TCP reads/writes
+- **Pre-serialized HTTP** — only 29-byte Date header patched per request
+- **~45% faster than Performance mode** — 240ns vs 450ns per request
+- **Limitations:** Only FastRoute endpoints (no Axum, no middleware)
+- **Best for:** TechEmpower benchmarks, >1M req/s targets
 
 ## Example
 
@@ -77,14 +92,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Server Modes
 
-| Feature | Standard | Performance |
-|---------|----------|-------------|
-| Ease of use | ✅ Full middleware | Manual tuning |
-| Server | `axum::serve` | Raw `hyper::http1` |
-| Accept loops | 1 | N (per CPU core) |
-| `/json` path | Through Axum | Zero-alloc bypass |
-| Allocator | System | mimalloc |
-| Best for | Development, production APIs | Benchmarks, extreme TPS |
+| Feature | Standard | Performance | Raw |
+|---------|----------|-------------|-----|
+| Ease of use | ✅ Full middleware | FastRoute + Axum | FastRoute only |
+| Server | `axum::serve` | Raw `hyper::http1` | Raw TCP |
+| Accept loops | 1 | N (per CPU core) | N (per CPU core) |
+| FastRoute path | Through Axum | Zero-alloc hyper | Zero-alloc raw |
+| Allocator | System | mimalloc | mimalloc |
+| Per-request cost | ~800ns | ~450ns | ~240ns |
+| Best for | Development, APIs | Production high-load | Benchmarks, >1M req/s |
 
 ## Documentation
 
