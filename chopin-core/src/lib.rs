@@ -13,6 +13,7 @@ pub mod controllers;
 pub mod db;
 pub mod error;
 pub mod extractors;
+pub mod fast_http;
 #[cfg(feature = "graphql")]
 pub mod graphql;
 pub mod migrations;

@@ -16,6 +16,10 @@ pub enum ServerMode {
     Standard,
     /// Raw hyper hot-path for maximum throughput.
     Performance,
+    /// Raw TCP — hyper completely bypassed. Maximum possible throughput.
+    /// Only FastRoute endpoints are served (no Axum router, no middleware).
+    /// Use for benchmarks and ultra-high-throughput static responses.
+    Raw,
 }
 
 impl Default for ServerMode {
@@ -29,6 +33,7 @@ impl std::fmt::Display for ServerMode {
         match self {
             ServerMode::Standard => write!(f, "standard"),
             ServerMode::Performance => write!(f, "performance"),
+            ServerMode::Raw => write!(f, "raw"),
         }
     }
 }
@@ -101,6 +106,7 @@ impl Config {
                 .as_str()
             {
                 "performance" | "perf" | "fast" => ServerMode::Performance,
+                "raw" | "turbo" => ServerMode::Raw,
                 _ => ServerMode::Standard,
             },
             database_url: std::env::var("DATABASE_URL")

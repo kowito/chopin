@@ -78,6 +78,8 @@ pub struct FastRoute {
     path: Box<str>,
     /// Pre-computed response body (embedded in binary if `&'static [u8]`).
     body: Bytes,
+    /// Original content type string (needed for raw HTTP handler).
+    content_type_str: &'static str,
     /// Pre-built HeaderMap with Content-Type, Content-Length, Server.
     /// Cloning a 3-entry HeaderMap is cheaper than reserve(4) + 4 individual
     /// hash-probe-insert operations — it's a single contiguous memcpy of the
@@ -109,6 +111,7 @@ impl FastRoute {
         FastRoute {
             path: path.into(),
             body: bytes,
+            content_type_str: content_type,
             base_headers,
         }
     }
@@ -134,6 +137,26 @@ impl FastRoute {
     /// Create an HTML fast route (`Content-Type: text/html; charset=utf-8`).
     pub fn html(path: &str, body: &'static [u8]) -> Self {
         Self::new(path, body, "text/html; charset=utf-8")
+    }
+
+    // ═══ Accessors for raw HTTP handler (fast_http module) ═══
+
+    /// Path as a string slice.
+    #[inline(always)]
+    pub(crate) fn path_str(&self) -> &str {
+        &self.path
+    }
+
+    /// Content-Type as a static string.
+    #[inline(always)]
+    pub(crate) fn content_type_static(&self) -> &'static str {
+        self.content_type_str
+    }
+
+    /// Body bytes.
+    #[inline(always)]
+    pub(crate) fn body_ref(&self) -> &[u8] {
+        &self.body
     }
 
     /// Build the HTTP response.

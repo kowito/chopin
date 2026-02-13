@@ -104,3 +104,52 @@ pub fn cached_date_header() -> HeaderValue {
         cloned
     })
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Raw date bytes for fast_http — avoids HeaderValue entirely
+// ═══════════════════════════════════════════════════════════════
+
+// Thread-local cached date as raw bytes for the raw HTTP handler.
+// Avoids HeaderValue construction entirely — just 29 bytes on the stack.
+thread_local! {
+    static LOCAL_DATE_BYTES: RefCell<(u64, [u8; 29])> = const {
+        RefCell::new((u64::MAX, [b' '; 29]))
+    };
+}
+
+/// Get the cached Date as raw bytes (29 bytes, e.g. `Thu, 13 Feb 2026 07:28:00 GMT`).
+///
+/// Used by the raw HTTP handler (`fast_http`) which writes pre-serialized
+/// response bytes directly to the socket. No HeaderValue, no HeaderMap,
+/// no hyper — just memcpy into the write buffer.
+///
+/// Cost: ~5ns (relaxed atomic load + thread-local hit + 29-byte stack copy).
+#[inline(always)]
+pub fn cached_date_bytes() -> [u8; 29] {
+    let current_epoch = DATE_EPOCH.load(Ordering::Relaxed);
+
+    if current_epoch == 0 {
+        return now_date_bytes();
+    }
+
+    LOCAL_DATE_BYTES.with(|cell| {
+        {
+            let cached = cell.borrow();
+            if cached.0 == current_epoch {
+                return cached.1;
+            }
+        }
+        let bytes = now_date_bytes();
+        *cell.borrow_mut() = (current_epoch, bytes);
+        bytes
+    })
+}
+
+/// Format the current time as 29 raw ASCII bytes.
+#[inline(always)]
+fn now_date_bytes() -> [u8; 29] {
+    let s = httpdate::fmt_http_date(std::time::SystemTime::now());
+    let mut buf = [0u8; 29];
+    buf.copy_from_slice(&s.as_bytes()[..29]);
+    buf
+}
