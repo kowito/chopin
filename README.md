@@ -1,8 +1,11 @@
-# 🎹 Chopin (v0.1.2)
+# 🎹 Chopin
+
+[![Build status](https://github.com/kowito/chopin/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/kowito/chopin/actions/workflows/CI.yml)
+[![Crates.io](https://img.shields.io/crates/v/chopin-core)](https://crates.io/crates/chopin-core)
 
 **Chopin: High-fidelity engineering for the modern virtuoso.**
 
-**Current Version:** 0.1.2 | **Last Updated:** February 2026
+**Last Updated:** February 2026
 
 Chopin gives you the full-stack experience — auth, database, caching, file uploads, OpenAPI docs — with the performance to beat raw frameworks in benchmarks.
 
