@@ -53,11 +53,10 @@ impl<T: Serialize> axum::response::IntoResponse for ApiResponse<T> {
         } else {
             axum::http::StatusCode::BAD_REQUEST
         };
-        // Use sonic-rs for SIMD-accelerated serialization (ARM NEON / x86 SSE2+AVX2).
         // Pre-allocate 256 bytes to avoid reallocs for typical small-medium responses.
-        // sonic_rs::to_writer writes directly into the buffer without intermediate copies.
+        // serde_json::to_writer writes directly into the buffer without intermediate copies.
         let mut buf = Vec::with_capacity(256);
-        match sonic_rs::to_writer(&mut buf, &self) {
+        match serde_json::to_writer(&mut buf, &self) {
             Ok(()) => (
                 status,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],

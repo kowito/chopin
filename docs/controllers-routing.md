@@ -96,13 +96,13 @@ Chopin provides custom extractors:
 
 ### Json Extractor
 
-Uses `sonic-rs` for ARM NEON optimized deserialization:
+Uses `serde_json` for deserialization:
 
 ```rust
 use chopin_core::extractors::Json;
 
 async fn create(Json(body): Json<CreateRequest>) -> ApiResponse<Item> {
-    // body is deserialized with sonic-rs
+    // body is deserialized with serde_json
 }
 ```
 

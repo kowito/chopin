@@ -11,7 +11,7 @@ Chopin is a full-stack Rust web framework built on top of proven libraries:
 | HTTP server | **Axum 0.8** / **Hyper 1.x** | Request routing and middleware |
 | Database ORM | **SeaORM 1.x** | Models, migrations, queries |
 | Async runtime | **Tokio** | Multi-threaded async I/O |
-| Serialization | **sonic-rs** | ARM NEON optimized JSON |
+| Serialization | **serde_json** | Optimized JSON serialization |
 | Auth | **jsonwebtoken** + **argon2** | JWT tokens + password hashing |
 | API docs | **utoipa** + **Scalar** | OpenAPI 3.1 auto-generation |
 | Caching | In-memory / **Redis** | Key-value cache abstraction |
@@ -29,7 +29,7 @@ chopin/
 │       ├── perf.rs         # Date header caching, perf utilities
 │       ├── lib.rs          # Module exports, mimalloc allocator
 │       ├── routing.rs      # Route builder (nests auth routes)
-│       ├── response.rs     # ApiResponse<T> (sonic-rs serialization)
+│       ├── response.rs     # ApiResponse<T> (serde_json serialization)
 │       ├── error.rs        # ChopinError → HTTP status codes
 │       ├── db.rs           # SeaORM connection pool
 │       ├── cache.rs        # CacheService (in-memory + Redis)
@@ -105,7 +105,7 @@ The **fast mode**. Key differences:
 4. Axum Router matches the path
 5. Handler extracts `State`, `Json`, `AuthUser`, etc.
 6. Handler returns `ApiResponse<T>` or `ChopinError`
-7. `IntoResponse` serializes with `sonic_rs`
+7. `IntoResponse` serializes with `serde_json`
 8. Response sent to client
 
 ### Performance Mode
@@ -164,4 +164,4 @@ rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+aes,+neon"]
 rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+avx2,+aes,+sse4.2"]
 ```
 
-Enables SIMD (NEON/AVX2) in `sonic-rs` for 2-4× faster JSON serialization.
+Enables native CPU instructions (NEON/AVX2) for better codegen and performance.

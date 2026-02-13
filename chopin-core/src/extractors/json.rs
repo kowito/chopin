@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 
 use crate::error::ChopinError;
 
-/// JSON extractor using sonic-rs for ARM NEON optimized deserialization.
+/// JSON extractor using serde_json for deserialization.
 ///
 /// Usage in handlers:
 /// ```rust,ignore
@@ -29,7 +29,7 @@ where
             .await
             .map_err(|e| ChopinError::BadRequest(format!("Failed to read body: {}", e)))?;
 
-        let value: T = sonic_rs::from_slice(&bytes)
+        let value: T = serde_json::from_slice(&bytes)
             .map_err(|e| ChopinError::Validation(format!("Invalid JSON: {}", e)))?;
 
         Ok(Json(value))
@@ -38,12 +38,17 @@ where
 
 impl<T: serde::Serialize> IntoResponse for Json<T> {
     fn into_response(self) -> Response {
-        let bytes = sonic_rs::to_vec(&self.0).unwrap_or_default();
-        (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            bytes,
-        )
-            .into_response()
+        // Use to_writer to serialize directly into a pre-allocated buffer.
+        // This avoids the intermediate allocation that to_vec performs.
+        let mut buf = Vec::with_capacity(128);
+        match serde_json::to_writer(&mut buf, &self.0) {
+            Ok(()) => (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                buf,
+            )
+                .into_response(),
+            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
+        }
     }
 }

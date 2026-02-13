@@ -1,6 +1,6 @@
 # Performance Mode Example
 
-Deep dive into Chopin's **three server modes** with hands-on benchmarking.
+Deep dive into Chopin's **two server modes** with hands-on benchmarking.
 
 ## Quick Start
 
@@ -11,12 +11,7 @@ cargo run -p chopin-performance-mode
 
 **Performance Mode** (raw hyper, SO_REUSEPORT):
 ```bash
-SERVER_MODE=performance cargo run -p chopin-performance-mode --release
-```
-
-**Raw Mode** (hyper bypassed, maximum throughput):
-```bash
-SERVER_MODE=raw cargo run -p chopin-performance-mode --release --features perf
+SERVER_MODE=performance cargo run -p chopin-performance-mode --release --features perf
 ```
 
 ## Server Mode Comparison
@@ -25,7 +20,6 @@ SERVER_MODE=raw cargo run -p chopin-performance-mode --release --features perf
 |------|-------------|----------|
 | **Standard** | ~800ns | Development, typical APIs |
 | **Performance** | ~450ns | Production high-load |
-| **Raw** | ~240ns | Benchmarks, >1M req/s |
 
 ## What is Performance Mode?
 
@@ -37,18 +31,6 @@ Chopin's **Performance Mode** bypasses Axum's router for FastRoute endpoints (`/
 - **Lock-free date cache** — thread_local + atomic epoch (~8ns per request)
 - **mimalloc** — Microsoft's high-concurrency memory allocator
 - **Native CPU** — Compiled with `target-cpu=native` and fat LTO
-
-## What is Raw Mode?
-
-**Raw Mode** completely bypasses hyper and writes pre-serialized HTTP responses directly to TCP sockets:
-
-- **No HTTP parser** — Only path extracted (~10ns)
-- **Pre-serialized responses** — HTTP bytes assembled at startup
-- **Zero per-request allocs** — Reusable connection buffers
-- **Single syscall writes** — Entire response in one `write_all()`
-- **~45% faster than Performance mode** — 240ns vs 450ns per request
-
-**Limitations:** Only FastRoute endpoints (no Axum router, no middleware).
 
 ## Benchmark
 
@@ -103,14 +85,6 @@ Typical results on Apple M-series or modern x86_64 (adjust for your hardware):
 | `/json` | 500K–700K | <1ms |
 | `/plaintext` | 500K–700K | <1ms |
 | `/` (Axum) | 150K–300K | 1-5ms |
-
-#### Raw Mode
-| Endpoint | Req/sec | Latency (avg) |
-|----------|---------|---------------|
-| `/json` | **900K–1.2M+** | <500µs |
-| `/plaintext` | **2M–2.5M+** | <500µs |
-
-**Note:** Raw mode only serves FastRoute endpoints. No Axum fallback.
 
 ## Code Patterns
 

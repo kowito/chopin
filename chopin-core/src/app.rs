@@ -189,13 +189,8 @@ impl App {
 
         println!("\n🎹 Chopin server is running!");
         println!("   → Mode:    {}", mode);
-        if mode == ServerMode::Raw {
-            println!("   → Engine:  raw TCP (hyper bypassed)");
-        }
         println!("   → Server:  http://{}", addr);
-        if mode != ServerMode::Raw {
-            println!("   → API docs: http://{}/api-docs", addr);
-        }
+        println!("   → API docs: http://{}/api-docs", addr);
         if !fast_routes.is_empty() {
             println!("   → Fast routes: {}", fast_routes.len());
             for r in fast_routes.iter() {
@@ -218,17 +213,6 @@ impl App {
                 // ─── Performance mode: raw hyper + SO_REUSEPORT ───
                 let socket_addr: std::net::SocketAddr = addr.parse()?;
                 crate::server::run_reuseport(socket_addr, fast_routes, router, shutdown_signal())
-                    .await?;
-            }
-            ServerMode::Raw => {
-                // ─── Raw mode: hyper completely bypassed ───
-                // Only FastRoute endpoints are served. No Axum, no middleware.
-                // This is the fastest possible mode for static responses.
-                if fast_routes.is_empty() {
-                    return Err("Raw mode requires at least one FastRoute. Use .fast_route() or .fast_json().".into());
-                }
-                let socket_addr: std::net::SocketAddr = addr.parse()?;
-                crate::fast_http::run_raw_reuseport(socket_addr, &fast_routes, shutdown_signal())
                     .await?;
             }
         }
@@ -260,8 +244,9 @@ async fn welcome() -> impl IntoResponse {
         docs: "/api-docs",
         status: "running",
     };
-    let bytes = sonic_rs::to_vec(&msg).unwrap_or_default();
-    ([(header::CONTENT_TYPE, "application/json")], bytes)
+    let mut buf = Vec::with_capacity(64);
+    let _ = serde_json::to_writer(&mut buf, &msg);
+    ([(header::CONTENT_TYPE, "application/json")], buf)
 }
 
 /// Serve the raw OpenAPI JSON spec.

@@ -94,7 +94,7 @@ rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+aes,+neon"]
 rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+avx2,+aes,+sse4.2"]
 ```
 
-**Why?** Enables SIMD instructions (NEON/AVX2) in `sonic-rs` for 2-4x faster JSON serialization.
+**Why?** Enables native CPU instructions (NEON/AVX2) for better codegen and performance.
 
 ### 2. Environment Configuration
 
@@ -549,7 +549,7 @@ async fn update_multiple(State(state): State<AppState>, ids: Vec<i32>) -> Result
 
 ### Use ApiResponse Correctly
 
-Chopin's `ApiResponse` automatically uses `sonic-rs` for fast JSON serialization:
+Chopin's `ApiResponse` uses optimized `serde_json::to_writer` for fast JSON serialization:
 
 ```rust
 // ✅ This is optimized
@@ -1196,7 +1196,7 @@ For maximum performance, ensure:
 - [x] Pagination on all list endpoints
 - [x] Cache frequently accessed data (5-10 min TTL)
 - [x] Batch database operations
-- [x] Use `sonic-rs` via `ApiResponse` (automatic)
+- [x] Use optimized `serde_json` via `ApiResponse` (automatic)
 - [x] System tuning: `ulimit -n 65536`, kernel params
 - [x] Nginx reverse proxy with keep-alive
 - [x] Health check endpoint for monitoring

@@ -99,7 +99,7 @@ async fn query(State(state): State<AppState>) -> Result<ApiResponse<Vec<Item>>, 
 
 ## Serialization
 
-All responses are serialized with **sonic-rs** (ARM NEON / x86 AVX2 optimized), not `serde_json`. This happens automatically in `IntoResponse` implementations — no manual serialization needed.
+All responses are serialized with **serde_json** using `to_writer` into pre-allocated buffers for optimal performance. This happens automatically in `IntoResponse` implementations — no manual serialization needed.
 
 ## OpenAPI Integration
 
