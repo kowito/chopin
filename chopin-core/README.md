@@ -47,13 +47,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Performance Mode
 
-For maximum throughput:
+For maximum throughput, enable all three performance flags:
 
 ```bash
+# Method 1: Inline environment variable
 SERVER_MODE=performance cargo run --release --features perf
+
+# Method 2: Add to .env file
+echo "SERVER_MODE=performance" >> .env
+cargo run --release --features perf
 ```
 
-Enables:
+This enables:
 - **SO_REUSEPORT** — N accept loops (one per CPU core)
 - **mimalloc** — Microsoft's high-performance allocator
 - **sonic-rs** — SIMD-accelerated JSON (40% faster serialization vs serde_json)

@@ -67,12 +67,17 @@ Every Chopin app ships with:
 | `/api-docs` | GET | Interactive Scalar API docs |
 | `/api-docs/openapi.json` | GET | Raw OpenAPI 3.1 spec |
 
-In **performance mode**, these are also available:
+In **performance mode**, additional zero-allocation endpoints are available:
 
 | Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/json` | GET | `{"message":"Hello, World!"}` (zero-alloc) |
-| `/plaintext` | GET | `Hello, World!` (zero-alloc) |
+|----------|--------|-----------|
+| `/json` | GET | `{"message":"Hello, World!"}` (raw hyper, zero-alloc) |
+| `/plaintext` | GET | `Hello, World!` (raw hyper, zero-alloc) |
+
+**Enable performance mode:**
+```bash
+SERVER_MODE=performance cargo run --release --features perf
+```
 
 ## Configuration
 

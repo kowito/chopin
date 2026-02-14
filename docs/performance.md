@@ -4,15 +4,23 @@
 
 ## Quick Start: Make It Fast
 
-To maximize Chopin performance, use this checklist:
+To maximize Chopin performance, use this complete command:
 
 ```bash
-# 1. Start with Performance mode and release build
+# Method 1: Set environment variable inline
 SERVER_MODE=performance cargo run --release --features perf
 
-# 2. Benchmark
+# Method 2: Add SERVER_MODE=performance to .env file, then:
+cargo run --release --features perf
+
+# Benchmark
 wrk -t4 -c256 -d10s http://127.0.0.1:3000/json
 ```
+
+**All three flags are required for maximum performance:**
+- `SERVER_MODE=performance` — Enables raw hyper, SO_REUSEPORT, per-core runtimes
+- `--release` — Enables compiler optimizations (LTO, codegen-units=1)
+- `--features perf` — Enables mimalloc allocator + sonic-rs SIMD JSON
 
 Expected throughput: **~600K req/s** on 8-core hardware (vs ~300K in standard mode).
 
@@ -27,6 +35,7 @@ Chopin offers **two server modes** for different performance/flexibility tradeof
 cargo run
 
 # Performance mode — raw hyper, multi-core, zero-alloc FastRoutes
+# Requires BOTH environment variable AND feature flag:
 SERVER_MODE=performance cargo run --release --features perf
 ```
 
@@ -246,12 +255,25 @@ bombardier -c 256 -d 10s http://127.0.0.1:3000/plaintext
 
 For **real-world production APIs**, here's the recommended approach:
 
-### 1. Use Performance Mode (Default)
-Performance mode gives you **600K+ req/s** while maintaining full Axum compatibility:
+### 1. Use Performance Mode for Production
 
-```bash
-SERVER_MODE=performance cargo build --release --features perf
+Performance mode gives you **600K+ req/s** while maintaining full Axum compatibility.
+
+**Add to `.env` file:**
+```env
+SERVER_MODE=performance
+ENVIRONMENT=production
+RUST_LOG=warn
 ```
+
+**Build with all optimizations:**
+```bash
+cargo build --release --features perf
+```
+
+The `perf` feature enables:
+- **mimalloc** — High-performance allocator (10-20% improvement under load)
+- **sonic-rs** — SIMD JSON serialization (~40% faster than serde_json)
 
 ### 2. Enable Compiler Optimizations
 

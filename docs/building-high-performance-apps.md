@@ -48,7 +48,8 @@ DATABASE_URL=sqlite://app.db?mode=rwc
 RUST_LOG=warn
 EOF
 
-# Build and run with all performance features
+# Build and run with all performance features enabled
+# Requires: SERVER_MODE=performance + --release + --features perf
 cargo run --release --features perf
 ```
 
@@ -74,7 +75,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-**That's it!** You now have a server that can handle 100K+ req/s on modest hardware.
+**That's it!** You now have a server optimized for extreme throughput:
+- **SERVER_MODE=performance** — Raw hyper HTTP/1.1, SO_REUSEPORT, per-core runtimes
+- **--release** — LTO, codegen-units=1, opt-level=3
+- **--features perf** — mimalloc allocator + sonic-rs SIMD JSON
+
+Expected: **100K+ req/s** on modest hardware, **600K+ req/s** on high-end CPUs.
 
 ---
 
