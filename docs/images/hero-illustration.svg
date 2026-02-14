@@ -1,0 +1,99 @@
+<svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2">
+  <!-- Database (left) -->
+  <g transform="translate(80, 200)">
+    <rect x="0" y="0" width="120" height="80" rx="8" fill="none" stroke="currentColor" stroke-width="2"/>
+    <line x1="0" y1="20" x2="120" y2="20" stroke="currentColor" stroke-width="1.5"/>
+    <line x1="0" y1="40" x2="120" y2="40" stroke="currentColor" stroke-width="1.5"/>
+    <line x1="0" y1="60" x2="120" y2="60" stroke="currentColor" stroke-width="1.5"/>
+  </g>
+
+  <!-- Database cylinder (top right) -->
+  <g transform="translate(580, 60)">
+    <ellipse cx="40" cy="0" rx="40" ry="15" fill="none" stroke="currentColor" stroke-width="2"/>
+    <line x1="0" y1="0" x2="0" y2="80" stroke="currentColor" stroke-width="2"/>
+    <line x1="80" y1="0" x2="80" y2="80" stroke="currentColor" stroke-width="2"/>
+    <ellipse cx="40" cy="80" rx="40" ry="15" fill="none" stroke="currentColor" stroke-width="2"/>
+    <line x1="10" y1="25" x2="70" y2="25" stroke="currentColor" stroke-width="1.5"/>
+    <line x1="10" y1="50" x2="70" y2="50" stroke="currentColor" stroke-width="1.5"/>
+  </g>
+
+  <!-- Music note gear (center) - filled black -->
+  <g transform="translate(320, 200)">
+    <circle cx="50" cy="50" r="60" fill="black"/>
+    <!-- Gear teeth -->
+    <g fill="black">
+      <rect x="105" y="35" width="15" height="30" rx="2"/>
+      <rect x="130" y="65" width="30" height="15" rx="2"/>
+      <rect x="105" y="95" width="15" height="30" rx="2"/>
+      <rect x="65" y="120" width="30" height="15" rx="2"/>
+      <rect x="-5" y="95" width="15" height="30" rx="2"/>
+      <rect x="-30" y="65" width="30" height="15" rx="2"/>
+      <rect x="-5" y="35" width="15" height="30" rx="2"/>
+      <rect x="35" y="-5" width="30" height="15" rx="2"/>
+    </g>
+    <!-- Music note inside -->
+    <g fill="white" stroke="none">
+      <circle cx="40" cy="45" r="5"/>
+      <rect x="45" y="20" width="4" height="35"/>
+      <circle cx="55" cy="60" r="5"/>
+      <rect x="60" y="35" width="4" height="30"/>
+    </g>
+  </g>
+
+  <!-- Rust logo gear (right) -->
+  <g transform="translate(620, 280)">
+    <circle cx="0" cy="0" r="50" fill="none" stroke="currentColor" stroke-width="2"/>
+    <!-- Gear teeth -->
+    <g stroke="currentColor" stroke-width="2" fill="none">
+      <rect x="45" y="-8" width="12" height="16" rx="1"/>
+      <rect x="58" y="20" width="16" height="12" rx="1"/>
+      <rect x="45" y="58" width="12" height="16" rx="1"/>
+      <rect x="20" y="74" width="16" height="12" rx="1"/>
+      <rect x="-57" y="58" width="12" height="16" rx="1"/>
+      <rect x="-74" y="20" width="16" height="12" rx="1"/>
+      <rect x="-57" y="-8" width="12" height="16" rx="1"/>
+      <rect x="-20" y="-74" width="16" height="12" rx="1"/>
+    </g>
+    <!-- R inside -->
+    <text x="0" y="10" font-size="32" font-weight="bold" text-anchor="middle" fill="currentColor">R</text>
+  </g>
+
+  <!-- Cloud (bottom left) -->
+  <g transform="translate(120, 420)">
+    <path d="M 20 40 Q 0 40 0 20 Q 0 0 30 0 Q 50 -10 60 10 Q 80 5 80 25 Q 80 40 60 40 Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    <!-- Arrow inside -->
+    <line x1="40" y1="30" x2="40" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    <polyline points="35,20 40,15 45,20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+
+  <!-- Settings/Gear (bottom right) -->
+  <g transform="translate(580, 420)">
+    <g transform="translate(40, 35)">
+      <!-- Rectangle -->
+      <rect x="-25" y="-20" width="50" height="40" rx="4" fill="none" stroke="currentColor" stroke-width="2"/>
+      <!-- Gear circle top right -->
+      <circle cx="45" cy="-10" r="20" fill="none" stroke="currentColor" stroke-width="2"/>
+      <!-- Gear teeth -->
+      <g stroke="currentColor" stroke-width="1.5" fill="none">
+        <line x1="45" y1="-30" x2="45" y2="-35"/>
+        <line x1="60" y1="-15" x2="65" y2="-20"/>
+        <line x1="65" y1="5" x2="70" y2="10"/>
+        <line x1="45" y1="20" x2="45" y2="25"/>
+        <line x1="25" y1="5" x2="20" y2="10"/>
+        <line x1="30" y1="-15" x2="25" y2="-20"/>
+      </g>
+      <!-- Center circle for gear -->
+      <circle cx="45" cy="-10" r="4" fill="currentColor"/>
+    </g>
+  </g>
+
+  <!-- Connection lines -->
+  <g stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="5,5" opacity="0.5">
+    <path d="M 200 240 Q 300 200 320 200" stroke-dasharray="none"/>
+    <path d="M 380 240 Q 520 250 620 280"/>
+    <path d="M 140 280 Q 200 360 280 420"/>
+    <path d="M 320 260 Q 400 350 540 420"/>
+    <path d="M 620 330 Q 620 370 620 420"/>
+    <path d="M 580 160 Q 520 180 500 220"/>
+  </g>
+</svg>
