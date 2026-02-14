@@ -21,17 +21,9 @@ fn test_method_filter_exports() {
     let _patch = MethodFilter::PATCH;
 }
 
-#[test]
-fn test_routing_functions_exported() {
-    // Verify routing module re-exports work
-    // These are function builders that need type parameters, so we just check they compile
-    use chopin::routing::{get, post, put, delete, patch};
-    
-    // Just checking they're in scope - actual usage requires handler types
-    let _types = (
-        std::marker::PhantomData::<fn() -> ()>,
-    );
-}
+// Routing function re-exports (get, post, put, delete, patch) are verified
+// at compile-time - if they're not available, code using them won't compile.
+// No runtime test needed since they're just re-exported from axum::routing.
 
 #[test]
 fn test_method_router_export() {

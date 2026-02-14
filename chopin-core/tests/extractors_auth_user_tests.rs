@@ -248,11 +248,27 @@ async fn test_case_sensitive_bearer_prefix() {
 
 #[tokio::test]
 async fn test_expired_token_fails() {
+    use jsonwebtoken::{encode, EncodingKey, Header};
+    use chrono::Utc;
+    
     let config = Arc::new(test_config());
     let user_id = 42;
     
-    // Create token with 0 hour expiry (expires immediately)
-    let token = auth::create_token(user_id, &config.jwt_secret, 0).expect("Failed to create token");
+    // Manually create a token that expired 2 minutes ago (beyond the 60s leeway)
+    let now = Utc::now();
+    let expired_time = now - chrono::Duration::minutes(2);
+    
+    let claims = auth::Claims {
+        sub: user_id.to_string(),
+        exp: expired_time.timestamp() as usize,
+        iat: (expired_time - chrono::Duration::hours(1)).timestamp() as usize,
+    };
+    
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(config.jwt_secret.as_bytes()),
+    ).expect("Failed to create expired token");
 
     let mut req = Request::builder()
         .header("Authorization", format!("Bearer {}", token))
