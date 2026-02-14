@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-chopin = { version = "0.2.0", path = "../chopin-core" }
+chopin = { version = "0.2.3", path = "../chopin-core" }
 utoipa = { version = "5", features = ["yaml"] }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
