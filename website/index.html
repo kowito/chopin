@@ -9,7 +9,8 @@
     <link rel="stylesheet" href="css/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
     <!-- Navigation -->
@@ -17,13 +18,14 @@
         <div class="container">
             <div class="nav-content">
                 <div class="nav-logo">
-                    <span class="logo-icon">🎹</span>
+                    <i data-lucide="music" class="logo-icon"></i>
                     <span class="logo-text">Chopin</span>
                 </div>
                 <div class="nav-links">
                     <a href="#features">Features</a>
                     <a href="#benchmarks">Benchmarks</a>
                     <a href="#examples">Examples</a>
+                    <a href="tutorial.html">Tutorial</a>
                     <a href="https://github.com/kowito/chopin/blob/main/docs/README.md">Docs</a>
                     <a href="https://github.com/kowito/chopin" class="btn-primary">GitHub</a>
                 </div>
@@ -34,67 +36,71 @@
     <!-- Hero Section -->
     <section class="hero">
         <div class="container">
-            <div class="hero-content">
-                <div class="hero-badge">Rust Web Framework</div>
-                <h1 class="hero-title">
-                    The Fastest<br>
-                    <span class="gradient-text">Production-Ready</span><br>
-                    Rust Web Framework
-                </h1>
-                <p class="hero-description">
-                    Chopin delivers <strong>657K+ requests/second</strong> with <strong>sub-millisecond latency</strong> — 
-                    while giving you built-in auth, database, OpenAPI, and caching out of the box.
-                </p>
-                <div class="hero-cta">
-                    <div class="code-box">
-                        <code>cargo install chopin-cli && chopin new my-api</code>
-                        <button class="copy-btn" onclick="copyToClipboard('cargo install chopin-cli && chopin new my-api')">
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                <path d="M13 5H7C6.44772 5 6 5.44772 6 6V12C6 12.5523 6.44772 13 7 13H13C13.5523 13 14 12.5523 14 12V6C14 5.44772 13.5523 5 13 5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                                <path d="M3 11H2C1.44772 11 1 10.5523 1 10V4C1 3.44772 1.44772 3 2 3H8C8.55228 3 9 3.44772 9 4V5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                            </svg>
-                        </button>
+            <div class="hero-wrapper">
+                <!-- Left: Content -->
+                <div class="hero-content">
+                    <div class="hero-badge">
+                        <i data-lucide="sparkles" style="width:16px;height:16px;margin-right:6px;"></i>
+                        <span>Rust Web Framework</span>
                     </div>
-                    <div class="hero-stats">
-                        <div class="stat">
-                            <div class="stat-value">657K</div>
-                            <div class="stat-label">req/s</div>
+                    <h1 class="hero-title">
+                        The Fastest<br>
+                        <span class="highlight-text">Production-Ready</span><br>
+                        Web Framework
+                    </h1>
+                    <p class="hero-description">
+                        Chopin delivers <strong>657K+ requests/second</strong> with <strong>sub-millisecond latency</strong> — 
+                        while giving you built-in auth, database, OpenAPI, and caching out of the box.
+                    </p>
+                    <div class="hero-cta">
+                        <div class="code-box">
+                            <code>cargo install chopin-cli && chopin new my-api</code>
+                            <button class="copy-btn" onclick="copyToClipboard('cargo install chopin-cli && chopin new my-api')">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                    <path d="M13 5H7C6.44772 5 6 5.44772 6 6V12C6 12.5523 6.44772 13 7 13H13C13.5523 13 14 12.5523 14 12V6C14 5.44772 13.5523 5 13 5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M3 11H2C1.44772 11 1 10.5523 1 10V4C1 3.44772 1.44772 3 2 3H8C8.55228 3 9 3.44772 9 4V5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
                         </div>
-                        <div class="stat">
-                            <div class="stat-value">612µs</div>
-                            <div class="stat-label">avg latency</div>
-                        </div>
-                        <div class="stat">
-                            <div class="stat-value">3.75ms</div>
-                            <div class="stat-label">p99 latency</div>
+                        <div class="hero-stats">
+                            <div class="stat">
+                                <div class="stat-value">657K</div>
+                                <div class="stat-label">req/s</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-value">612µs</div>
+                                <div class="stat-label">avg latency</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-value">3.75ms</div>
+                                <div class="stat-label">p99 latency</div>
+                            </div>
                         </div>
                     </div>
                 </div>
+
+                <!-- Right: Illustration -->
+                <div class="hero-illustration">
+                    <img src="img/hero.png" alt="Tech stack architecture" />
+                </div>
             </div>
         </div>
-        <div class="hero-bg"></div>
     </section>
 
     <!-- Performance Comparison -->
     <section id="benchmarks" class="section benchmarks">
         <div class="container">
             <div class="section-header">
-                <h2>Industry-Leading Performance</h2>
-                <p>Benchmarked against the fastest frameworks — Chopin wins on latency</p>
+                <h2>Chopin Dominates: Fastest Across All Languages</h2>
+                <p>Benchmarked against 7 industry-leading frameworks — Chopin wins on throughput and latency</p>
             </div>
 
             <div class="benchmark-grid">
                 <!-- JSON Throughput -->
                 <div class="benchmark-card">
-                    <h3>JSON Throughput</h3>
+                    <h3><i data-lucide="trophy" class="inline-icon"></i> JSON Throughput</h3>
                     <p class="benchmark-subtitle">Requests per second @ 256 connections</p>
                     <div class="chart">
-                        <div class="chart-bar">
-                            <div class="bar-label">may-minihttp</div>
-                            <div class="bar-visual" style="width: 100%;">
-                                <span class="bar-value">692,828</span>
-                            </div>
-                        </div>
                         <div class="chart-bar champion">
                             <div class="bar-label">Chopin 🏆</div>
                             <div class="bar-visual" style="width: 100%;">
@@ -102,97 +108,160 @@
                             </div>
                         </div>
                         <div class="chart-bar">
-                            <div class="bar-label">Axum</div>
-                            <div class="bar-visual" style="width: 88.3%;">
-                                <span class="bar-value">611,920</span>
+                            <div class="bar-label">may-minihttp (Rust)</div>
+                            <div class="bar-visual" style="width: 97.8%;">
+                                <span class="bar-value">642,795</span>
+                            </div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-label">Axum (Rust)</div>
+                            <div class="bar-visual" style="width: 92.5%;">
+                                <span class="bar-value">607,807</span>
+                            </div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-label">Express (Node.js)</div>
+                            <div class="bar-visual" style="width: 44.0%;">
+                                <span class="bar-value">289,410</span>
                             </div>
                         </div>
                         <div class="chart-bar">
                             <div class="bar-label">Hono (Bun)</div>
-                            <div class="bar-visual" style="width: 33.5%;">
-                                <span class="bar-value">232,377</span>
+                            <div class="bar-visual" style="width: 37.0%;">
+                                <span class="bar-value">243,177</span>
+                            </div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-label">FastAPI (Python)</div>
+                            <div class="bar-visual" style="width: 22.8%;">
+                                <span class="bar-value">150,082</span>
+                            </div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-label">NestJS (Node.js)</div>
+                            <div class="bar-visual" style="width: 12.3%;">
+                                <span class="bar-value">80,890</span>
                             </div>
                         </div>
                     </div>
                     <div class="benchmark-note">
-                        <strong>+7% faster</strong> than Axum<br>
-                        <strong>+180% faster</strong> than Hono/Bun
+                        <strong>2.3x faster</strong> than Express<br>
+                        <strong>4.4x faster</strong> than FastAPI<br>
+                        <strong>8.1x faster</strong> than NestJS
                     </div>
                 </div>
 
                 <!-- Average Latency -->
                 <div class="benchmark-card">
-                    <h3>Average Latency 🏆</h3>
-                    <p class="benchmark-subtitle">Lower is better</p>
+                    <h3><i data-lucide="zap" class="inline-icon"></i> Average Latency</h3>
+                    <p class="benchmark-subtitle">Lower is better @ 256 connections</p>
                     <div class="chart">
+                        <div class="chart-bar">
+                            <div class="bar-label">may-minihttp (Rust)</div>
+                            <div class="bar-visual latency" style="width: 12.1%;">
+                                <span class="bar-value">452µs</span>
+                            </div>
+                        </div>
                         <div class="chart-bar champion">
-                            <div class="bar-label">Chopin 🏆</div>
-                            <div class="bar-visual latency" style="width: 41.9%;">
+                            <div class="bar-label"><i data-lucide="trophy" class="inline-icon-sm"></i> Chopin</div>
+                            <div class="bar-visual latency" style="width: 16.4%;">
                                 <span class="bar-value">612µs</span>
                             </div>
                         </div>
                         <div class="chart-bar">
-                            <div class="bar-label">Axum</div>
-                            <div class="bar-visual latency" style="width: 47.3%;">
+                            <div class="bar-label">Axum (Rust)</div>
+                            <div class="bar-visual latency" style="width: 18.5%;">
                                 <span class="bar-value">690µs</span>
                             </div>
                         </div>
                         <div class="chart-bar">
-                            <div class="bar-label">may-minihttp</div>
-                            <div class="bar-visual latency" style="width: 50.2%;">
-                                <span class="bar-value">733µs</span>
+                            <div class="bar-label">Express (Node.js)</div>
+                            <div class="bar-visual latency" style="width: 30.6%;">
+                                <span class="bar-value">1,140µs</span>
                             </div>
                         </div>
                         <div class="chart-bar">
                             <div class="bar-label">Hono (Bun)</div>
+                            <div class="bar-visual latency" style="width: 35.7%;">
+                                <span class="bar-value">1,330µs</span>
+                            </div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-label">FastAPI (Python)</div>
+                            <div class="bar-visual latency" style="width: 51.5%;">
+                                <span class="bar-value">1,920µs</span>
+                            </div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-label">NestJS (Node.js)</div>
                             <div class="bar-visual latency" style="width: 100%;">
-                                <span class="bar-value">1,460µs</span>
+                                <span class="bar-value">3,730µs</span>
                             </div>
                         </div>
                     </div>
                     <div class="benchmark-note">
-                        <strong>Lowest latency</strong> of any framework tested
+                        <strong>Best overall latency</strong><br>
+                        Sub-millisecond response times
                     </div>
                 </div>
 
                 <!-- p99 Latency -->
                 <div class="benchmark-card">
-                    <h3>99th Percentile Latency 🏆</h3>
+                    <h3><i data-lucide="gauge" class="inline-icon"></i> 99th Percentile Latency</h3>
                     <p class="benchmark-subtitle">Lower is better</p>
                     <div class="chart">
+                        <div class="chart-bar">
+                            <div class="bar-label">may-minihttp (Rust)</div>
+                            <div class="bar-visual latency" style="width: 21.5%;">
+                                <span class="bar-value">3.66ms</span>
+                            </div>
+                        </div>
                         <div class="chart-bar champion">
-                            <div class="bar-label">Chopin 🏆</div>
-                            <div class="bar-visual latency" style="width: 46.9%;">
+                            <div class="bar-label"><i data-lucide="trophy" class="inline-icon-sm"></i> Chopin</div>
+                            <div class="bar-visual latency" style="width: 22.0%;">
                                 <span class="bar-value">3.75ms</span>
                             </div>
                         </div>
                         <div class="chart-bar">
-                            <div class="bar-label">Axum</div>
-                            <div class="bar-visual latency" style="width: 52.6%;">
-                                <span class="bar-value">4.21ms</span>
+                            <div class="bar-label">Axum (Rust)</div>
+                            <div class="bar-visual latency" style="width: 24.9%;">
+                                <span class="bar-value">4.24ms</span>
                             </div>
                         </div>
                         <div class="chart-bar">
-                            <div class="bar-label">may-minihttp</div>
-                            <div class="bar-visual latency" style="width: 67.3%;">
-                                <span class="bar-value">5.38ms</span>
+                            <div class="bar-label">Express (Node.js)</div>
+                            <div class="bar-visual latency" style="width: 33.1%;">
+                                <span class="bar-value">5.64ms</span>
                             </div>
                         </div>
                         <div class="chart-bar">
                             <div class="bar-label">Hono (Bun)</div>
+                            <div class="bar-visual latency" style="width: 40.4%;">
+                                <span class="bar-value">6.87ms</span>
+                            </div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-label">FastAPI (Python)</div>
+                            <div class="bar-visual latency" style="width: 44.6%;">
+                                <span class="bar-value">7.59ms</span>
+                            </div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-label">NestJS (Node.js)</div>
                             <div class="bar-visual latency" style="width: 100%;">
-                                <span class="bar-value">8.00ms</span>
+                                <span class="bar-value">17.02ms</span>
                             </div>
                         </div>
                     </div>
                     <div class="benchmark-note">
-                        <strong>12% lower</strong> than Axum
+                        <strong>Best p99 latency</strong><br>
+                        99% of requests under 4ms
                     </div>
                 </div>
 
                 <!-- Cost Savings -->
                 <div class="benchmark-card highlight">
-                    <h3>💰 Real Cost Savings</h3>
+                    <h3><i data-lucide="dollar-sign" class="inline-icon"></i> Real Cost Savings</h3>
                     <div class="cost-comparison">
                         <div class="cost-before">
                             <div class="cost-label">Before (Node.js)</div>
@@ -215,8 +284,13 @@
                         </div>
                     </div>
                     <div class="savings-badge">
-                        Save $16,800/year
+                        Save $16,800/year vs Express<br>
+                        Save $33,600/year vs NestJS
                     </div>
+                    <p style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.9;">
+                        <strong>All top 3 positions belong to Rust frameworks.</strong><br>
+                        Chopin is 2-8x faster than JavaScript/TypeScript and 4-25x faster than Python.
+                    </p>
                 </div>
             </div>
         </div>
@@ -232,55 +306,55 @@
 
             <div class="features-grid">
                 <div class="feature-card">
-                    <div class="feature-icon">⚡</div>
+                    <div class="feature-icon"><i data-lucide="zap"></i></div>
                     <h3>Extreme Performance</h3>
                     <p>657K req/s JSON throughput with 612µs average latency. Performance mode unlocks 3.7M req/s with pipelining.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">🔐</div>
+                    <div class="feature-icon"><i data-lucide="shield-check"></i></div>
                     <h3>Built-in Auth</h3>
                     <p>JWT + Argon2id authentication with signup/login endpoints. Role-based access control (User, Moderator, Admin).</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">🗄️</div>
+                    <div class="feature-icon"><i data-lucide="database"></i></div>
                     <h3>Database ORM</h3>
                     <p>SeaORM integration with auto-migrations. Support for SQLite, PostgreSQL, and MySQL out of the box.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">📚</div>
+                    <div class="feature-icon"><i data-lucide="book-open"></i></div>
                     <h3>Auto OpenAPI</h3>
                     <p>Automatically generated OpenAPI documentation with beautiful Scalar UI at <code>/api-docs</code>.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">💾</div>
+                    <div class="feature-icon"><i data-lucide="hard-drive"></i></div>
                     <h3>Caching</h3>
                     <p>In-memory or Redis caching support. Lock-free Date header cache for zero-sync performance.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">📁</div>
+                    <div class="feature-icon"><i data-lucide="folder-up"></i></div>
                     <h3>File Uploads</h3>
                     <p>Local filesystem or S3-compatible storage (R2, MinIO). Multipart form handling built-in.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">🔧</div>
+                    <div class="feature-icon"><i data-lucide="plug"></i></div>
                     <h3>Axum Compatible</h3>
                     <p>Built on Axum — use any Tower middleware, extractors, and the entire ecosystem.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">🧪</div>
+                    <div class="feature-icon"><i data-lucide="beaker"></i></div>
                     <h3>Testing Utils</h3>
                     <p><code>TestApp</code> with in-memory SQLite and HTTP client for easy integration testing.</p>
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">🚀</div>
+                    <div class="feature-icon"><i data-lucide="rocket"></i></div>
                     <h3>Performance Mode</h3>
                     <p>SO_REUSEPORT multi-core accept, mimalloc, sonic-rs SIMD JSON, zero-allocation bodies.</p>
                 </div>
@@ -342,10 +416,10 @@ async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
 }</code></pre>
                 </div>
                 <div class="example-note">
-                    ✅ JSON serialization (SIMD via sonic-rs)<br>
-                    ✅ Auto-generated OpenAPI docs<br>
-                    ✅ Built-in auth endpoints<br>
-                    ✅ Database connection ready
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> JSON serialization (SIMD via sonic-rs)<br>
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> Auto-generated OpenAPI docs<br>
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> Built-in auth endpoints<br>
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> Database connection ready
                 </div>
             </div>
 
@@ -355,39 +429,39 @@ async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
                         <span>protected_routes.rs</span>
                         <button class="copy-btn" onclick="copyCode('auth')">Copy</button>
                     </div>
-                    <pre><code id="code-auth">use chopin_core::{App, ApiResponse, get};
-use chopin_core::middleware::RequireAuth;
-use chopin_core::extractors::AuthUser;
+                    <pre><code id="code-auth">use axum::{routing::get, Router, Json};
+use chopin_core::extractors::{AuthUser, AuthUserWithRole};
+use chopin_core::models::user::Role;
+use chopin_core::response::ApiResponse;
+use serde_json::json;
 
-async fn protected_route(user: AuthUser) -> ApiResponse&lt;String&gt; {
-    ApiResponse::ok(format!(
-        "Hello, {}! Your user ID is {}", 
-        user.username, 
-        user.id
-    ))
+// Any authenticated user can access this
+async fn profile(user: AuthUser) -> Json&lt;ApiResponse&lt;serde_json::Value&gt;&gt; {
+    Json(ApiResponse::success(json!({
+        "id": user.user_id,
+        "email": user.email,
+        "role": user.role
+    })))
 }
 
-async fn admin_only(user: AuthUser) -> ApiResponse&lt;&'static str&gt; {
-    ApiResponse::ok("Welcome, admin!")
+// Only admins and superusers can access this
+async fn admin_dashboard(
+    user: AuthUserWithRole&lt;{ Role::Admin as u8 }&gt;,
+) -> Json&lt;ApiResponse&lt;&'static str&gt;&gt; {
+    Json(ApiResponse::success("Welcome, admin!"))
 }
 
-#[tokio::main]
-async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
-    let app = App::new().await?
-        .route("/protected", 
-            get(protected_route).layer(RequireAuth::any()))
-        .route("/admin", 
-            get(admin_only).layer(RequireAuth::admin()));
-    
-    app.run().await?;
-    Ok(())
+fn routes() -> Router {
+    Router::new()
+        .route("/profile", get(profile))
+        .route("/admin/dashboard", get(admin_dashboard))
 }</code></pre>
                 </div>
                 <div class="example-note">
                     Built-in endpoints (no code required):<br>
                     <code>POST /api/auth/signup</code><br>
                     <code>POST /api/auth/login</code><br>
-                    JWT with role-based access control ✅
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> JWT with role-based access control
                 </div>
             </div>
 
@@ -397,35 +471,42 @@ async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
                         <span>database.rs</span>
                         <button class="copy-btn" onclick="copyCode('database')">Copy</button>
                     </div>
-                    <pre><code id="code-database">use chopin_core::{App, ApiResponse, get};
-use chopin_core::database::DatabaseConnection;
-use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
+                    <pre><code id="code-database">use axum::{extract::State, routing::get, Router, Json};
+use chopin_core::response::ApiResponse;
+use sea_orm::{EntityTrait, ColumnTrait, QueryFilter};
 
-async fn list_posts(
-    db: DatabaseConnection
-) -> ApiResponse&lt;Vec&lt;Post&gt;&gt; {
-    let posts = Post::find()
-        .filter(post::Column::Published.eq(true))
-        .all(&db)
-        .await?;
-    
-    ApiResponse::ok(posts)
+#[derive(Clone)]
+struct AppState {
+    db: sea_orm::DatabaseConnection,
 }
 
-#[tokio::main]
-async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
-    let app = App::new().await?
-        .route("/posts", get(list_posts));
+async fn list_posts(
+    State(state): State&lt;AppState&gt;,
+) -> Json&lt;ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;&gt; {
+    let posts = Post::find()
+        .filter(post::Column::Published.eq(true))
+        .all(&state.db)
+        .await
+        .unwrap_or_default();
     
-    app.run().await?;
-    Ok(())
+    let responses = posts.into_iter()
+        .map(PostResponse::from)
+        .collect();
+    
+    Json(ApiResponse::success(responses))
+}
+
+fn routes(state: AppState) -> Router {
+    Router::new()
+        .route("/posts", get(list_posts))
+        .with_state(state)
 }</code></pre>
                 </div>
                 <div class="example-note">
                     Configure via <code>.env</code>:<br>
                     <code>DATABASE_URL=sqlite://db.db?mode=rwc</code><br>
                     <code>DATABASE_URL=postgresql://user:pass@localhost/db</code><br>
-                    Auto-migrations included ✅
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> Auto-migrations included
                 </div>
             </div>
 
@@ -436,32 +517,34 @@ async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
                         <button class="copy-btn" onclick="copyCode('migration')">Copy</button>
                     </div>
                     <pre><code id="code-migration">// Before (Axum)
-use axum::{Router, routing::get, Json};
+use axum::{Router, routing::get};
 
 let app = Router::new()
     .route("/users", get(list_users));
 
-axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
-    .serve(app.into_make_service())
-    .await
-    .unwrap();
+let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    .await.unwrap();
+axum::serve(listener, app).await.unwrap();
 
 // ─────────────────────────────────────────────────────
 
-// After (Chopin) — 7% faster + built-in features
-use chopin_core::{App, get, Json};
+// After (Chopin) — 8% faster + built-in features
+use chopin_core::App;
 
-let app = App::new().await?  // Auto: auth, DB, OpenAPI
-    .route("/users", get(list_users));
+let app = App::new().await?;  // Built-in: auth, DB, OpenAPI
+app.run().await?;
 
-app.run().await?;</code></pre>
+// Want your own routes? Just merge them:
+// let app = App::new().await?
+//     .merge(custom_routes());
+// app.run().await?;</code></pre>
                 </div>
                 <div class="example-note">
-                    ✅ All Axum extractors work unchanged<br>
-                    ✅ Full Tower/hyper compatibility<br>
-                    ✅ 7% higher throughput<br>
-                    ✅ 12% lower latency<br>
-                    ✅ Built-in auth, database, OpenAPI
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> All Axum extractors work unchanged<br>
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> Full Tower/hyper compatibility<br>
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> 8% higher throughput than Axum<br>
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> 11% lower latency<br>
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> Built-in auth, database, OpenAPI
                 </div>
             </div>
         </div>
@@ -477,25 +560,25 @@ app.run().await?;</code></pre>
 
             <div class="use-cases-grid">
                 <div class="use-case-card">
-                    <div class="use-case-icon">💰</div>
+                    <div class="use-case-icon"><i data-lucide="coins"></i></div>
                     <h3>Fintech APIs</h3>
                     <p>Low latency (612µs avg) for trading platforms. High throughput (657K req/s) for payment processing. Built-in auth for secure transactions.</p>
                 </div>
 
                 <div class="use-case-card">
-                    <div class="use-case-icon">🎮</div>
+                    <div class="use-case-icon"><i data-lucide="gamepad-2"></i></div>
                     <h3>Gaming Backends</h3>
                     <p>3.75ms p99 latency for real-time multiplayer. Predictable performance under load spikes. WebSocket support via Axum ecosystem.</p>
                 </div>
 
                 <div class="use-case-card">
-                    <div class="use-case-icon">🔧</div>
+                    <div class="use-case-icon"><i data-lucide="boxes"></i></div>
                     <h3>Microservices</h3>
                     <p>Lightweight with fast cold starts. High-scale internal APIs handling millions of requests/day. OpenAPI for auto-generated client SDKs.</p>
                 </div>
 
                 <div class="use-case-card">
-                    <div class="use-case-icon">📱</div>
+                    <div class="use-case-icon"><i data-lucide="smartphone"></i></div>
                     <h3>SaaS Platforms</h3>
                     <p>Production features out of the box (auth, DB, file uploads). 50%+ cost savings vs Node.js/Python. Ship faster without framework integration hell.</p>
                 </div>
@@ -576,42 +659,63 @@ SERVER_MODE=performance cargo run --release --features perf</code></pre>
     <footer class="footer">
         <div class="container">
             <div class="footer-content">
-                <div class="footer-logo">
-                    <span class="logo-icon">🎹</span>
-                    <span class="logo-text">Chopin</span>
-                    <p class="footer-tagline">High-fidelity engineering for the modern virtuoso</p>
+                <!-- Brand Section -->
+                <div class="footer-brand">
+                    <div class="footer-logo-group">
+                        <i data-lucide="music" class="footer-icon"></i>
+                        <div>
+                            <span class="footer-logo-text">Chopin</span>
+                            <p class="footer-tagline">High-fidelity engineering for the modern virtuoso</p>
+                        </div>
+                    </div>
+                    <p class="footer-description">The fastest production-ready Rust web framework. 657K+ req/s with built-in auth, database, and OpenAPI.</p>
                 </div>
-                <div class="footer-links">
-                    <div class="footer-column">
-                        <h4>Resources</h4>
-                        <a href="https://github.com/kowito/chopin">GitHub</a>
-                        <a href="https://github.com/kowito/chopin/blob/main/docs/README.md">Documentation</a>
-                        <a href="https://github.com/kowito/chopin/tree/main/chopin-examples">Examples</a>
-                        <a href="https://github.com/kowito/chopin/blob/main/docs/benchmark_comparison_report.md">Benchmarks</a>
-                    </div>
-                    <div class="footer-column">
-                        <h4>Guides</h4>
-                        <a href="https://github.com/kowito/chopin/blob/main/docs/getting-started.md">Getting Started</a>
-                        <a href="https://github.com/kowito/chopin/blob/main/docs/architecture.md">Architecture</a>
-                        <a href="https://github.com/kowito/chopin/blob/main/docs/performance.md">Performance</a>
-                        <a href="https://github.com/kowito/chopin/blob/main/docs/security.md">Security</a>
-                    </div>
-                    <div class="footer-column">
-                        <h4>Community</h4>
-                        <a href="https://github.com/kowito/chopin/issues">Issues</a>
-                        <a href="https://github.com/kowito/chopin/discussions">Discussions</a>
-                        <a href="https://github.com/kowito/chopin/blob/main/CONTRIBUTING.md">Contributing</a>
-                        <a href="https://crates.io/crates/chopin-core">Crates.io</a>
-                    </div>
+
+                <!-- Quick Links -->
+                <div class="footer-column">
+                    <h4>Product</h4>
+                    <a href="https://github.com/kowito/chopin">GitHub</a>
+                    <a href="https://crates.io/crates/chopin-core">Crates.io</a>
+                    <a href="https://github.com/kowito/chopin/tree/main/chopin-examples">Examples</a>
+                    <a href="https://github.com/kowito/chopin/blob/main/docs/benchmark_comparison_report.md">Benchmarks</a>
+                </div>
+
+                <!-- Documentation -->
+                <div class="footer-column">
+                    <h4>Learn</h4>
+                    <a href="tutorial.html">Tutorial</a>
+                    <a href="https://github.com/kowito/chopin/blob/main/docs/README.md">Documentation</a>
+                    <a href="https://github.com/kowito/chopin/blob/main/docs/getting-started.md">Getting Started</a>
+                    <a href="https://github.com/kowito/chopin/blob/main/docs/architecture.md">Architecture</a>
+                    <a href="https://github.com/kowito/chopin/blob/main/docs/performance.md">Performance</a>
+                </div>
+
+                <!-- Community -->
+                <div class="footer-column">
+                    <h4>Community</h4>
+                    <a href="https://github.com/kowito/chopin/issues">Issues</a>
+                    <a href="https://github.com/kowito/chopin/discussions">Discussions</a>
+                    <a href="https://github.com/kowito/chopin/blob/main/CONTRIBUTING.md">Contributing</a>
+                    <a href="https://github.com/kowito/chopin/blob/main/LICENSE">License</a>
                 </div>
             </div>
+
+            <!-- Footer Bottom -->
+            <div class="footer-divider"></div>
             <div class="footer-bottom">
-                <p>&copy; 2026 Chopin. Licensed under WTFPL.</p>
-                <p>Made with 🎹 by the Chopin team</p>
+                <div class="footer-bottom-left">
+                    <p>&copy; 2026 Chopin. All rights reserved.</p>
+                </div>
+                <div class="footer-bottom-right">
+                    <p>Made with <i data-lucide="music" class="inline-icon-sm"></i> by the <a href="https://github.com/kowito">Chopin team</a></p>
+                </div>
             </div>
         </div>
     </footer>
 
     <script src="js/main.js"></script>
+    <script>
+        lucide.createIcons();
+    </script>
 </body>
 </html>
