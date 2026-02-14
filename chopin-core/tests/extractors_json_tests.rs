@@ -233,7 +233,7 @@ async fn test_json_with_numbers() {
 
     let payload = NumberPayload {
         int: 9223372036854775807,
-        float: 3.14159265359,
+        float: std::f64::consts::PI,
     };
 
     let json_str = serde_json::to_string(&payload).unwrap();

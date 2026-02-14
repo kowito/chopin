@@ -130,7 +130,7 @@ fn test_fast_route_debug() {
 
 #[test]
 fn test_multiple_fast_routes() {
-    let routes = vec![
+    let routes = [
         FastRoute::json("/json", br#"{"message":"Hello, World!"}"#),
         FastRoute::text("/plaintext", b"Hello, World!"),
         FastRoute::json("/api/status", br#"{"status":"ok"}"#).cors().get_only(),

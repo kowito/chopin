@@ -11,7 +11,7 @@ async fn test_date_cache_initialization() {
     
     // Should be valid ASCII
     let header_str = header.to_str().expect("Invalid ASCII in date header");
-    assert!(header_str.len() > 0);
+    assert!(!header_str.is_empty());
     
     // Should be a valid HTTP date format (e.g., "Mon, 14 Feb 2026 12:34:56 GMT")
     assert!(header_str.contains("GMT"));
