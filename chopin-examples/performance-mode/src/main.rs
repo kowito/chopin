@@ -1,33 +1,30 @@
 //! # Performance Mode Example
 //!
-//! Deep dive into Chopin's dual-mode architecture with benchmarks and code patterns.
+//! Deep dive into Chopin's unified architecture with benchmarks and code patterns.
 //!
-//! ## Standard Mode (Default)
+//! Chopin uses a single `ChopinService` dispatcher for all requests:
+//! - FastRoute match → zero-alloc pre-computed response
+//! - No match → Axum Router with full middleware
 //!
-//! Full Axum pipeline with all middleware:
+//! Each FastRoute can be individually configured with decorators:
+//! - `.cors()` — permissive CORS + automatic OPTIONS preflight
+//! - `.cache_control()` — Cache-Control header
+//! - `.get_only()` / `.methods()` — HTTP method filtering
+//! - `.header()` — any custom header
+//!
+//! All decorators are pre-computed at registration time — zero per-request cost.
+//!
+//! ## Default (single listener)
+//!
 //! ```bash
 //! cargo run -p chopin-performance-mode
 //! ```
 //!
-//! **Features:**
-//! - Full middleware stack
-//! - CORS, tracing, request-id
-//! - Graceful shutdown
-//! - ~150K-300K req/s typical
+//! ## With SO_REUSEPORT (multi-core)
 //!
-//! ## Performance Mode
-//!
-//! Raw hyper HTTP/1.1 with SO_REUSEPORT:
 //! ```bash
-//! SERVER_MODE=performance cargo run -p chopin-performance-mode --release
+//! REUSEPORT=true cargo run -p chopin-performance-mode --release
 //! ```
-//!
-//! **Features:**
-//! - Raw hyper service
-//! - SO_REUSEPORT multi-core accept loops
-//! - `/json` and `/plaintext` pre-computed (zero-alloc)
-//! - mimalloc global allocator
-//! - ~500K-1.7M+ req/s benchmark
 //!
 //! ## Benchmark with wrk
 //!
@@ -36,7 +33,7 @@
 //! brew install wrk
 //!
 //! # Start server (in another terminal)
-//! SERVER_MODE=performance cargo run -p chopin-performance-mode --release
+//! REUSEPORT=true cargo run -p chopin-performance-mode --release
 //!
 //! # Benchmark endpoints
 //! wrk -t4 -c256 -d10s http://127.0.0.1:3000/json
@@ -46,74 +43,52 @@
 //!
 //! ## Code Patterns
 //!
-//! ### Standard Mode (Default)
+//! ### Per-route trade-off with decorators
 //!
 //! ```rust ignore
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let app = chopin_core::App::new().await?;
-//!     app.run().await?;  // Uses axum::serve with full middleware
-//!     Ok(())
-//! }
+//! use chopin_core::{App, FastRoute};
+//!
+//! let app = App::new().await?
+//!     // Bare: maximum performance, no middleware
+//!     .fast_route(FastRoute::json("/json", br#"{"message":"Hello"}"#))
+//!
+//!     // With CORS + method filter (still zero per-request cost)
+//!     .fast_route(
+//!         FastRoute::json("/api/status", br#"{"status":"ok"}"#)
+//!             .cors()
+//!             .get_only()
+//!     )
+//!
+//!     // With Cache-Control
+//!     .fast_route(
+//!         FastRoute::text("/health", b"OK")
+//!             .cache_control("public, max-age=60")
+//!     );
 //! ```
 //!
 //! **Request flow:**
 //! ```
-//! Client → TCP Listener → Axum Router → Middleware Stack → Handler
+//! Client → ChopinService
+//!   ├─ GET /json        → FastRoute (bare, ~35ns)
+//!   ├─ GET /api/status  → FastRoute (+cors, auto OPTIONS, ~35ns)
+//!   ├─ POST /api/status → falls through to Axum (method not allowed on FastRoute)
+//!   ├─ OPTIONS /api/status → FastRoute (204 preflight response)
+//!   └─ /* → Axum Router → Middleware Stack → Handler
 //! ```
 //!
-//! ### Performance Mode
+//! ### Per-route trade-off matrix
 //!
-//! ```rust ignore
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     std::env::set_var("SERVER_MODE", "performance");
-//!     
-//!     let app = chopin_core::App::new().await?;
-//!     app.run().await?;  // Uses raw hyper + SO_REUSEPORT
-//!     Ok(())
-//! }
-//! ```
+//! | Feature | FastRoute (bare) | FastRoute (+decorators) | Axum Router |
+//! |---------|------------------|-------------------------|-------------|
+//! | Performance | ~35ns | ~35ns | ~1,000-5,000ns |
+//! | Throughput | ~28M req/s | ~28M req/s | ~200K-1M req/s |
+//! | CORS | — | `.cors()` | CorsLayer |
+//! | Cache-Control | — | `.cache_control()` | manual |
+//! | Method filter | — | `.methods()` | built-in |
+//! | Auth | — | — | middleware |
+//! | Logging | — | — | TraceLayer |
 //!
-//! **Request flow:**
-//! ```
-//! Client → SO_REUSEPORT X N cores
-//!   ├─ /json → ChopinService (pre-computed) → Response
-//!   ├─ /plaintext → ChopinService (pre-computed) → Response
-//!   └─ /* → Axum Router → Handler
-//! ```
-//!
-//! ### Environment Setup
-//!
-//! Create `.env` or set env vars:
-//!
-//! ```bash
-//! # Standard mode (default)
-//! SERVER_MODE=standard
-//! DATABASE_URL=sqlite:./app.db
-//! JWT_SECRET=your-secret-key
-//!
-//! # Performance mode
-//! SERVER_MODE=performance
-//! DATABASE_URL=sqlite::memory:
-//! JWT_SECRET=perf-benchmark
-//! ```
-//!
-//! ## Architecture Comparison
-//!
-//! | Aspect | Standard | Performance |
-//! |--------|----------|-------------|
-//! | Server | axum::serve | raw hyper |
-//! | TCP | Single listener | SO_REUSEPORT × CPU cores |
-//! | Middleware | Full stack | Minimal (perf paths only) |
-//! | `/json` | Through Axum | Pre-computed bytes (raw hyper) |
-//! | `/plaintext` | Through Axum | Pre-computed bytes (raw hyper) |
-//! | DateTime headers | Fresh per request | Cached 500ms |
-//! | Allocator | System malloc | mimalloc (via `perf` feature) |
-//! | LTO | enabled | fat (enabled) |
-//! | Codegen units | 1 | 1 |
-//! | Target CPU | native | native |
-//! | Use case | Dev, typical prod | Benchmarks, extreme throughput |
+//! **FastRoute is 28-142× faster** — decorators add zero per-request overhead.
 
 use chopin_core::{App, FastRoute};
 
@@ -123,14 +98,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    // Demonstrate performance mode via env var
-    let server_mode = std::env::var("SERVER_MODE").unwrap_or_else(|_| "standard".to_string());
+    // Show current configuration
+    let reuseport = std::env::var("REUSEPORT").unwrap_or_else(|_| "false".to_string());
 
     println!("\n🎹 Chopin Performance Mode Example");
-    println!("   → Mode: {}", server_mode);
-    println!(
-        "   → Run with: SERVER_MODE=performance cargo run -p chopin-performance-mode --release"
-    );
+    println!("   → REUSEPORT: {}", reuseport);
+    println!("   → Run with: REUSEPORT=true cargo run -p chopin-performance-mode --release");
     println!();
 
     if std::env::var("DATABASE_URL").is_err() {
@@ -142,10 +115,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = App::new()
         .await?
-        // Register benchmark endpoints as FastRoutes (zero-alloc in performance mode)
-        .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
-        .fast_route(FastRoute::text("/plaintext", b"Hello, World!"));
+        // Bare: maximum performance benchmark endpoints (zero-alloc, no middleware)
+        .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#).get_only())
+        .fast_route(FastRoute::text("/plaintext", b"Hello, World!").get_only())
+        // With CORS: frontend-accessible status endpoint (still zero per-request cost)
+        .fast_route(
+            FastRoute::json("/api/status", br#"{"status":"ok"}"#)
+                .cors()
+                .get_only()
+                .cache_control("public, max-age=5"),
+        );
 
+    // All other routes (/, /api/auth/*, /api-docs) go through Axum with full middleware
     app.run().await?;
 
     Ok(())

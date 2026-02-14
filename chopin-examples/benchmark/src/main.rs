@@ -1,7 +1,7 @@
 //! # Chopin Benchmark Server
 //!
 //! A minimal server designed for maximum throughput benchmarking.
-//! Uses `ServerMode::Performance` — raw hyper HTTP/1.1 with SO_REUSEPORT.
+//! Uses SO_REUSEPORT multi-core accept loops with per-core runtimes.
 //!
 //! Fast routes are registered via the `FastRoute` API — these bypass Axum
 //! entirely and serve pre-computed responses with zero heap allocation.
@@ -16,7 +16,7 @@
 //! ## Usage
 //!
 //! ```bash
-//! SERVER_MODE=performance DATABASE_URL=sqlite::memory: JWT_SECRET=bench \
+//! REUSEPORT=true DATABASE_URL=sqlite::memory: JWT_SECRET=bench \
 //!   cargo run -p chopin-benchmark --release
 //! ```
 //!
@@ -41,10 +41,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(tracing::Level::WARN)
         .init();
 
-    // SERVER_MODE=performance activates raw hyper + SO_REUSEPORT
+    // REUSEPORT=true activates SO_REUSEPORT multi-core accept loops
     // Set via environment or .env file
-    if std::env::var("SERVER_MODE").is_err() {
-        std::env::set_var("SERVER_MODE", "performance");
+    if std::env::var("REUSEPORT").is_err() {
+        std::env::set_var("REUSEPORT", "true");
     }
     if std::env::var("DATABASE_URL").is_err() {
         std::env::set_var("DATABASE_URL", "sqlite::memory:");
@@ -57,8 +57,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         // Register benchmark endpoints as FastRoutes.
         // These bypass Axum entirely — zero allocation, maximum throughput.
-        .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
-        .fast_route(FastRoute::text("/plaintext", b"Hello, World!"));
+        // .get_only() ensures only GET/HEAD hit the fast path; other methods
+        // fall through to the Axum Router.
+        .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#).get_only())
+        .fast_route(FastRoute::text("/plaintext", b"Hello, World!").get_only());
 
     app.run().await?;
 

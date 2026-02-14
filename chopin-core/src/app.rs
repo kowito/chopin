@@ -14,7 +14,7 @@ use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::cache::CacheService;
-use crate::config::{Config, ServerMode};
+use crate::config::Config;
 use crate::controllers::AppState;
 use crate::migrations::Migrator;
 use crate::openapi::ApiDoc;
@@ -97,7 +97,7 @@ impl App {
     /// Build the Axum router for API routes only.
     ///
     /// Fast routes registered via [`fast_route`](Self::fast_route) bypass this
-    /// Router entirely in performance mode — they are handled at the hyper layer.
+    /// Router entirely — they are handled at the hyper `ChopinService` layer.
     pub fn router(&self) -> Router {
         let config = Arc::new(self.config.clone());
         let is_dev = self.config.is_dev();
@@ -137,7 +137,10 @@ impl App {
     // ═══ Fast Route Builder API ═══
 
     /// Register a [`FastRoute`] — a zero-allocation static response endpoint
-    /// that bypasses Axum entirely in performance mode.
+    /// that bypasses Axum middleware.
+    ///
+    /// Use builder methods on the `FastRoute` to configure per-route behavior.
+    /// All decorators are pre-computed at registration time (zero per-request cost).
     ///
     /// # Example
     ///
@@ -145,8 +148,22 @@ impl App {
     /// use chopin_core::{App, FastRoute};
     ///
     /// let app = App::new().await?
+    ///     // Bare: maximum performance
     ///     .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#))
-    ///     .fast_route(FastRoute::text("/plaintext", b"Hello, World!"));
+    ///
+    ///     // With CORS + method filter (still zero per-request cost)
+    ///     .fast_route(
+    ///         FastRoute::json("/api/status", br#"{"status":"ok"}"#)
+    ///             .cors()
+    ///             .get_only()
+    ///     )
+    ///
+    ///     // With Cache-Control
+    ///     .fast_route(
+    ///         FastRoute::text("/health", b"OK")
+    ///             .cache_control("public, max-age=60")
+    ///     );
+    ///
     /// app.run().await?;
     /// ```
     pub fn fast_route(mut self, route: FastRoute) -> Self {
@@ -174,23 +191,25 @@ impl App {
 
     /// Run the application server.
     ///
-    /// Behaviour depends on [`ServerMode`]:
+    /// All requests flow through `ChopinService`:
+    /// - FastRoute match → zero-alloc pre-computed response
+    /// - No match → Axum Router with full middleware
     ///
-    /// - **Standard** — `axum::serve` with full middleware, graceful shutdown.
-    ///   Easy to use, great for development and typical production.
-    /// - **Performance** — Raw hyper HTTP/1.1 server with SO_REUSEPORT,
-    ///   multi-core accept loops. User-registered fast routes bypass Axum
-    ///   with zero allocation. All other routes go through the full middleware.
+    /// When `reuseport` is enabled (via `REUSEPORT=true` env var),
+    /// each CPU core gets its own SO_REUSEPORT listener and
+    /// single-threaded tokio runtime for maximum throughput.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         let addr = self.config.server_addr();
-        let mode = self.config.server_mode;
+        let reuseport = self.config.reuseport;
         let router = self.router();
         let fast_routes: Arc<[FastRoute]> = self.fast_routes.into();
 
         println!("\n🎹 Chopin server is running!");
-        println!("   → Mode:    {}", mode);
         println!("   → Server:  http://{}", addr);
         println!("   → API docs: http://{}/api-docs", addr);
+        if reuseport {
+            println!("   → SO_REUSEPORT: enabled (multi-core)");
+        }
         if !fast_routes.is_empty() {
             println!("   → Fast routes: {}", fast_routes.len());
             for r in fast_routes.iter() {
@@ -199,22 +218,21 @@ impl App {
         }
         println!();
 
-        tracing::info!("Chopin server running on http://{} (mode: {})", addr, mode);
+        tracing::info!(
+            "Chopin server running on http://{} (reuseport: {})",
+            addr,
+            reuseport
+        );
 
-        match mode {
-            ServerMode::Standard => {
-                // ─── Easy mode: full Axum pipeline ───
-                let listener = tokio::net::TcpListener::bind(&addr).await?;
-                axum::serve(listener, router)
-                    .with_graceful_shutdown(shutdown_signal())
-                    .await?;
-            }
-            ServerMode::Performance => {
-                // ─── Performance mode: raw hyper + SO_REUSEPORT ───
-                let socket_addr: std::net::SocketAddr = addr.parse()?;
-                crate::server::run_reuseport(socket_addr, fast_routes, router, shutdown_signal())
-                    .await?;
-            }
+        if reuseport {
+            // SO_REUSEPORT: per-core single-threaded runtimes
+            let socket_addr: std::net::SocketAddr = addr.parse()?;
+            crate::server::run_reuseport(socket_addr, fast_routes, router, shutdown_signal())
+                .await?;
+        } else {
+            // Single listener with ChopinService (FastRoute still works)
+            let listener = tokio::net::TcpListener::bind(&addr).await?;
+            crate::server::run_until(listener, fast_routes, router, shutdown_signal()).await?;
         }
 
         Ok(())

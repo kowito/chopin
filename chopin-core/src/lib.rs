@@ -28,8 +28,9 @@ pub mod testing;
 
 pub use app::App;
 pub use cache::CacheService;
-pub use config::{Config, ServerMode};
+pub use config::Config;
 pub use error::ChopinError;
+pub use hyper::Method;
 pub use response::ApiResponse;
 pub use server::FastRoute;
 pub use testing::{TestApp, TestClient, TestResponse};

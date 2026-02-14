@@ -1,38 +1,20 @@
 use serde::Deserialize;
 
-/// Server execution mode.
-///
-/// Controls how Chopin handles incoming HTTP connections.
-///
-/// - **Standard** — Full Axum pipeline with middleware, tracing, OpenAPI docs.
-///   Best for development / typical production workloads.
-/// - **Performance** — Raw hyper HTTP/1.1 server with SO_REUSEPORT, pre-baked
-///   static responses on `/json` and `/plaintext`, and multi-core accept loops.
-///   All other routes still go through Axum, but the bench hot-path is ZERO-alloc.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum ServerMode {
-    /// Full Axum pipeline (default). Easy to use, full middleware.
-    #[default]
-    Standard,
-    /// Raw hyper hot-path for maximum throughput.
-    Performance,
-}
-
-impl std::fmt::Display for ServerMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ServerMode::Standard => write!(f, "standard"),
-            ServerMode::Performance => write!(f, "performance"),
-        }
-    }
-}
-
 /// Application configuration loaded from environment variables.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    /// Server execution mode: "standard" (default) or "performance"
-    pub server_mode: ServerMode,
+    /// Enable SO_REUSEPORT multi-core accept loops for maximum throughput.
+    ///
+    /// When `true`, each CPU core gets its own TCP listener and
+    /// single-threaded tokio runtime — the same architecture used by
+    /// top TechEmpower Rust entries.
+    ///
+    /// When `false` (default), a single multi-thread tokio runtime
+    /// handles all connections.
+    ///
+    /// FastRoute endpoints work in both modes — they always bypass
+    /// Axum with zero allocation.
+    pub reuseport: bool,
 
     /// Database connection URL (e.g. sqlite://chopin.db, postgres://...)
     pub database_url: String,
@@ -90,14 +72,13 @@ impl Config {
         let _ = dotenvy::dotenv();
 
         Ok(Config {
-            server_mode: match std::env::var("SERVER_MODE")
-                .unwrap_or_else(|_| "standard".to_string())
-                .to_lowercase()
-                .as_str()
-            {
-                "performance" | "perf" | "fast" => ServerMode::Performance,
-                _ => ServerMode::Standard,
-            },
+            reuseport: matches!(
+                std::env::var("REUSEPORT")
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .as_str(),
+                "true" | "1" | "yes"
+            ),
             database_url: std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://chopin.db?mode=rwc".to_string()),
             jwt_secret: std::env::var("JWT_SECRET")

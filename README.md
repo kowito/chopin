@@ -14,7 +14,7 @@
 # Get started in 60 seconds
 cargo install chopin-cli
 chopin new my-api && cd my-api
-SERVER_MODE=performance cargo run --release --features perf
+REUSEPORT=true cargo run --release --features perf
 
 # Your API is now serving 650K+ req/s 🚀
 ```
@@ -62,7 +62,7 @@ Average Latency @ 256 connections (lower is better)
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-**[→ See full benchmark report with cost analysis](docs/benchmark_comparison_report.md)**
+**[→ See full benchmark report with cost analysis](https://kowito.github.io/chopin/)**
 
 **What this means:**
 - 🏆 **#1 JSON throughput** — 657K req/s (handle 57 billion requests/day on one server)
@@ -87,7 +87,7 @@ Unlike bare-metal frameworks, Chopin ships with everything you need:
 | **File Uploads** | ✅ | ❌ | Local filesystem or S3-compatible (R2, MinIO) |
 | **GraphQL** | ✅ | ❌ | Optional async-graphql integration |
 | **Testing Utils** | ✅ | Partial | `TestApp` with in-memory SQLite |
-| **Performance Mode** | ✅ | ❌ | 3.7M req/s with pipelining |
+| **FastRoute** | ✅ | ❌ | Zero-alloc static responses with per-route decorators (.cors(), .cache_control(), .methods()) |
 | **Axum Compatible** | ✅ | ✅ | Use any Tower/hyper middleware |
 
 **Translation:** Prototype in 10 minutes. Deploy to production on day 1.
@@ -123,8 +123,8 @@ cd my-api
 # Run in development mode
 cargo run
 
-# Run with maximum performance
-SERVER_MODE=performance cargo run --release --features perf
+# Run with maximum performance (SO_REUSEPORT multi-core)
+REUSEPORT=true cargo run --release --features perf
 ```
 
 ### Your First API (90 seconds)
@@ -282,8 +282,9 @@ DATABASE_URL=sqlite://database.db?mode=rwc
 
 Chopin achieves extreme performance through:
 
-1. **Performance Mode** — Raw hyper HTTP/1.1 with SO_REUSEPORT for multi-core accept loops
-2. **sonic-rs SIMD** — 40% faster JSON serialization via AVX2/NEON instructions
+1. **Unified ChopinService** — Raw hyper HTTP/1.1 dispatcher with FastRoute zero-alloc fast path
+2. **Per-route trade-offs** — Choose per-path: `.cors()`, `.cache_control()`, `.get_only()`, `.header()` — all pre-computed, zero per-request cost
+3. **sonic-rs SIMD** — 40% faster JSON serialization via AVX2/NEON instructions
 3. **mimalloc** — Microsoft's high-concurrency allocator (better than jemalloc)
 4. **Zero-alloc Bodies** — `ChopinBody` avoids `Box::pin` overhead
 5. **Cached Headers** — Lock-free Date header updated every 500ms via `AtomicU64`
@@ -291,12 +292,13 @@ Chopin achieves extreme performance through:
 
 **Enable with:**
 ```bash
-SERVER_MODE=performance cargo run --release --features perf
+REUSEPORT=true cargo run --release --features perf
 ```
 
 This gives you:
-- **SO_REUSEPORT** — N workers (one per CPU core) instead of single-threaded accept
+- **SO_REUSEPORT** — N workers (one per CPU core) with per-core tokio runtimes
 - **TCP_NODELAY** — Disable Nagle's algorithm for lower latency
+- **FastRoute** — Zero-alloc static responses with per-route CORS, Cache-Control, and method filtering
 - **mimalloc** globally enabled
 - **sonic-rs** for all JSON operations (vs serde_json)
 
@@ -308,15 +310,13 @@ Chopin is built on Axum — **7% faster with zero breaking changes:**
 
 ```rust
 // Before (Axum)
-use axum::{Router, routing::get, Json};
+use axum::{Router, routing::get};
 
 let app = Router::new()
     .route("/users", get(list_users));
 
-axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
-    .serve(app.into_make_service())
-    .await
-    .unwrap();
+let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+axum::serve(listener, app).await?;
 
 // After (Chopin) — 7% faster + auth + DB + OpenAPI
 use chopin_core::{App, get, Json};
@@ -337,26 +337,9 @@ app.run().await?;
 
 ## 📚 Documentation
 
-### Core Guides
-- **[Getting Started](docs/getting-started.md)** — Your first Chopin API in 5 minutes
-- **[Architecture Overview](docs/architecture.md)** — How Chopin works under the hood
-- **[Controllers & Routing](docs/controllers-routing.md)** — Advanced routing patterns
-- **[Models & Database](docs/models-database.md)** — SeaORM integration guide
-- **[Authentication](docs/security.md)** — JWT, Argon2id, role-based access
-
-### Advanced Topics
-- **[Performance Guide](docs/performance.md)** — Squeeze every req/s out of your hardware
-- **[Building High-Performance Apps](docs/building-high-performance-apps.md)** — Production optimization
-- **[Caching](docs/caching.md)** — In-memory and Redis strategies
-- **[File Uploads](docs/file-uploads.md)** — Local storage and S3-compatible backends
-- **[GraphQL](docs/graphql.md)** — async-graphql integration
-- **[Testing](docs/testing.md)** — Unit and integration test patterns
-- **[Deployment](docs/deployment.md)** — Docker, systemd, cloud platforms
-
-### Quick Reference
-- **[CLI Cheat Sheet](docs/cli-cheatsheet.md)** — All CLI commands
-- **[Configuration](docs/configuration.md)** — Environment variables and `.env`
-- **[API Reference](docs/api.md)** — Complete API documentation
+- **[Website & Tutorial](https://kowito.github.io/chopin/)** — Getting started, full tutorial, and architecture overview
+- **[Examples](chopin-examples/)** — Hello world, CRUD API, benchmarks
+- **[API Docs (docs.rs)](https://docs.rs/chopin-core)** — Complete Rust API reference
 
 ---
 
@@ -386,18 +369,6 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 ---
 
-## 📈 Roadmap
-
-- [x] **v0.1** — Core framework with auth, database, OpenAPI
-- [x] **v0.1.5** — sonic-rs SIMD JSON integration
-- [ ] **v0.2** — WebSocket support and examples
-- [ ] **v0.3** — gRPC integration
-- [ ] **v0.4** — GraphQL subscriptions
-- [ ] **v0.5** — Admin dashboard UI
-- [ ] **v1.0** — Stable API, production-hardened
-
----
-
 ## ⚖️ License
 
 **WTFPL** (Do What The Fuck You Want To Public License)
@@ -418,10 +389,10 @@ If Chopin helps you build faster, more efficient APIs, **give us a star** ⭐ on
 cargo install chopin-cli
 chopin new my-api
 cd my-api
-SERVER_MODE=performance cargo run --release --features perf
+REUSEPORT=true cargo run --release --features perf
 ```
 
-**[Documentation](docs/README.md) • [Examples](chopin-examples/) • [Benchmark Report](docs/benchmark_comparison_report.md) • [Discord](https://discord.gg/chopin)**
+**[Website](https://kowito.github.io/chopin/) • [Tutorial](https://kowito.github.io/chopin/tutorial.html) • [Examples](chopin-examples/) • [Discord](https://discord.gg/chopin)**
 
 ---
 

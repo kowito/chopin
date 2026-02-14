@@ -1,36 +1,82 @@
-# Performance Mode Example
+# Performance Example
 
-Deep dive into Chopin's **two server modes** with hands-on benchmarking.
+Deep dive into Chopin's **unified ChopinService architecture** with hands-on benchmarking.
 
 ## Quick Start
 
-**Standard Mode** (development, default):
+**Default (single listener):**
 ```bash
 cargo run -p chopin-performance-mode
 ```
 
-**Performance Mode** (raw hyper, SO_REUSEPORT):
+**With SO_REUSEPORT (multi-core):**
 ```bash
-SERVER_MODE=performance cargo run -p chopin-performance-mode --release --features perf
+REUSEPORT=true cargo run -p chopin-performance-mode --release --features perf
 ```
 
-## Server Mode Comparison
+## Configuration Comparison
 
-| Mode | Per-request | Use Case |
-|------|-------------|----------|
-| **Standard** | ~800ns | Development, typical APIs |
-| **Performance** | ~450ns | Production high-load |
+| Config | Architecture | Use Case |
+|--------|--------------|----------|
+| **Default** | Single listener, multi-thread tokio | Development, typical production |
+| **REUSEPORT=true** | Per-core listeners, per-core runtimes | Maximum throughput benchmarks |
 
-## What is Performance Mode?
+## What is FastRoute?
 
-Chopin's **Performance Mode** bypasses Axum's router for FastRoute endpoints (`/json`, `/plaintext`), routing them through a raw hyper `ChopinService` with:
+Chopin uses a **unified ChopinService** dispatcher for all requests.
+Each FastRoute can be individually configured with **decorators** — all
+pre-computed at registration time with zero per-request overhead.
 
-- **SO_REUSEPORT** — Multiple TCP listeners (one per CPU core), kernel load balances
-- **ChopinBody zero-alloc** — `ChopinBody::Fast(Option<Bytes>)` inline on stack, no `Box` heap allocation
-- **Pre-built headers** — HeaderMap cloned once (3 headers), then Date inserted
-- **Lock-free date cache** — thread_local + atomic epoch (~8ns per request)
-- **mimalloc** — Microsoft's high-concurrency memory allocator
-- **Native CPU** — Compiled with `target-cpu=native` and fat LTO
+```rust
+use chopin_core::{App, FastRoute};
+
+let app = App::new().await?
+    // Bare: maximum performance, no extras
+    .fast_route(FastRoute::json("/json", body))
+
+    // With CORS + method filter (still ~35ns/req)
+    .fast_route(
+        FastRoute::json("/api/status", body)
+            .cors()               // permissive CORS + auto OPTIONS preflight
+            .get_only()           // POST falls through to Axum
+    )
+
+    // With Cache-Control + custom header
+    .fast_route(
+        FastRoute::text("/health", b"OK")
+            .cache_control("public, max-age=60")
+            .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+    );
+```
+
+### Per-Route Trade-off Matrix
+
+| Feature | FastRoute (bare) | FastRoute (+decorators) | Axum Router |
+|---------|------------------|-------------------------|-------------|
+| **Performance** | ~35ns | ~35ns | ~1,000-5,000ns |
+| **Throughput** | ~28M req/s | ~28M req/s | ~200K-1M req/s |
+| Static body | Yes | Yes | Yes |
+| Dynamic body | — | — | Yes |
+| CORS | — | `.cors()` | CorsLayer |
+| Cache-Control | — | `.cache_control()` | manual |
+| Method filter | — | `.methods()` / `.get_only()` | built-in |
+| Custom headers | — | `.header()` | manual |
+| Auth | — | — | middleware |
+| Logging/Tracing | — | — | TraceLayer |
+| Request ID | — | — | middleware |
+
+**FastRoute is 28-142× faster than Axum Router** — decorators add zero per-request overhead.
+
+### Request Dispatch
+
+```
+Client → ChopinService
+  ├─ GET /json            → FastRoute (bare, ~35ns)
+  ├─ GET /api/status      → FastRoute (+cors, ~35ns)
+  ├─ OPTIONS /api/status  → FastRoute (204 preflight, automatic)
+  ├─ POST /api/status     → falls through to Axum (method not allowed)
+  └─ /* other             → Axum Router → Middleware → Handler
+```
 
 ## Benchmark
 
@@ -45,28 +91,33 @@ apt-get install wrk   # Linux
 ### Terminal 1: Start Server
 
 ```bash
-# Performance mode with release optimizations
-SERVER_MODE=performance cargo run -p chopin-performance-mode --release
+# With SO_REUSEPORT and release optimizations
+REUSEPORT=true cargo run -p chopin-performance-mode --release
 ```
 
 You should see:
 ```
 🎹 Chopin Performance Mode Example
-   → Mode: performance
+   → REUSEPORT: true
    → Server: http://127.0.0.1:3000
    → API docs: http://127.0.0.1:3000/api-docs
+   → SO_REUSEPORT: enabled (multi-core)
+   → Fast routes: 3
+     • /json [GET, HEAD] (27 bytes)
+     • /plaintext [GET, HEAD] (13 bytes)
+     • /api/status [GET, HEAD] +cors (15 bytes)
 ```
 
 ### Terminal 2: Benchmark
 
 ```bash
-# JSON endpoint (raw hyper fast-path)
+# JSON endpoint (FastRoute zero-alloc path)
 wrk -t4 -c256 -d10s http://127.0.0.1:3000/json
 
-# Plaintext endpoint (raw hyper fast-path)
+# Plaintext endpoint (FastRoute zero-alloc path)
 wrk -t4 -c256 -d10s http://127.0.0.1:3000/plaintext
 
-# Axum route (standard middleware)
+# Axum route (full middleware)
 wrk -t4 -c256 -d10s http://127.0.0.1:3000/
 ```
 
@@ -74,21 +125,50 @@ wrk -t4 -c256 -d10s http://127.0.0.1:3000/
 
 Typical results on Apple M-series or modern x86_64 (adjust for your hardware):
 
-#### Standard Mode
+#### Default
 | Endpoint | Req/sec | Latency (avg) |
 |----------|---------|---------------|
+| `/json` (FastRoute) | 300K–500K | <1ms |
 | `/` (Axum) | 150K–300K | 1-5ms |
 
-#### Performance Mode
+#### REUSEPORT=true
 | Endpoint | Req/sec | Latency (avg) |
 |----------|---------|---------------|
-| `/json` | 500K–700K | <1ms |
-| `/plaintext` | 500K–700K | <1ms |
+| `/json` (FastRoute) | 500K–1.7M | <1ms |
+| `/plaintext` (FastRoute) | 500K–1.7M | <1ms |
 | `/` (Axum) | 150K–300K | 1-5ms |
 
 ## Code Patterns
 
-### Activating Performance Mode
+### Per-route configuration
+
+```rust
+use chopin_core::{App, FastRoute};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let app = App::new().await?
+        // Bare: benchmark endpoint (zero-alloc, no extras)
+        .fast_route(
+            FastRoute::json("/json", br#"{"message":"Hello, World!"}"#)
+                .get_only()
+        )
+        // With CORS: frontend-accessible status endpoint
+        .fast_route(
+            FastRoute::json("/api/status", br#"{"status":"ok"}"#)
+                .cors()
+                .get_only()
+                .cache_control("public, max-age=5")
+        )
+        // Full middleware: everything else goes through Axum
+        ;
+
+    app.run().await?;
+    Ok(())
+}
+```
+
+### SO_REUSEPORT (multi-core)
 
 ```rust
 use chopin_core::App;
@@ -96,10 +176,10 @@ use chopin_core::App;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Via environment variable (recommended)
-    std::env::set_var("SERVER_MODE", "performance");
+    std::env::set_var("REUSEPORT", "true");
     
     let app = App::new().await?;
-    app.run().await?;  // Automatically uses raw hyper + SO_REUSEPORT
+    app.run().await?;  // Uses per-core SO_REUSEPORT listeners
     
     Ok(())
 }
@@ -109,14 +189,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```bash
 # .env
-SERVER_MODE=performance
+REUSEPORT=true
 DATABASE_URL=sqlite:./app.db
 JWT_SECRET=your-secret-key
 ```
 
 ### Release Profile
 
-Performance mode is enabled in `Cargo.toml`:
+Optimizations configured in `Cargo.toml`:
 
 ```toml
 [profile.release]
@@ -137,48 +217,50 @@ cargo build -p chopin-performance-mode --release
 ### Architecture
 
 ```
-Performance Mode Request Routing:
-┌─────────────────────────────────────────────┐
-│ Client Request                              │
-└──────────────────┬──────────────────────────┘
-                   │
-        ┌──────────┴──────────┐
-        │                     │
-   /json, /plaintext     Other routes
-        │                     │
-        ▼                     ▼
-  ChopinService         Axum Router
-  (raw hyper)         (full middleware)
-        │                     │
-        ├─────────────────────┤
-        ▼
-   Response
+Request Routing:
+┌─────────────────────────────────────────────────┐
+│ Client Request                                  │
+└───────────────────┬─────────────────────────────┘
+                    │
+         ┌──────────┴──────────┐
+         │  ChopinService      │
+         │  dispatch            │
+         └──────────┬──────────┘
+                    │
+    ┌───────────────┼───────────────┐
+    │               │               │
+  FastRoute      FastRoute        Axum Router
+  (bare)         (+cors,cache)    (full middleware)
+  ~35ns/req      ~35ns/req        ~1-5μs/req
+    │               │               │
+    └───────────────┼───────────────┘
+                    ▼
+               Response
 ```
 
-### Pre-computed Responses
+All requests flow through **ChopinService**:
 
-In `chopin-core/src/server.rs`:
+1. **Request received** → ChopinService::call(req)
+2. **CORS preflight?** (OPTIONS + `.cors()` enabled)
+   - Yes → Pre-computed 204 No Content with CORS headers
+3. **FastRoute path match + method allowed?**
+   - Yes → Pre-computed response (zero heap alloc)
+   - No → Falls through
+4. **Axum Router** → Full middleware stack (CORS, auth, tracing, etc.)
+
+**With `REUSEPORT=true`:**
+- Creates N socket listeners with `SO_REUSEPORT`
+- Spawns N accept loops (one per CPU core)
+- Each core has its own `current_thread` tokio runtime
+- Kernel load-balances TCP connections across cores
+- Zero cross-thread synchronization
+
+### SO_REUSEPORT Implementation
 
 ```rust
-// Static response - allocated once at startup
-static JSON_RESPONSE: &[u8] = b"{\"message\":\"Hello, World!\"}";
-static PLAINTEXT_RESPONSE: &[u8] = b"Hello, World!";
-
-// Pre-computed headers - allocated once
-lazy_static! {
-    static ref CONTENT_TYPE_JSON: HeaderValue = 
-        HeaderValue::from_static("application/json");
-    static ref CONTENT_LENGTH: HeaderValue = 
-        HeaderValue::from_static("27");  // len(JSON_RESPONSE)
-}
-```
-
-### SO_REUSEPORT Multi-Core
-
-```rust
-// In app.rs - ServerMode::Performance path
+// In app.rs - REUSEPORT=true path
 let socket_addr: std::net::SocketAddr = addr.parse()?;
-crate::server::run_reuseport(socket_addr, router, shutdown_signal()).await?;
+crate::server::run_reuseport(socket_addr, fast_routes, router, shutdown_signal()).await?;
 ```
 
 In `server.rs`, one listener per CPU core:
@@ -196,43 +278,8 @@ for _ in 0..num_cores {
 }
 ```
 
-## Comparisons
-
-### Chopin Performance vs Axum
-
-- **Chopin Performance:** 500K-1.7M+ req/s (fast-path endpoints)
-- **Axum standard:** 150K-300K req/s
-- **Raw hyper:** 1M-2M+ req/s (theoretical max, no routing)
-
-### When to Use Each Mode
-
-**Standard Mode** (default):
-- Development
-- Typical production (all endpoints through Axum)
-- When you need predictable middleware behavior
-- Most real-world APIs
-
-**Performance Mode**:
-- Benchmarking framework capabilities
-- Extreme throughput requirements
-- Testing SO_REUSEPORT multi-core behavior
-- Learning high-performance Rust patterns
-
-## Deep Dive: What Chopin Does
-
-1. **Server Mode Detection** → `config.rs`
-2. **Router Building** → `app.rs`
-3. **Standard Path** → `axum::serve(listener, router)`
-4. **Performance Path** → `server.rs::run_reuseport(addr, router, shutdown)`
-   - Creates N socket listeners with `SO_REUSEPORT`
-   - Spawns N accept loops (one per CPU core)
-   - Kernel load-balances connections
-   - Pre-computed responses for fast paths
-   - Cached Date headers (500ms refresh)
-
 ## Further Reading
 
-- [docs/performance.md](../../docs/performance.md) — Performance mode details
-- [docs/architecture.md](../../docs/architecture.md) — Dual-mode design
-- [chopin-core/src/server.rs](../../chopin-core/src/server.rs) — Raw hyper implementation
-- [chopin-core/src/perf.rs](../../chopin-core/src/perf.rs) — Cached date header
+- [Tutorial](https://kowito.github.io/chopin/tutorial.html) — Complete guide
+- [chopin-core/src/server.rs](../../chopin-core/src/server.rs) — ChopinService implementation
+- [chopin-core/src/perf.rs](../../chopin-core/src/perf.rs) — Lock-free date cache
