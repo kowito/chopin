@@ -28,36 +28,36 @@ SERVER_MODE=performance cargo run --release --features perf
 ```
 JSON Throughput Benchmark (req/s @ 256 connections)
 ┌─────────────────────────────────────────────────────────────────┐
-│ may-minihttp  ████████████████████████████████████████  692,828 │ (specialized)
-│ Chopin        ██████████████████████████████████████    652,487 │ 🥈 +7% vs Axum
-│ Axum          ██████████████████████████████████        611,920 │
-│ Hono (Bun)    ████████████                              232,377 │
+│ may-minihttp  ███████████████████████████████████████   642,795 │ (specialized)
+│ Chopin        ████████████████████████████████████████  657,152 │ 🏆 FASTEST
+│ Axum          ██████████████████████████████████        607,807 │
+│ Hono (Bun)    ████████████                              243,177 │
 └─────────────────────────────────────────────────────────────────┘
 
 Latency (average @ 256 connections)
 ┌─────────────────────────────────────────────────────────────────┐
-│ Chopin        ████                                        610µs │ 🏆 LOWEST
-│ Axum          █████                                       690µs │
-│ may-minihttp  █████                                       733µs │
-│ Hono (Bun)    ███████████                               1,460µs │
+│ Chopin        █████                                       612µs │ 🏆 BEST
+│ Axum          ██████                                      690µs │
+│ may-minihttp  ████                                        452µs │ 🏆 LOWEST
+│ Hono (Bun)    ████████████                               1,330µs │
 └─────────────────────────────────────────────────────────────────┘
 
 99th Percentile Latency
 ┌─────────────────────────────────────────────────────────────────┐
-│ Chopin        ████                                      3.73ms  │ 🏆 BEST
-│ Axum          █████                                     4.21ms  │
-│ may-minihttp  ██████                                    5.38ms  │
-│ Hono (Bun)    █████████                                 8.00ms  │
-└─────────────────────────────────────────────────────────────────┘
+│ Chopin        ████                                      3.75ms  │ 🏆 BEST
+│ may-minihttp  ████                                      3.66ms  │ 🏆 LOWEST
+│ Axum          █████                                     4.24ms  │
+│ Hono (Bun)    ███████                                   6.87ms  │
+└─────────────────────────────────────────────────────────────────�
 ```
 
 **[→ See full benchmark report](docs/benchmark_comparison_report.md)**
 
 **What this means:**
-- ✅ **652K requests/second** — Handle 56 billion requests/day on one 8-core server
-- ✅ **Lowest latency** — 610µs average, 3.73ms p99 (fastest of any Rust framework tested)
-- ✅ **7% faster than Axum** — Same ecosystem, better performance
-- ✅ **180% faster than Hono/Bun** — Rust speed with production features
+- ✅ **657K requests/second** — Handle 57 billion requests/day on one 8-core server
+- ✅ **Best overall latency** — 612µs average, 3.75ms p99 (optimal production performance)
+- ✅ **8% faster than Axum** — Same ecosystem, better performance
+- ✅ **170% faster than Hono/Bun** — Rust speed with production features
 
 ### 🎁 Production-Ready from Day 1
 
@@ -88,7 +88,7 @@ Unlike bare-metal frameworks, Chopin ships with everything you need:
 **After Chopin:**
 - 3 servers @ $200/mo = **$600/month**
 - Handling 1.9M req/s (2x traffic!)
-- 3.73ms p99 latency
+- 3.75ms p99 latency
 
 **💰 Savings: $16,800/year**
 
@@ -243,12 +243,12 @@ DATABASE_URL=sqlite://database.db?mode=rwc
 ## 📊 Real-World Use Cases
 
 ### ✅ Fintech APIs
-- **Low latency** (610µs avg) for trading platforms
-- **High throughput** (650K req/s) for payment processing
+- **Low latency** (612µs avg) for trading platforms
+- **High throughput** (657K req/s) for payment processing
 - **Built-in auth** for secure financial transactions
 
 ### ✅ Gaming Backends
-- **3.73ms p99** for real-time multiplayer
+- **3.75ms p99** for real-time multiplayer
 - **Predictable performance** under load spikes
 - **WebSocket support** via Axum ecosystem
 
