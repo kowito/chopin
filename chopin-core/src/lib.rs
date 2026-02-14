@@ -49,7 +49,7 @@ pub use axum::middleware;
 /// Axum extractor re-exports.
 ///
 /// ```rust,ignore
-/// use chopin::extract::{Path, Query, State};
+/// use chopin_core::extract::{Path, Query, State};
 /// ```
 pub mod extract {
     pub use axum::extract::*;

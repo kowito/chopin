@@ -1,4 +1,4 @@
-use chopin::models::user::{Model, Role, UserResponse};
+use chopin_core::models::user::{Model, Role, UserResponse};
 
 #[test]
 fn test_role_as_str() {

@@ -1,12 +1,12 @@
 [package]
-name = "chopin"
+name = "chopin-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Chopin: High-fidelity engineering for the modern virtuoso."
 repository = "https://github.com/kowito/chopin"
 homepage = "https://github.com/kowito/chopin"
-documentation = "https://docs.rs/chopin"
+documentation = "https://docs.rs/chopin-core"
 
 [features]
 default = []

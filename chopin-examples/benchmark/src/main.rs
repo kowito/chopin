@@ -33,7 +33,7 @@
 //! wrk -t4 -c256 -d10s http://127.0.0.1:3000/
 //! ```
 
-use chopin::{App, FastRoute};
+use chopin_core::{App, FastRoute};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

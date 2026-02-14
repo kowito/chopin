@@ -1,4 +1,4 @@
-use chopin::models::user::Role;
+use chopin_core::models::user::Role;
 
 // ═══ Role::has_permission ═══
 

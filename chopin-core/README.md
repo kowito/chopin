@@ -30,14 +30,14 @@ A high-performance Rust web framework combining the ease of Axum with production
 
 ```toml
 [dependencies]
-chopin = "0.1"
+chopin-core = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
 ## Quick Start
 
 ```rust
-use chopin::App;
+use chopin_core::App;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

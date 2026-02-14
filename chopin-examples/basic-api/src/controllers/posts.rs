@@ -1,7 +1,7 @@
-use chopin::extractors::{Json, Pagination, Path, Query, State};
-use chopin::response::ApiResponse;
-use chopin::routing::get;
-use chopin::{Router, StatusCode};
+use chopin_core::extractors::{Json, Pagination, Path, Query, State};
+use chopin_core::response::ApiResponse;
+use chopin_core::routing::get;
+use chopin_core::{Router, StatusCode};
 use sea_orm::*;
 use serde::Deserialize;
 use utoipa::ToSchema;

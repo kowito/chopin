@@ -383,7 +383,7 @@
                         <span>main.rs</span>
                         <button class="copy-btn" onclick="copyCode('hello')">Copy</button>
                     </div>
-                    <pre><code id="code-hello">use chopin::{App, ApiResponse, get, Json};
+                    <pre><code id="code-hello">use chopin_core::{App, ApiResponse, get, Json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -429,10 +429,10 @@ async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
                         <span>protected_routes.rs</span>
                         <button class="copy-btn" onclick="copyCode('auth')">Copy</button>
                     </div>
-                    <pre><code id="code-auth">use chopin::{routing::get, Router, Json};
-use chopin::extractors::{AuthUser, AuthUserWithRole};
-use chopin::models::user::Role;
-use chopin::response::ApiResponse;
+                    <pre><code id="code-auth">use chopin_core::{routing::get, Router, Json};
+use chopin_core::extractors::{AuthUser, AuthUserWithRole};
+use chopin_core::models::user::Role;
+use chopin_core::response::ApiResponse;
 use serde_json::json;
 
 // Any authenticated user can access this
@@ -471,8 +471,8 @@ fn routes() -> Router {
                         <span>database.rs</span>
                         <button class="copy-btn" onclick="copyCode('database')">Copy</button>
                     </div>
-                    <pre><code id="code-database">use chopin::{extract::State, routing::get, Router, Json};
-use chopin::response::ApiResponse;
+                    <pre><code id="code-database">use chopin_core::{extract::State, routing::get, Router, Json};
+use chopin_core::response::ApiResponse;
 use sea_orm::{EntityTrait, ColumnTrait, QueryFilter};
 
 #[derive(Clone)]
@@ -529,7 +529,7 @@ axum::serve(listener, app).await.unwrap();
 // ─────────────────────────────────────────────────────
 
 // After (Chopin) — 8% faster + built-in features
-use chopin::App;
+use chopin_core::App;
 
 let app = App::new().await?;  // Built-in: auth, DB, OpenAPI
 app.run().await?;

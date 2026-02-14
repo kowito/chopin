@@ -5,7 +5,7 @@
 
 #[test]
 fn test_config_reexport() {
-    let _ = chopin::Config {
+    let _ = chopin_core::Config {
         reuseport: false,
         database_url: "sqlite::memory:".to_string(),
         jwt_secret: "s".to_string(),
@@ -28,48 +28,48 @@ fn test_config_reexport() {
 
 #[test]
 fn test_fast_route_reexport() {
-    let _ = chopin::FastRoute::json("/test", b"{}");
+    let _ = chopin_core::FastRoute::json("/test", b"{}");
 }
 
 #[test]
 fn test_chopin_error_reexport() {
-    let _ = chopin::ChopinError::NotFound("test".into());
+    let _ = chopin_core::ChopinError::NotFound("test".into());
 }
 
 #[test]
 fn test_api_response_reexport() {
-    let _ = chopin::ApiResponse::success("hello".to_string());
+    let _ = chopin_core::ApiResponse::success("hello".to_string());
 }
 
 #[test]
 fn test_cache_service_reexport() {
-    let _ = chopin::CacheService::in_memory();
+    let _ = chopin_core::CacheService::in_memory();
 }
 
 // ═══ Axum re-exports ═══
 
 #[test]
 fn test_router_reexport() {
-    let _: chopin::Router = chopin::Router::new();
+    let _: chopin_core::Router = chopin_core::Router::new();
 }
 
 #[test]
 fn test_status_code_reexport() {
-    let _ = chopin::StatusCode::OK;
-    let _ = chopin::StatusCode::NOT_FOUND;
-    let _ = chopin::StatusCode::INTERNAL_SERVER_ERROR;
+    let _ = chopin_core::StatusCode::OK;
+    let _ = chopin_core::StatusCode::NOT_FOUND;
+    let _ = chopin_core::StatusCode::INTERNAL_SERVER_ERROR;
 }
 
 #[test]
 fn test_method_reexport() {
-    let _ = chopin::Method::GET;
-    let _ = chopin::Method::POST;
-    let _ = chopin::Method::DELETE;
+    let _ = chopin_core::Method::GET;
+    let _ = chopin_core::Method::POST;
+    let _ = chopin_core::Method::DELETE;
 }
 
 #[test]
 fn test_header_map_reexport() {
-    let _ = chopin::HeaderMap::new();
+    let _ = chopin_core::HeaderMap::new();
 }
 
 // ═══ Module access ═══
@@ -77,28 +77,28 @@ fn test_header_map_reexport() {
 #[test]
 fn test_auth_module_accessible() {
     // Should be able to reference auth submodules
-    let _token = chopin::auth::create_token(1, "test-secret", 24);
+    let _token = chopin_core::auth::create_token(1, "test-secret", 24);
 }
 
 #[test]
 fn test_json_module_accessible() {
     // Should be able to use the json module
     let mut buf = Vec::new();
-    let _ = chopin::json::to_writer(&mut buf, &"hello");
+    let _ = chopin_core::json::to_writer(&mut buf, &"hello");
 }
 
 #[test]
 fn test_storage_module_accessible() {
-    let _ = chopin::storage::LocalStorage::new("./uploads");
+    let _ = chopin_core::storage::LocalStorage::new("./uploads");
 }
 
 #[test]
 fn test_error_module_accessible() {
-    let _ = chopin::error::FieldError::new("field", "message");
+    let _ = chopin_core::error::FieldError::new("field", "message");
 }
 
 #[tokio::test]
 async fn test_perf_module_accessible() {
-    chopin::perf::init_date_cache();
-    let _ = chopin::perf::cached_date_header();
+    chopin_core::perf::init_date_cache();
+    let _ = chopin_core::perf::cached_date_header();
 }

@@ -1,4 +1,4 @@
-use chopin::cache::CacheService;
+use chopin_core::cache::CacheService;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 

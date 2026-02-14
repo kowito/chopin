@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use chopin::{config::Config, db, serve, Extension, Router};
+use chopin_core::{config::Config, db, serve, Extension, Router};
 use sea_orm_migration::MigratorTrait;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
@@ -31,9 +31,9 @@ use chopin_basic_api::{controllers, migrations, models, AppState};
             models::post::PostResponse,
             controllers::posts::CreatePostRequest,
             controllers::posts::UpdatePostRequest,
-            chopin::response::ApiResponse<models::post::PostResponse>,
-            chopin::response::ApiResponse<Vec<models::post::PostResponse>>,
-            chopin::extractors::Pagination,
+            chopin_core::response::ApiResponse<models::post::PostResponse>,
+            chopin_core::response::ApiResponse<Vec<models::post::PostResponse>>,
+            chopin_core::extractors::Pagination,
         )
     ),
     tags(
@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run migrations
     tracing::info!("Running migrations...");
     migrations::Migrator::up(&database_conn, None).await?;
-    chopin::migrations::Migrator::up(&database_conn, None).await?;
+    chopin_core::migrations::Migrator::up(&database_conn, None).await?;
 
     let state = AppState {
         db: database_conn,
@@ -85,7 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(Scalar::with_url("/api-docs", ApiDoc::openapi()))
         .route(
             "/api-docs/openapi.json",
-            chopin::routing::get(|| async { chopin::extractors::Json(ApiDoc::openapi()) }),
+            chopin_core::routing::get(|| async {
+                chopin_core::extractors::Json(ApiDoc::openapi())
+            }),
         )
         .with_state(state)
         .layer(Extension(Arc::new(config.clone())))

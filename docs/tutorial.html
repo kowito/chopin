@@ -102,7 +102,7 @@ chopin new my-api
 cargo add chopin
 
 <span class="comment"># With optional features</span>
-cargo add chopin --features redis,s3,graphql,perf</code></pre>
+cargo add chopin-core --features redis,s3,graphql,perf</code></pre>
 
                 <div class="callout">
                     <i data-lucide="info" class="inline-icon"></i>
@@ -122,7 +122,7 @@ cargo add chopin --features redis,s3,graphql,perf</code></pre>
                 <h2>Hello World</h2>
                 <p>The simplest Chopin app is <strong>4 lines of code</strong>. It gives you a running server with auth endpoints, database, and OpenAPI docs out of the box.</p>
 
-<pre><code><span class="kw">use</span> chopin::App;
+<pre><code><span class="kw">use</span> chopin_core::App;
 
 <span class="attr">#[tokio::main]</span>
 <span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
@@ -198,7 +198,7 @@ S3_PUBLIC_URL=                <span class="comment"># CDN or public URL prefix</
 S3_PREFIX=uploads             <span class="comment"># Object key prefix</span></code></pre>
 
                 <p>Access config in your code:</p>
-<pre><code><span class="kw">use</span> chopin::config::Config;
+<pre><code><span class="kw">use</span> chopin_core::config::Config;
 
 <span class="kw">let</span> config = Config::from_env()?;
 
@@ -224,7 +224,7 @@ app.run().<span class="kw">await</span>?;</code></pre>
 
                 <h3>Connection</h3>
                 <p>Chopin connects automatically when you call <code>App::new()</code>. To connect manually:</p>
-<pre><code><span class="kw">use</span> chopin::{config::Config, db};
+<pre><code><span class="kw">use</span> chopin_core::{config::Config, db};
 
 <span class="kw">let</span> config = Config::from_env()?;
 <span class="kw">let</span> conn = db::connect(&config).<span class="kw">await</span>?;
@@ -404,8 +404,8 @@ chopin db reset</code></pre>
 
                 <h3>Defining routes</h3>
 <pre><code><span class="comment">// src/controllers/posts.rs</span>
-<span class="kw">use</span> chopin::{extract::{Path, Query, State}, routing::get, Router};
-<span class="kw">use</span> chopin::response::ApiResponse;
+<span class="kw">use</span> chopin_core::{extract::{Path, Query, State}, routing::get, Router};
+<span class="kw">use</span> chopin_core::response::ApiResponse;
 <span class="kw">use</span> crate::AppState;
 
 <span class="kw">pub fn</span> <span class="fn">routes</span>() -> Router&lt;AppState&gt; {
@@ -417,7 +417,7 @@ chopin db reset</code></pre>
 <span class="kw">pub async fn</span> <span class="fn">list_posts</span>(
     State(state): State&lt;AppState&gt;,
     Query(pagination): Query&lt;Pagination&gt;,
-) -> <span class="type">Result</span>&lt;chopin::Json&lt;ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;&gt;, StatusCode&gt; {
+) -> <span class="type">Result</span>&lt;chopin_core::Json&lt;ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;&gt;, StatusCode&gt; {
     <span class="kw">let</span> posts = Post::find()
         .order_by_desc(post::Column::CreatedAt)
         .offset(pagination.clamped().offset)
@@ -425,15 +425,15 @@ chopin db reset</code></pre>
         .all(&state.db).<span class="kw">await</span>
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    <span class="type">Ok</span>(chopin::Json(ApiResponse::success(
+    <span class="type">Ok</span>(chopin_core::Json(ApiResponse::success(
         posts.into_iter().map(PostResponse::from).collect()
     )))
 }
 
 <span class="kw">pub async fn</span> <span class="fn">create_post</span>(
     State(state): State&lt;AppState&gt;,
-    chopin::Json(payload): chopin::Json&lt;CreatePostRequest&gt;,
-) -> <span class="type">Result</span>&lt;(StatusCode, chopin::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;), StatusCode&gt; {
+    chopin_core::Json(payload): chopin_core::Json&lt;CreatePostRequest&gt;,
+) -> <span class="type">Result</span>&lt;(StatusCode, chopin_core::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;), StatusCode&gt; {
     <span class="kw">let</span> new = post::ActiveModel {
         title: Set(payload.title),
         body: Set(payload.body),
@@ -442,7 +442,7 @@ chopin db reset</code></pre>
     <span class="kw">let</span> result = new.insert(&state.db).<span class="kw">await</span>
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    <span class="type">Ok</span>((StatusCode::CREATED, chopin::Json(ApiResponse::success(PostResponse::from(result)))))
+    <span class="type">Ok</span>((StatusCode::CREATED, chopin_core::Json(ApiResponse::success(PostResponse::from(result)))))
 }</code></pre>
 
                 <h3>Generate a controller</h3>
@@ -484,13 +484,13 @@ chopin generate controller posts</code></pre>
 
                 <h3>How it works internally</h3>
 <pre><code><span class="comment">// Passwords are hashed with Argon2id (memory-hard, GPU-resistant)</span>
-<span class="kw">use</span> chopin::auth::password;
+<span class="kw">use</span> chopin_core::auth::password;
 
 <span class="kw">let</span> hash = password::hash_password(<span class="str">"my-password"</span>)?;
 <span class="kw">let</span> valid = password::verify_password(<span class="str">"my-password"</span>, &hash)?;
 
 <span class="comment">// JWTs are signed with HS256</span>
-<span class="kw">use</span> chopin::auth::jwt;
+<span class="kw">use</span> chopin_core::auth::jwt;
 
 <span class="kw">let</span> token = jwt::create_token(
     &user_id,             <span class="comment">// UUID string</span>
@@ -531,25 +531,25 @@ chopin generate controller posts</code></pre>
                 </div>
 
                 <h3>Protect routes by role</h3>
-<pre><code><span class="kw">use</span> chopin::extractors::AuthUserWithRole;
-<span class="kw">use</span> chopin::models::user::Role;
+<pre><code><span class="kw">use</span> chopin_core::extractors::AuthUserWithRole;
+<span class="kw">use</span> chopin_core::models::user::Role;
 
 <span class="comment">// Only admins and superusers can access this</span>
 <span class="kw">pub async fn</span> <span class="fn">admin_dashboard</span>(
     user: AuthUserWithRole&lt;{ Role::Admin <span class="kw">as</span> u8 }&gt;,
 ) -> <span class="kw">impl</span> IntoResponse {
     <span class="comment">// user.user_id, user.email, user.role are available</span>
-    chopin::Json(json!({ "message": "Welcome, admin!" }))
+    chopin_core::Json(json!({ "message": "Welcome, admin!" }))
 }
 
 <span class="comment">// Or use the require_role middleware on a group of routes</span>
-<span class="kw">use</span> chopin::extractors::require_role;
+<span class="kw">use</span> chopin_core::extractors::require_role;
 
 <span class="kw">fn</span> <span class="fn">admin_routes</span>() -> Router&lt;AppState&gt; {
     Router::new()
         .route(<span class="str">"/api/admin/users"</span>, get(list_users))
         .route(<span class="str">"/api/admin/stats"</span>, get(admin_stats))
-        .layer(chopin::middleware::from_fn(require_role::&lt;{ Role::Admin <span class="kw">as</span> u8 }&gt;))
+        .layer(chopin_core::middleware::from_fn(require_role::&lt;{ Role::Admin <span class="kw">as</span> u8 }&gt;))
 }</code></pre>
 
                 <h3>Create a superuser</h3>
@@ -564,14 +564,14 @@ chopin createsuperuser</code></pre>
                 <p>Extractors are Axum's way of parsing request data. Chopin provides custom extractors for common patterns.</p>
 
                 <h3>AuthUser &mdash; JWT authentication</h3>
-<pre><code><span class="kw">use</span> chopin::extractors::AuthUser;
+<pre><code><span class="kw">use</span> chopin_core::extractors::AuthUser;
 
 <span class="comment">// Automatically validates the Bearer token from Authorization header</span>
 <span class="kw">pub async fn</span> <span class="fn">get_profile</span>(user: AuthUser) -> <span class="kw">impl</span> IntoResponse {
     <span class="comment">// user.user_id: String (UUID)</span>
     <span class="comment">// user.email: String</span>
     <span class="comment">// user.role: String</span>
-    chopin::Json(json!({
+    chopin_core::Json(json!({
         "id": user.user_id,
         "email": user.email,
         "role": user.role,
@@ -579,7 +579,7 @@ chopin createsuperuser</code></pre>
 }</code></pre>
 
                 <h3>Json &mdash; SIMD-accelerated body parsing</h3>
-<pre><code><span class="kw">use</span> chopin::extractors::Json;
+<pre><code><span class="kw">use</span> chopin_core::extractors::Json;
 
 <span class="comment">// When `perf` feature is enabled, uses sonic-rs (SIMD)</span>
 <span class="comment">// Otherwise falls back to serde_json</span>
@@ -590,7 +590,7 @@ chopin createsuperuser</code></pre>
 }</code></pre>
 
                 <h3>Pagination &mdash; query parameter extraction</h3>
-<pre><code><span class="kw">use</span> chopin::extractors::Pagination;
+<pre><code><span class="kw">use</span> chopin_core::extractors::Pagination;
 
 <span class="comment">// GET /api/posts?page=2&per_page=20</span>
 <span class="kw">pub async fn</span> <span class="fn">list_items</span>(
@@ -610,12 +610,12 @@ chopin createsuperuser</code></pre>
                 <h2>Pagination</h2>
                 <p>Chopin provides a complete pagination system with clamped values and a standardized response format.</p>
 
-<pre><code><span class="kw">use</span> chopin::extractors::{Pagination, PaginatedResponse};
+<pre><code><span class="kw">use</span> chopin_core::extractors::{Pagination, PaginatedResponse};
 
 <span class="kw">pub async fn</span> <span class="fn">list_posts</span>(
     State(state): State&lt;AppState&gt;,
     Query(pagination): Query&lt;Pagination&gt;,
-) -> chopin::Json&lt;PaginatedResponse&lt;PostResponse&gt;&gt; {
+) -> chopin_core::Json&lt;PaginatedResponse&lt;PostResponse&gt;&gt; {
     <span class="kw">let</span> p = pagination.clamped();
 
     <span class="comment">// Count total items</span>
@@ -628,7 +628,7 @@ chopin createsuperuser</code></pre>
         .all(&state.db).<span class="kw">await</span>.unwrap_or_default()
         .into_iter().map(PostResponse::from).collect();
 
-    chopin::Json(PaginatedResponse::new(items, total, p.page, p.per_page))
+    chopin_core::Json(PaginatedResponse::new(items, total, p.page, p.per_page))
 }
 
 <span class="comment">// Response format:</span>
@@ -649,7 +649,7 @@ chopin createsuperuser</code></pre>
                 <h2>Error Handling</h2>
                 <p>Chopin provides a unified error type that automatically maps to HTTP status codes and JSON responses.</p>
 
-<pre><code><span class="kw">use</span> chopin::error::{ChopinError, FieldError};
+<pre><code><span class="kw">use</span> chopin_core::error::{ChopinError, FieldError};
 
 <span class="comment">// Each variant maps to an HTTP status code</span>
 ChopinError::NotFound(<span class="str">"User not found"</span>.into())         <span class="comment">// 404</span>
@@ -681,19 +681,19 @@ ChopinError::Internal(<span class="str">"Something broke"</span>.into())        
 <span class="comment">// }</span></code></pre>
 
                 <h3>Using in handlers</h3>
-<pre><code><span class="kw">use</span> chopin::error::ChopinError;
-<span class="kw">use</span> chopin::response::ApiResponse;
+<pre><code><span class="kw">use</span> chopin_core::error::ChopinError;
+<span class="kw">use</span> chopin_core::response::ApiResponse;
 
 <span class="kw">pub async fn</span> <span class="fn">get_post</span>(
     State(state): State&lt;AppState&gt;,
     Path(id): Path&lt;<span class="type">i32</span>&gt;,
-) -> <span class="type">Result</span>&lt;chopin::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
+) -> <span class="type">Result</span>&lt;chopin_core::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
     <span class="kw">let</span> post = Post::find_by_id(id)
         .one(&state.db).<span class="kw">await</span>
         .map_err(|e| ChopinError::Database(e.to_string()))?
         .ok_or_else(|| ChopinError::NotFound(<span class="kw">format!</span>(<span class="str">"Post {} not found"</span>, id)))?;
 
-    <span class="type">Ok</span>(chopin::Json(ApiResponse::success(PostResponse::from(post))))
+    <span class="type">Ok</span>(chopin_core::Json(ApiResponse::success(PostResponse::from(post))))
 }</code></pre>
             </section>
 
@@ -767,7 +767,7 @@ chopin docs export --format yaml --output openapi.yaml</code></pre>
 <pre><code><span class="comment">// CacheService is automatically available via AppState</span>
 <span class="comment">// when using App::new()</span>
 
-<span class="kw">use</span> chopin::cache::CacheService;
+<span class="kw">use</span> chopin_core::cache::CacheService;
 
 <span class="kw">let</span> cache = CacheService::in_memory();
 
@@ -789,7 +789,7 @@ cache.flush().<span class="kw">await</span>?;                            <span c
 
                 <h3>Redis cache</h3>
 <pre><code><span class="comment"># Enable in Cargo.toml</span>
-chopin = { version = "0.2", features = ["redis"] }
+chopin-core = { version = "0.2", features = ["redis"] }
 
 <span class="comment"># Set in .env</span>
 REDIS_URL=redis://127.0.0.1:6379</code></pre>
@@ -802,13 +802,13 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
 <pre><code><span class="kw">pub async fn</span> <span class="fn">get_post</span>(
     State(state): State&lt;AppState&gt;,
     Path(id): Path&lt;<span class="type">i32</span>&gt;,
-) -> <span class="type">Result</span>&lt;chopin::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
+) -> <span class="type">Result</span>&lt;chopin_core::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
     <span class="kw">let</span> cache_key = <span class="kw">format!</span>(<span class="str">"post:{}"</span>, id);
 
     <span class="comment">// Check cache first</span>
     <span class="kw">if let</span> Some(cache) = &state.cache {
         <span class="kw">if let</span> Ok(Some(cached)) = cache.get_json::&lt;PostResponse&gt;(&cache_key).<span class="kw">await</span> {
-            <span class="kw">return</span> <span class="type">Ok</span>(chopin::Json(ApiResponse::success(cached)));
+            <span class="kw">return</span> <span class="type">Ok</span>(chopin_core::Json(ApiResponse::success(cached)));
         }
     }
 
@@ -822,7 +822,7 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
         <span class="kw">let</span> _ = cache.set_json(&cache_key, &response).<span class="kw">await</span>;
     }
 
-    <span class="type">Ok</span>(chopin::Json(ApiResponse::success(response)))
+    <span class="type">Ok</span>(chopin_core::Json(ApiResponse::success(response)))
 }</code></pre>
             </section>
 
@@ -833,8 +833,8 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
                 <p>Upload files to <strong>local disk</strong> or <strong>S3-compatible storage</strong> (AWS S3, Cloudflare R2, MinIO). Chopin handles multipart parsing, validation, and storage.</p>
 
                 <h3>Local storage</h3>
-<pre><code><span class="kw">use</span> chopin::storage::{LocalStorage, FileUploadService};
-<span class="kw">use</span> chopin::extract::Multipart;
+<pre><code><span class="kw">use</span> chopin_core::storage::{LocalStorage, FileUploadService};
+<span class="kw">use</span> chopin_core::extract::Multipart;
 
 <span class="kw">let</span> storage = LocalStorage::new(<span class="str">"./uploads"</span>);
 <span class="kw">let</span> upload_service = FileUploadService::new(
@@ -855,12 +855,12 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
     <span class="comment">// uploaded.content_type: "image/png"</span>
     <span class="comment">// uploaded.size: bytes</span>
 
-    <span class="type">Ok</span>(chopin::Json(json!({ "path": uploaded.stored_path })))
+    <span class="type">Ok</span>(chopin_core::Json(json!({ "path": uploaded.stored_path })))
 }</code></pre>
 
                 <h3>S3 / Cloudflare R2 / MinIO</h3>
 <pre><code><span class="comment"># Enable in Cargo.toml</span>
-chopin = { version = "0.2", features = ["s3"] }
+chopin-core = { version = "0.2", features = ["s3"] }
 
 <span class="comment"># Configure in .env</span>
 S3_BUCKET=my-bucket
@@ -875,8 +875,8 @@ S3_ENDPOINT=https://&lt;account-id&gt;.r2.cloudflarestorage.com
 <span class="comment"># For MinIO</span>
 S3_ENDPOINT=http://localhost:9000</code></pre>
 
-<pre><code><span class="kw">use</span> chopin::storage::S3Storage;
-<span class="kw">use</span> chopin::config::Config;
+<pre><code><span class="kw">use</span> chopin_core::storage::S3Storage;
+<span class="kw">use</span> chopin_core::config::Config;
 
 <span class="kw">let</span> config = Config::from_env()?;
 <span class="kw">let</span> s3 = S3Storage::from_config(&config).<span class="kw">await</span>;
@@ -898,10 +898,10 @@ S3_ENDPOINT=http://localhost:9000</code></pre>
                 <p>Chopin includes optional GraphQL support via <code>async-graphql</code>. Enable it with the <code>graphql</code> feature flag.</p>
 
 <pre><code><span class="comment"># Cargo.toml</span>
-chopin = { version = "0.2", features = ["graphql"] }</code></pre>
+chopin-core = { version = "0.2", features = ["graphql"] }</code></pre>
 
 <pre><code><span class="kw">use</span> async_graphql::{Object, Schema, EmptyMutation, EmptySubscription};
-<span class="kw">use</span> chopin::graphql::graphql_routes;
+<span class="kw">use</span> chopin_core::graphql::graphql_routes;
 
 <span class="kw">struct</span> <span class="type">QueryRoot</span>;
 
@@ -933,7 +933,7 @@ chopin = { version = "0.2", features = ["graphql"] }</code></pre>
                 <p>Chopin provides a built-in test harness with <strong>in-memory SQLite</strong>, a test client, and response assertions. Write integration tests with zero configuration.</p>
 
                 <h3>TestApp &mdash; spin up a test server</h3>
-<pre><code><span class="kw">use</span> chopin::testing::{TestApp, TestClient};
+<pre><code><span class="kw">use</span> chopin_core::testing::{TestApp, TestClient};
 
 <span class="attr">#[tokio::test]</span>
 <span class="kw">async fn</span> <span class="fn">test_signup_and_login</span>() {
@@ -1035,7 +1035,7 @@ cargo test test_signup_and_login -- --nocapture</code></pre>
                 <p>FastRoute bypasses Axum middleware for maximum performance. Each route can be individually configured with <strong>decorators</strong> — all pre-computed at registration time with zero per-request overhead.</p>
 
 <h4>Basic usage</h4>
-<pre><code><span class="kw">use</span> chopin::{App, FastRoute};
+<pre><code><span class="kw">use</span> chopin_core::{App, FastRoute};
 
 <span class="kw">let</span> app = App::new().<span class="kw">await</span>?
     <span class="comment">// Bare: maximum performance, no middleware (benchmark endpoints)</span>
@@ -1045,7 +1045,7 @@ cargo test test_signup_and_login -- --nocapture</code></pre>
 app.run().<span class="kw">await</span>?;</code></pre>
 
 <h4>With CORS (frontend-accessible endpoints)</h4>
-<pre><code><span class="kw">use</span> chopin::{App, FastRoute};
+<pre><code><span class="kw">use</span> chopin_core::{App, FastRoute};
 
 <span class="kw">let</span> app = App::new().<span class="kw">await</span>?
     <span class="comment">// Status endpoint with CORS + automatic OPTIONS preflight</span>
@@ -1059,8 +1059,8 @@ app.run().<span class="kw">await</span>?;</code></pre>
 app.run().<span class="kw">await</span>?;</code></pre>
 
 <h4>With custom headers</h4>
-<pre><code><span class="kw">use</span> chopin::{App, FastRoute};
-<span class="kw">use</span> chopin::http::header;
+<pre><code><span class="kw">use</span> chopin_core::{App, FastRoute};
+<span class="kw">use</span> chopin_core::http::header;
 
 <span class="kw">let</span> app = App::new().<span class="kw">await</span>?
     <span class="comment">// Health endpoint with security headers</span>

@@ -1,10 +1,10 @@
 use axum::{body::Body, extract::FromRequestParts, http::Request};
 use std::sync::Arc;
 
-use chopin::auth;
-use chopin::config::Config;
-use chopin::error::ChopinError;
-use chopin::extractors::auth_user::AuthUser;
+use chopin_core::auth;
+use chopin_core::config::Config;
+use chopin_core::error::ChopinError;
+use chopin_core::extractors::auth_user::AuthUser;
 
 fn test_config() -> Config {
     Config {

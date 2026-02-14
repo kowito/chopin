@@ -1,4 +1,4 @@
-use chopin::extractors::{PaginatedResponse, Pagination};
+use chopin_core::extractors::{PaginatedResponse, Pagination};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

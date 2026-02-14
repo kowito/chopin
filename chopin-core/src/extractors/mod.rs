@@ -9,6 +9,6 @@ pub use pagination::{PaginatedResponse, Pagination};
 pub use role::{require_role, AuthUserWithRole};
 
 // ── Axum extractor re-exports ──────────────────────────────────
-// Common axum extractors available under `chopin::extractors::`.
+// Common axum extractors available under `chopin_core::extractors::`.
 pub use axum::extract::{ConnectInfo, MatchedPath, OriginalUri, Path, Query, State};
 pub use axum::Extension;

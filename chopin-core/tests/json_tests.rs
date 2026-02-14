@@ -1,4 +1,4 @@
-use chopin::json;
+use chopin_core::json;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

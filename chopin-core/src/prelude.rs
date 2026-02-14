@@ -1,7 +1,7 @@
 //! Chopin prelude — import everything you need with one line.
 //!
 //! ```rust,ignore
-//! use chopin::prelude::*;
+//! use chopin_core::prelude::*;
 //! ```
 //!
 //! This re-exports the most commonly used types, traits, extractors, and

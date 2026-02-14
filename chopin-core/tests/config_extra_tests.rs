@@ -1,4 +1,4 @@
-use chopin::config::Config;
+use chopin_core::config::Config;
 
 /// Build a test Config struct with known values.
 fn test_config() -> Config {

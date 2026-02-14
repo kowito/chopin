@@ -1,4 +1,4 @@
-use chopin::TestApp;
+use chopin_core::TestApp;
 
 // ═══ TestApp creation ═══
 

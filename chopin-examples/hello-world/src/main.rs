@@ -20,7 +20,7 @@
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let app = chopin::App::new().await?;
+    let app = chopin_core::App::new().await?;
     app.run().await?;
 
     Ok(())

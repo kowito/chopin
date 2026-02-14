@@ -1,4 +1,4 @@
-use chopin::auth::jwt::{create_token, validate_token, Claims};
+use chopin_core::auth::jwt::{create_token, validate_token, Claims};
 use std::thread;
 use std::time::Duration;
 

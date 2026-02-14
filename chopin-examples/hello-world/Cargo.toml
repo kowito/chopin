@@ -6,6 +6,6 @@ license.workspace = true
 description = "Minimal Chopin example — one file, zero config"
 
 [dependencies]
-chopin = { path = "../../chopin-core" }
+chopin-core = { path = "../../chopin-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = "0.3"

@@ -1,5 +1,5 @@
 use axum::http::StatusCode;
-use chopin::error::{ChopinError, ErrorDetail, FieldError};
+use chopin_core::error::{ChopinError, ErrorDetail, FieldError};
 
 // ═══ Status codes for all variants ═══
 

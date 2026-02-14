@@ -1,4 +1,4 @@
-use chopin::response::ApiResponse;
+use chopin_core::response::ApiResponse;
 
 // ═══ ApiResponse success ═══
 
@@ -75,7 +75,7 @@ fn test_api_response_with_none_data() {
 
 #[test]
 fn test_api_response_error_format() {
-    use chopin::error::ErrorDetail;
+    use chopin_core::error::ErrorDetail;
 
     let resp: ApiResponse<()> = ApiResponse {
         success: false,

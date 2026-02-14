@@ -1,4 +1,4 @@
-use chopin::server::FastRoute;
+use chopin_core::server::FastRoute;
 use hyper::Method;
 
 // ═══ FastRoute construction ═══

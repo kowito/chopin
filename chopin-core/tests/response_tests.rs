@@ -1,4 +1,4 @@
-use chopin::response::ApiResponse;
+use chopin_core::response::ApiResponse;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

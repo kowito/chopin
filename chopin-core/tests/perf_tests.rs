@@ -1,4 +1,4 @@
-use chopin::perf::{cached_date_header, init_date_cache};
+use chopin_core::perf::{cached_date_header, init_date_cache};
 use std::time::Duration;
 
 #[tokio::test]

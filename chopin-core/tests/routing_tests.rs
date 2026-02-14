@@ -1,4 +1,4 @@
-use chopin::routing;
+use chopin_core::routing;
 
 #[test]
 fn test_build_routes_returns_router() {
@@ -11,7 +11,7 @@ fn test_build_routes_returns_router() {
 
 #[test]
 fn test_method_filter_exports() {
-    use chopin::routing::MethodFilter;
+    use chopin_core::routing::MethodFilter;
 
     // Verify we can access the re-exported types
     let _get = MethodFilter::GET;
@@ -27,7 +27,7 @@ fn test_method_filter_exports() {
 
 #[test]
 fn test_method_router_export() {
-    use chopin::routing::MethodRouter;
+    use chopin_core::routing::MethodRouter;
 
     // Verify MethodRouter type is accessible
     // This is mainly a compile-time check
@@ -37,7 +37,7 @@ fn test_method_router_export() {
 #[test]
 fn test_on_function_export() {
     // Verify the `on` function for custom method routing is accessible
-    use chopin::routing::MethodFilter;
+    use chopin_core::routing::MethodFilter;
 
     // MethodFilter is accessible
     let _ = MethodFilter::GET;
@@ -46,7 +46,7 @@ fn test_on_function_export() {
 #[test]
 fn test_method_routing_export() {
     // Verify method_routing is accessible through the routing module
-    use chopin::routing::method_routing;
+    use chopin_core::routing::method_routing;
 
     // It's a module re-export - verify it exists
     let _ = std::marker::PhantomData::<fn(&method_routing::MethodRouter<()>)>;

@@ -1,10 +1,10 @@
-use chopin::body::Body;
-use chopin::http::{Request, StatusCode};
+use chopin_core::body::Body;
+use chopin_core::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 /// Helper to build the test app router (same as main.rs but without starting the server).
-async fn setup() -> (chopin::Router, sea_orm::DatabaseConnection) {
-    use chopin::{config::Config, db};
+async fn setup() -> (chopin_core::Router, sea_orm::DatabaseConnection) {
+    use chopin_core::{config::Config, db};
     use sea_orm_migration::MigratorTrait;
 
     // Use in-memory SQLite for tests
@@ -24,7 +24,7 @@ async fn setup() -> (chopin::Router, sea_orm::DatabaseConnection) {
         config,
     };
 
-    let app = chopin::Router::new()
+    let app = chopin_core::Router::new()
         .merge(chopin_basic_api::controllers::posts::routes())
         .with_state(state);
 

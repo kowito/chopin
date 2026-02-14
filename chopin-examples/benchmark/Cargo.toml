@@ -6,7 +6,7 @@ license.workspace = true
 description = "Benchmark server for Chopin — Performance mode with raw hyper"
 
 [dependencies]
-chopin = { path = "../../chopin-core", features = ["perf"] }
+chopin-core = { path = "../../chopin-core", features = ["perf"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"

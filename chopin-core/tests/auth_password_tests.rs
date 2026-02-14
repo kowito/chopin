@@ -1,4 +1,4 @@
-use chopin::auth::password::{hash_password, verify_password};
+use chopin_core::auth::password::{hash_password, verify_password};
 
 #[test]
 fn test_hash_and_verify_password() {

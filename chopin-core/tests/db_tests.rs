@@ -1,5 +1,5 @@
-use chopin::config::Config;
-use chopin::db;
+use chopin_core::config::Config;
+use chopin_core::db;
 
 fn test_config() -> Config {
     Config {

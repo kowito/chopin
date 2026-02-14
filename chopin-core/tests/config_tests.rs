@@ -1,4 +1,4 @@
-use chopin::config::Config;
+use chopin_core::config::Config;
 use std::env;
 
 // Note: Config tests may fail if run in parallel due to shared environment state.

@@ -1,4 +1,6 @@
-use chopin::storage::{validate_content_type, validate_extension, LocalStorage, StorageBackend};
+use chopin_core::storage::{
+    validate_content_type, validate_extension, LocalStorage, StorageBackend,
+};
 use std::path::PathBuf;
 
 // ═══ validate_extension ═══

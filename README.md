@@ -130,7 +130,7 @@ REUSEPORT=true cargo run --release --features perf
 ### Your First API (90 seconds)
 
 ```rust
-use chopin::{App, Router, ApiResponse, get, Json};
+use chopin_core::{App, Router, ApiResponse, get, Json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -183,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### With Authentication
 
 ```rust
-use chopin::{App, ApiResponse, get, middleware::RequireAuth, extractors::AuthUser};
+use chopin_core::{App, ApiResponse, get, middleware::RequireAuth, extractors::AuthUser};
 
 async fn protected_route(user: AuthUser) -> ApiResponse<String> {
     ApiResponse::success(format!("Hello, {}! Your user ID is {}", user.username, user.id))
@@ -223,7 +223,7 @@ curl -X POST http://localhost:3000/api/auth/login \
 ### With Database
 
 ```rust
-use chopin::{App, ApiResponse, get, database::DatabaseConnection};
+use chopin_core::{App, ApiResponse, get, database::DatabaseConnection};
 use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
 
 async fn list_posts(db: DatabaseConnection) -> ApiResponse<Vec<Post>> {
@@ -319,7 +319,7 @@ let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
 axum::serve(listener, app).await?;
 
 // After (Chopin) — 7% faster + auth + DB + OpenAPI
-use chopin::{App, get, Json};
+use chopin_core::{App, get, Json};
 
 let app = App::new().await?  // Auto auth + DB + OpenAPI
     .route("/users", get(list_users));

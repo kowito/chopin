@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use chopin::extractors::json::Json;
+use chopin_core::extractors::json::Json;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct TestPayload {

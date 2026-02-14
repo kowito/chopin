@@ -145,7 +145,7 @@ impl App {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use chopin::{App, FastRoute};
+    /// use chopin_core::{App, FastRoute};
     ///
     /// let app = App::new().await?
     ///     // Bare: maximum performance
