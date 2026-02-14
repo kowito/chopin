@@ -8,7 +8,7 @@ use crate::models::user::UserResponse;
 #[openapi(
     info(
         title = "Chopin API",
-        version = "0.1.0",
+        version = "0.2.0",
         description = "Chopin: High-fidelity engineering for the modern virtuoso."
     ),
     paths(

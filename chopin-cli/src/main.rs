@@ -1052,11 +1052,11 @@ fn create_project(name: &str) {
     let cargo_toml = format!(
         r#"[package]
 name = "{name}"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-chopin-core = {{ version = "0.1.0" }}
+chopin-core = {{ version = "0.2.0" }}
 tokio = {{ version = "1", features = ["rt-multi-thread", "macros"] }}
 serde = {{ version = "1", features = ["derive"] }}
 tracing = "0.1"
