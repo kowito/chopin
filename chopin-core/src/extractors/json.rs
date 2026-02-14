@@ -38,14 +38,13 @@ where
 
 impl<T: serde::Serialize> IntoResponse for Json<T> {
     fn into_response(self) -> Response {
-        // Use to_writer to serialize directly into a pre-allocated buffer.
-        // This avoids the intermediate allocation that to_vec performs.
-        let mut buf = Vec::with_capacity(128);
-        match crate::json::to_writer(&mut buf, &self.0) {
-            Ok(()) => (
+        // Serialize into thread-local BytesMut → zero-copy Bytes.
+        // Avoids per-request Vec allocation (see json::to_bytes).
+        match crate::json::to_bytes(&self.0) {
+            Ok(bytes) => (
                 StatusCode::OK,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],
-                buf,
+                bytes,
             )
                 .into_response(),
             Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
