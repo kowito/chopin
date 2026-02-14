@@ -19,7 +19,7 @@ chopin/
 │   ├── hello-world/     # Minimal example
 │   ├── basic-api/       # Full CRUD example
 │   └── benchmark/       # Performance benchmark
-└── docs/                # Documentation
+└── website/             # Documentation website
 ```
 
 ## Development
@@ -50,7 +50,7 @@ cargo run -p chopin-hello-world
 cargo run -p chopin-basic-api
 
 # Benchmark
-SERVER_MODE=performance cargo run -p chopin-benchmark --release --features chopin-core/perf
+REUSEPORT=true cargo run -p chopin-benchmark --release --features chopin-core/perf
 ```
 
 ## Code Style
@@ -64,7 +64,7 @@ SERVER_MODE=performance cargo run -p chopin-benchmark --release --features chopi
 
 1. Add the feature flag to `chopin-core/Cargo.toml`
 2. Gate the code with `#[cfg(feature = "...")]`
-3. Update documentation in `docs/`
+3. Update documentation in `website/`
 4. Add tests
 5. Update the LLM learning guide if significant
 

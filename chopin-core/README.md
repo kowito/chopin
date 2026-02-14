@@ -13,8 +13,10 @@ A high-performance Rust web framework combining the ease of Axum with production
 
 ## Features
 
-- **Dual Server Modes** — Standard (easy, full middleware) or Performance (raw hyper, SO_REUSEPORT, zero-alloc)
-- **FastRoute API** — Zero-allocation endpoints via `ChopinBody` + direct header manipulation for extreme performance
+- **Unified ChopinService** — FastRoute zero-alloc fast path + Axum Router for all other routes
+- **Per-route trade-offs** — `.cors()`, `.cache_control()`, `.methods()`, `.header()` decorators (all pre-computed, zero per-request cost)
+- **SO_REUSEPORT** — Multi-core accept loops with per-core tokio runtimes (enable with `REUSEPORT=true`)
+- **FastRoute API** — Zero-allocation endpoints with per-route CORS, method filtering, and custom headers
 - **Built-in Auth** — JWT + Argon2id with signup/login endpoints out of the box
 - **Role-Based Access Control** — User, Moderator, Admin, SuperAdmin with extractors and middleware
 - **SeaORM Database** — SQLite, PostgreSQL, MySQL with auto-migrations
@@ -45,25 +47,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Performance Mode
+## Maximum Performance
 
-For maximum throughput, enable all three performance flags:
+For maximum throughput, enable all performance flags:
 
 ```bash
-# Method 1: Inline environment variable
-SERVER_MODE=performance cargo run --release --features perf
-
-# Method 2: Add to .env file
-echo "SERVER_MODE=performance" >> .env
-cargo run --release --features perf
+# Enable SO_REUSEPORT multi-core + perf features
+REUSEPORT=true cargo run --release --features perf
 ```
 
 This enables:
-- **SO_REUSEPORT** — N accept loops (one per CPU core)
+- **SO_REUSEPORT** — Per-core accept loops with single-threaded tokio runtimes
+- **FastRoute** — Zero-alloc static responses that bypass Axum
 - **mimalloc** — Microsoft's high-performance allocator
 - **sonic-rs** — SIMD-accelerated JSON (40% faster serialization vs serde_json)
-- **Zero-alloc endpoints** — pre-baked static responses
-- **Cached Date header** — updated every 500ms
+- **Cached Date header** — updated every 500ms, lock-free
 - **TCP_NODELAY** — disable Nagle's algorithm
 
 ## Documentation

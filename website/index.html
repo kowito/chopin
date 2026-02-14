@@ -26,7 +26,7 @@
                     <a href="#benchmarks">Benchmarks</a>
                     <a href="#examples">Examples</a>
                     <a href="tutorial.html">Tutorial</a>
-                    <a href="https://github.com/kowito/chopin/blob/main/docs/README.md">Docs</a>
+                    <a href="https://docs.rs/chopin-core">API Docs</a>
                     <a href="https://github.com/kowito/chopin" class="btn-primary">GitHub</a>
                 </div>
             </div>
@@ -355,8 +355,8 @@
 
                 <div class="feature-card">
                     <div class="feature-icon"><i data-lucide="rocket"></i></div>
-                    <h3>Performance Mode</h3>
-                    <p>SO_REUSEPORT multi-core accept, mimalloc, sonic-rs SIMD JSON, zero-allocation bodies.</p>
+                    <h3>FastRoute</h3>
+                    <p>Zero-alloc static responses that bypass Axum entirely. SO_REUSEPORT multi-core, mimalloc, sonic-rs SIMD JSON.</p>
                 </div>
             </div>
         </div>
@@ -597,8 +597,8 @@ app.run().await?;
             <div class="tech-grid">
                 <div class="tech-item">
                     <div class="tech-number">1</div>
-                    <h4>Performance Mode</h4>
-                    <p>Raw hyper HTTP/1.1 with SO_REUSEPORT multi-core accept loops</p>
+                    <h4>Unified ChopinService</h4>
+                    <p>Raw hyper HTTP/1.1 dispatcher with FastRoute zero-alloc fast path for all requests</p>
                 </div>
                 <div class="tech-item">
                     <div class="tech-number">2</div>
@@ -629,7 +629,7 @@ app.run().await?;
 
             <div class="tech-cta">
                 <div class="code-box">
-                    <code>SERVER_MODE=performance cargo run --release --features perf</code>
+                    <code>REUSEPORT=true cargo run --release --features perf</code>
                 </div>
                 <p>Enable all optimizations with one command</p>
             </div>
@@ -648,12 +648,12 @@ app.run().await?;
                     <p>Get started in 60 seconds with Chopin</p>
                     <div class="cta-buttons">
                         <a href="https://github.com/kowito/chopin" class="btn-large btn-primary">View on GitHub</a>
-                        <a href="https://github.com/kowito/chopin/blob/main/docs/getting-started.md" class="btn-large btn-secondary">Read Docs</a>
+                        <a href="tutorial.html" class="btn-large btn-secondary">Tutorial</a>
                     </div>
                     <div class="code-box-large">
                         <pre><code>cargo install chopin-cli
 chopin new my-api && cd my-api
-SERVER_MODE=performance cargo run --release --features perf</code></pre>
+REUSEPORT=true cargo run --release --features perf</code></pre>
                     </div>
                 </div>
             </div>
@@ -682,17 +682,17 @@ SERVER_MODE=performance cargo run --release --features perf</code></pre>
                     <a href="https://github.com/kowito/chopin">GitHub</a>
                     <a href="https://crates.io/crates/chopin-core">Crates.io</a>
                     <a href="https://github.com/kowito/chopin/tree/main/chopin-examples">Examples</a>
-                    <a href="https://github.com/kowito/chopin/blob/main/docs/benchmark_comparison_report.md">Benchmarks</a>
+                    <a href="https://docs.rs/chopin-core">API Reference</a>
                 </div>
 
                 <!-- Documentation -->
                 <div class="footer-column">
                     <h4>Learn</h4>
                     <a href="tutorial.html">Tutorial</a>
-                    <a href="https://github.com/kowito/chopin/blob/main/docs/README.md">Documentation</a>
-                    <a href="https://github.com/kowito/chopin/blob/main/docs/getting-started.md">Getting Started</a>
-                    <a href="https://github.com/kowito/chopin/blob/main/docs/architecture.md">Architecture</a>
-                    <a href="https://github.com/kowito/chopin/blob/main/docs/performance.md">Performance</a>
+                    <a href="tutorial.html#configuration">Configuration</a>
+                    <a href="tutorial.html#authentication">Authentication</a>
+                    <a href="tutorial.html#performance">Performance</a>
+                    <a href="tutorial.html#production">Deployment</a>
                 </div>
 
                 <!-- Community -->

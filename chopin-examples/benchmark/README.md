@@ -1,22 +1,22 @@
 # Chopin Benchmark Example
 
-A purpose-built server for throughput benchmarking. Uses **Performance mode** — raw hyper HTTP/1.1 with `SO_REUSEPORT` multi-core accept loops and `mimalloc` global allocator.
+A purpose-built server for throughput benchmarking. Uses **SO_REUSEPORT multi-core architecture** with FastRoute zero-alloc endpoints and `mimalloc` global allocator.
 
 ## What Gets Benchmarked
 
 | Endpoint       | Path          | Handled By  | Notes                                     |
 |----------------|---------------|-------------|-------------------------------------------|
-| JSON           | `GET /json`   | Raw hyper   | ChopinBody zero-alloc, direct headers     |
-| Plaintext      | `GET /plaintext` | Raw hyper | ChopinBody zero-alloc, direct headers     |
-| Welcome (Axum) | `GET /`       | Axum router | Standard middleware pipeline              |
+| JSON           | `GET /json`   | FastRoute   | Zero-alloc, bypasses Axum entirely        |
+| Plaintext      | `GET /plaintext` | FastRoute | Zero-alloc, bypasses Axum entirely        |
+| Welcome (Axum) | `GET /`       | Axum router | Full middleware pipeline                  |
 
-The `/json` and `/plaintext` endpoints bypass Axum entirely — they are intercepted by `ChopinService` in `server.rs` and return `ChopinBody::Fast(Option<Bytes>)` with headers built directly from individual `HeaderValue`s (no `HeaderMap` clone) and a cached Date header.
+The `/json` and `/plaintext` endpoints are registered as `FastRoute` — they bypass Axum's router and return pre-computed responses with zero heap allocation.
 
 ## Quick Start
 
 ```bash
 # From workspace root, release mode for accurate numbers
-SERVER_MODE=performance \
+REUSEPORT=true \
 DATABASE_URL=sqlite::memory: \
 JWT_SECRET=bench \
 cargo run -p chopin-benchmark --release
@@ -64,14 +64,19 @@ sysctl -w net.ipv4.tcp_max_syn_backlog=65535
 sysctl -w net.core.netdev_max_backlog=65535
 ```
 
-## Performance Mode Details
+## Architecture
 
-When `SERVER_MODE=performance`:
+All requests flow through **ChopinService**:
+
+1. **FastRoute match** → Zero-alloc pre-computed response
+2. **No match** → Axum Router with full middleware
+
+**With `REUSEPORT=true`:**
 
 1. **SO_REUSEPORT** — One TCP listener per CPU core, kernel balances connections
-2. **Raw hyper** — `/json` and `/plaintext` skip Axum's Router entirely
-3. **Pre-computed responses** — Static `Bytes` and `HeaderValue` constants
-4. **Cached Date header** — Updated every 500ms by a background Tokio task
+2. **Per-core runtimes** — Single-threaded tokio runtime per core, zero cross-thread sync
+3. **FastRoute fast path** — `/json` and `/plaintext` bypass Axum entirely
+4. **Cached Date header** — Updated every 500ms by a background task
 5. **mimalloc** — Microsoft's high-concurrency allocator (via `perf` feature)
 6. **LTO + native CPU** — fat LTO, single codegen unit, `target-cpu=native`
 

@@ -27,7 +27,7 @@
                     <a href="index.html#features">Features</a>
                     <a href="index.html#benchmarks">Benchmarks</a>
                     <a href="tutorial.html" class="active">Tutorial</a>
-                    <a href="https://github.com/kowito/chopin/blob/main/docs/README.md">Docs</a>
+                    <a href="https://docs.rs/chopin-core">API Docs</a>
                     <a href="https://github.com/kowito/chopin" class="btn-primary">GitHub</a>
                 </div>
             </div>
@@ -56,7 +56,7 @@
                     <li><a href="#file-uploads" class="toc-link">File Uploads</a></li>
                     <li><a href="#graphql" class="toc-link">GraphQL</a></li>
                     <li><a href="#testing" class="toc-link">Testing</a></li>
-                    <li><a href="#performance" class="toc-link">Performance Mode</a></li>
+                    <li><a href="#performance" class="toc-link">Performance</a></li>
                     <li><a href="#production" class="toc-link">Production Deployment</a></li>
                 </ol>
             </div>
@@ -169,7 +169,7 @@ cargo run
 <pre><code><span class="comment"># .env — Chopin configuration</span>
 
 <span class="comment"># Server</span>
-SERVER_MODE=standard          <span class="comment"># standard | performance</span>
+REUSEPORT=false               <span class="comment"># true for multi-core SO_REUSEPORT</span>
 SERVER_HOST=127.0.0.1
 SERVER_PORT=3000
 ENVIRONMENT=development       <span class="comment"># development | production</span>
@@ -1002,55 +1002,171 @@ cargo test --all
 cargo test test_signup_and_login -- --nocapture</code></pre>
             </section>
 
-            <!-- 17. Performance Mode -->
+            <!-- 17. Performance -->
             <section id="performance" class="tutorial-section">
                 <div class="section-number">17</div>
-                <h2>Performance Mode</h2>
-                <p>Chopin's dual-mode architecture lets you switch from standard Axum serving to a <strong>raw hyper HTTP/1.1 server</strong> with SO_REUSEPORT multi-core accept loops. This is how we achieve <strong>657K+ req/s</strong>.</p>
+                <h2>Performance</h2>
+                <p>Chopin uses a unified <strong>ChopinService</strong> dispatcher for all requests. FastRoute endpoints bypass Axum with zero allocation, and all other routes go through the full middleware stack. Enable <strong>SO_REUSEPORT</strong> for multi-core parallelism.</p>
 
                 <div class="mode-comparison">
                     <div class="mode-card">
-                        <h4><i data-lucide="shield" class="inline-icon"></i> Standard Mode</h4>
+                        <h4><i data-lucide="shield" class="inline-icon"></i> Default</h4>
                         <ul>
-                            <li>Full Axum middleware stack</li>
-                            <li>CORS, tracing, request-id</li>
-                            <li>Graceful shutdown</li>
+                            <li>Single listener, multi-thread tokio</li>
+                            <li>FastRoute zero-alloc fast path</li>
+                            <li>Full Axum middleware for other routes</li>
                             <li>~150K-300K req/s</li>
                         </ul>
-                        <code>SERVER_MODE=standard</code>
+                        <code>cargo run --release</code>
                     </div>
                     <div class="mode-card">
-                        <h4><i data-lucide="zap" class="inline-icon"></i> Performance Mode</h4>
+                        <h4><i data-lucide="zap" class="inline-icon"></i> REUSEPORT=true</h4>
                         <ul>
-                            <li>Raw hyper service</li>
-                            <li>SO_REUSEPORT x N CPU cores</li>
-                            <li>Zero-alloc fast routes</li>
+                            <li>Per-core current_thread tokio runtimes</li>
+                            <li>SO_REUSEPORT kernel-level load balancing</li>
+                            <li>Zero cross-thread synchronization</li>
                             <li>~500K-1.7M+ req/s</li>
                         </ul>
-                        <code>SERVER_MODE=performance</code>
+                        <code>REUSEPORT=true cargo run --release</code>
                     </div>
                 </div>
 
                 <h3>Fast routes &mdash; zero-allocation endpoints</h3>
+                <p>FastRoute bypasses Axum middleware for maximum performance. Each route can be individually configured with <strong>decorators</strong> — all pre-computed at registration time with zero per-request overhead.</p>
+
+<h4>Basic usage</h4>
 <pre><code><span class="kw">use</span> chopin_core::{App, FastRoute};
 
 <span class="kw">let</span> app = App::new().<span class="kw">await</span>?
-    <span class="comment">// Register pre-computed responses that bypass Axum entirely</span>
+    <span class="comment">// Bare: maximum performance, no middleware (benchmark endpoints)</span>
     .fast_route(FastRoute::json(<span class="str">"/json"</span>, <span class="kw">br#</span><span class="str">{"message":"Hello, World!"}</span><span class="kw">#</span>))
-    .fast_route(FastRoute::text(<span class="str">"/plaintext"</span>, <span class="kw">b</span><span class="str">"Hello, World!"</span>))
-    .fast_route(FastRoute::html(<span class="str">"/health"</span>, <span class="kw">b</span><span class="str">"&lt;h1&gt;OK&lt;/h1&gt;"</span>));
+    .fast_route(FastRoute::text(<span class="str">"/plaintext"</span>, <span class="kw">b</span><span class="str">"Hello, World!"</span>));
 
 app.run().<span class="kw">await</span>?;</code></pre>
 
+<h4>With CORS (frontend-accessible endpoints)</h4>
+<pre><code><span class="kw">use</span> chopin_core::{App, FastRoute};
+
+<span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+    <span class="comment">// Status endpoint with CORS + automatic OPTIONS preflight</span>
+    .fast_route(
+        FastRoute::json(<span class="str">"/api/status"</span>, <span class="kw">br#</span><span class="str">{"status":"ok"}</span><span class="kw">#</span>)
+            .cors()                              <span class="comment">// adds Access-Control-Allow-Origin: *</span>
+            .get_only()                          <span class="comment">// only GET/HEAD; POST falls through to Axum</span>
+            .cache_control(<span class="str">"public, max-age=5"</span>)  <span class="comment">// static Cache-Control header</span>
+    );
+
+app.run().<span class="kw">await</span>?;</code></pre>
+
+<h4>With custom headers</h4>
+<pre><code><span class="kw">use</span> chopin_core::{App, FastRoute};
+<span class="kw">use</span> axum::http::header;
+
+<span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+    <span class="comment">// Health endpoint with security headers</span>
+    .fast_route(
+        FastRoute::text(<span class="str">"/health"</span>, <span class="kw">b</span><span class="str">"OK"</span>)
+            .header(header::X_CONTENT_TYPE_OPTIONS, <span class="str">"nosniff"</span>)
+            .header(header::X_FRAME_OPTIONS, <span class="str">"DENY"</span>)
+            .cache_control(<span class="str">"no-cache"</span>)
+    );
+
+app.run().<span class="kw">await</span>?;</code></pre>
+
+<h4>Per-route trade-offs</h4>
+<table>
+    <thead>
+        <tr>
+            <th>Feature</th>
+            <th>FastRoute (bare)</th>
+            <th>FastRoute (+decorators)</th>
+            <th>Axum Router</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Performance</strong></td>
+            <td>~35ns</td>
+            <td>~35ns</td>
+            <td>~1,000-5,000ns</td>
+        </tr>
+        <tr>
+            <td><strong>Throughput</strong></td>
+            <td>~28M req/s</td>
+            <td>~28M req/s</td>
+            <td>~200K-1M req/s</td>
+        </tr>
+        <tr>
+            <td>CORS</td>
+            <td>—</td>
+            <td><code>.cors()</code></td>
+            <td>CorsLayer</td>
+        </tr>
+        <tr>
+            <td>Cache-Control</td>
+            <td>—</td>
+            <td><code>.cache_control()</code></td>
+            <td>manual</td>
+        </tr>
+        <tr>
+            <td>Method filter</td>
+            <td>—</td>
+            <td><code>.get_only()</code> / <code>.methods()</code></td>
+            <td>built-in</td>
+        </tr>
+        <tr>
+            <td>Auth</td>
+            <td>—</td>
+            <td>—</td>
+            <td>middleware</td>
+        </tr>
+        <tr>
+            <td>Logging</td>
+            <td>—</td>
+            <td>—</td>
+            <td>TraceLayer</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="tip">
+    <strong>When to use FastRoute:</strong>
+    <ul>
+        <li><strong>Health checks</strong> — <code>/health</code>, <code>/ready</code>, <code>/metrics</code></li>
+        <li><strong>Static API responses</strong> — <code>/api/status</code>, <code>/api/version</code></li>
+        <li><strong>Benchmark endpoints</strong> — <code>/json</code>, <code>/plaintext</code></li>
+    </ul>
+    <strong>When to use Axum Router:</strong>
+    <ul>
+        <li>Dynamic content (database queries, user input)</li>
+        <li>Authentication required</li>
+        <li>Request logging/tracing</li>
+    </ul>
+</div>
+
                 <h3>How it works</h3>
                 <div class="arch-flow">
-<pre><code><span class="comment">SO_REUSEPORT x N CPU cores  (kernel-level load balancing)
-  → per-core accept loop (current_thread runtime)
-    → TCP_NODELAY
-      → hyper HTTP/1.1 (keep-alive, pipeline_flush)
-        → ChopinService::call(req)
-          → FastRoute match?  → pre-baked response (ZERO heap alloc)
-          → no match          → Axum Router (full middleware stack)</span></code></pre>
+<pre><code><span class="comment">ChopinService::call(req)  ← all requests go through this
+  1. CORS preflight? (OPTIONS + .cors() enabled)
+     → pre-baked 204 No Content with CORS headers
+  2. FastRoute path match + method allowed?
+     → pre-baked response (ZERO heap alloc, ~35ns)
+  3. Axum Router
+     → full middleware stack (CORS, auth, tracing, etc.)
+
+Request examples:
+  GET /json            → FastRoute (bare, ~35ns)
+  GET /api/status      → FastRoute (+cors, ~35ns)
+  OPTIONS /api/status  → FastRoute (204 preflight, automatic)
+  POST /api/status     → Axum (method not allowed on FastRoute)
+  GET /users           → Axum (dynamic content)
+
+With REUSEPORT=true:
+  SO_REUSEPORT x N CPU cores (kernel-level load balancing)
+    → per-core accept loop (current_thread runtime)
+      → TCP_NODELAY
+        → hyper HTTP/1.1 (keep-alive, pipeline_flush)
+          → ChopinService</span></code></pre>
                 </div>
 
                 <h3>Performance optimizations</h3>
@@ -1085,8 +1201,8 @@ strip = true
 opt-level = 3</code></pre>
 
                 <h3>Benchmark with wrk</h3>
-<pre><code><span class="comment"># Start server in performance mode</span>
-SERVER_MODE=performance cargo run --release
+<pre><code><span class="comment"># Start server with SO_REUSEPORT</span>
+REUSEPORT=true cargo run --release
 
 <span class="comment"># Benchmark (in another terminal)</span>
 wrk -t4 -c256 -d10s http://127.0.0.1:3000/json
@@ -1113,7 +1229,7 @@ ls -lh target/release/my-api
                 <h3>Production .env</h3>
 <pre><code><span class="comment"># Production environment</span>
 ENVIRONMENT=production
-SERVER_MODE=standard            <span class="comment"># or performance for max throughput</span>
+REUSEPORT=true                  <span class="comment"># enable multi-core SO_REUSEPORT</span>
 SERVER_HOST=0.0.0.0
 SERVER_PORT=3000
 
@@ -1197,7 +1313,7 @@ sudo systemctl status my-api</code></pre>
                 <div class="cta-actions">
                     <a href="https://github.com/kowito/chopin" class="btn-primary">View on GitHub</a>
                     <a href="https://github.com/kowito/chopin/tree/main/chopin-examples" class="btn-secondary">Browse Examples</a>
-                    <a href="https://github.com/kowito/chopin/blob/main/docs/README.md" class="btn-secondary">Full Documentation</a>
+                    <a href="https://docs.rs/chopin-core" class="btn-secondary">API Reference</a>
                 </div>
             </section>
 
