@@ -404,7 +404,7 @@ chopin db reset</code></pre>
 
                 <h3>Defining routes</h3>
 <pre><code><span class="comment">// src/controllers/posts.rs</span>
-<span class="kw">use</span> axum::{extract::{Path, Query, State}, routing::get, Router};
+<span class="kw">use</span> chopin::{extract::{Path, Query, State}, routing::get, Router};
 <span class="kw">use</span> chopin::response::ApiResponse;
 <span class="kw">use</span> crate::AppState;
 
@@ -417,7 +417,7 @@ chopin db reset</code></pre>
 <span class="kw">pub async fn</span> <span class="fn">list_posts</span>(
     State(state): State&lt;AppState&gt;,
     Query(pagination): Query&lt;Pagination&gt;,
-) -> <span class="type">Result</span>&lt;axum::Json&lt;ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;&gt;, StatusCode&gt; {
+) -> <span class="type">Result</span>&lt;chopin::Json&lt;ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;&gt;, StatusCode&gt; {
     <span class="kw">let</span> posts = Post::find()
         .order_by_desc(post::Column::CreatedAt)
         .offset(pagination.clamped().offset)
@@ -425,15 +425,15 @@ chopin db reset</code></pre>
         .all(&state.db).<span class="kw">await</span>
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    <span class="type">Ok</span>(axum::Json(ApiResponse::success(
+    <span class="type">Ok</span>(chopin::Json(ApiResponse::success(
         posts.into_iter().map(PostResponse::from).collect()
     )))
 }
 
 <span class="kw">pub async fn</span> <span class="fn">create_post</span>(
     State(state): State&lt;AppState&gt;,
-    axum::Json(payload): axum::Json&lt;CreatePostRequest&gt;,
-) -> <span class="type">Result</span>&lt;(StatusCode, axum::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;), StatusCode&gt; {
+    chopin::Json(payload): chopin::Json&lt;CreatePostRequest&gt;,
+) -> <span class="type">Result</span>&lt;(StatusCode, chopin::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;), StatusCode&gt; {
     <span class="kw">let</span> new = post::ActiveModel {
         title: Set(payload.title),
         body: Set(payload.body),
@@ -442,7 +442,7 @@ chopin db reset</code></pre>
     <span class="kw">let</span> result = new.insert(&state.db).<span class="kw">await</span>
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    <span class="type">Ok</span>((StatusCode::CREATED, axum::Json(ApiResponse::success(PostResponse::from(result)))))
+    <span class="type">Ok</span>((StatusCode::CREATED, chopin::Json(ApiResponse::success(PostResponse::from(result)))))
 }</code></pre>
 
                 <h3>Generate a controller</h3>
@@ -539,7 +539,7 @@ chopin generate controller posts</code></pre>
     user: AuthUserWithRole&lt;{ Role::Admin <span class="kw">as</span> u8 }&gt;,
 ) -> <span class="kw">impl</span> IntoResponse {
     <span class="comment">// user.user_id, user.email, user.role are available</span>
-    axum::Json(json!({ "message": "Welcome, admin!" }))
+    chopin::Json(json!({ "message": "Welcome, admin!" }))
 }
 
 <span class="comment">// Or use the require_role middleware on a group of routes</span>
@@ -549,7 +549,7 @@ chopin generate controller posts</code></pre>
     Router::new()
         .route(<span class="str">"/api/admin/users"</span>, get(list_users))
         .route(<span class="str">"/api/admin/stats"</span>, get(admin_stats))
-        .layer(axum::middleware::from_fn(require_role::&lt;{ Role::Admin <span class="kw">as</span> u8 }&gt;))
+        .layer(chopin::middleware::from_fn(require_role::&lt;{ Role::Admin <span class="kw">as</span> u8 }&gt;))
 }</code></pre>
 
                 <h3>Create a superuser</h3>
@@ -571,7 +571,7 @@ chopin createsuperuser</code></pre>
     <span class="comment">// user.user_id: String (UUID)</span>
     <span class="comment">// user.email: String</span>
     <span class="comment">// user.role: String</span>
-    axum::Json(json!({
+    chopin::Json(json!({
         "id": user.user_id,
         "email": user.email,
         "role": user.role,
@@ -615,7 +615,7 @@ chopin createsuperuser</code></pre>
 <span class="kw">pub async fn</span> <span class="fn">list_posts</span>(
     State(state): State&lt;AppState&gt;,
     Query(pagination): Query&lt;Pagination&gt;,
-) -> axum::Json&lt;PaginatedResponse&lt;PostResponse&gt;&gt; {
+) -> chopin::Json&lt;PaginatedResponse&lt;PostResponse&gt;&gt; {
     <span class="kw">let</span> p = pagination.clamped();
 
     <span class="comment">// Count total items</span>
@@ -628,7 +628,7 @@ chopin createsuperuser</code></pre>
         .all(&state.db).<span class="kw">await</span>.unwrap_or_default()
         .into_iter().map(PostResponse::from).collect();
 
-    axum::Json(PaginatedResponse::new(items, total, p.page, p.per_page))
+    chopin::Json(PaginatedResponse::new(items, total, p.page, p.per_page))
 }
 
 <span class="comment">// Response format:</span>
@@ -687,13 +687,13 @@ ChopinError::Internal(<span class="str">"Something broke"</span>.into())        
 <span class="kw">pub async fn</span> <span class="fn">get_post</span>(
     State(state): State&lt;AppState&gt;,
     Path(id): Path&lt;<span class="type">i32</span>&gt;,
-) -> <span class="type">Result</span>&lt;axum::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
+) -> <span class="type">Result</span>&lt;chopin::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
     <span class="kw">let</span> post = Post::find_by_id(id)
         .one(&state.db).<span class="kw">await</span>
         .map_err(|e| ChopinError::Database(e.to_string()))?
         .ok_or_else(|| ChopinError::NotFound(<span class="kw">format!</span>(<span class="str">"Post {} not found"</span>, id)))?;
 
-    <span class="type">Ok</span>(axum::Json(ApiResponse::success(PostResponse::from(post))))
+    <span class="type">Ok</span>(chopin::Json(ApiResponse::success(PostResponse::from(post))))
 }</code></pre>
             </section>
 
@@ -802,13 +802,13 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
 <pre><code><span class="kw">pub async fn</span> <span class="fn">get_post</span>(
     State(state): State&lt;AppState&gt;,
     Path(id): Path&lt;<span class="type">i32</span>&gt;,
-) -> <span class="type">Result</span>&lt;axum::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
+) -> <span class="type">Result</span>&lt;chopin::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
     <span class="kw">let</span> cache_key = <span class="kw">format!</span>(<span class="str">"post:{}"</span>, id);
 
     <span class="comment">// Check cache first</span>
     <span class="kw">if let</span> Some(cache) = &state.cache {
         <span class="kw">if let</span> Ok(Some(cached)) = cache.get_json::&lt;PostResponse&gt;(&cache_key).<span class="kw">await</span> {
-            <span class="kw">return</span> <span class="type">Ok</span>(axum::Json(ApiResponse::success(cached)));
+            <span class="kw">return</span> <span class="type">Ok</span>(chopin::Json(ApiResponse::success(cached)));
         }
     }
 
@@ -822,7 +822,7 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
         <span class="kw">let</span> _ = cache.set_json(&cache_key, &response).<span class="kw">await</span>;
     }
 
-    <span class="type">Ok</span>(axum::Json(ApiResponse::success(response)))
+    <span class="type">Ok</span>(chopin::Json(ApiResponse::success(response)))
 }</code></pre>
             </section>
 
@@ -834,7 +834,7 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
 
                 <h3>Local storage</h3>
 <pre><code><span class="kw">use</span> chopin::storage::{LocalStorage, FileUploadService};
-<span class="kw">use</span> axum::extract::Multipart;
+<span class="kw">use</span> chopin::extract::Multipart;
 
 <span class="kw">let</span> storage = LocalStorage::new(<span class="str">"./uploads"</span>);
 <span class="kw">let</span> upload_service = FileUploadService::new(
@@ -855,7 +855,7 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
     <span class="comment">// uploaded.content_type: "image/png"</span>
     <span class="comment">// uploaded.size: bytes</span>
 
-    <span class="type">Ok</span>(axum::Json(json!({ "path": uploaded.stored_path })))
+    <span class="type">Ok</span>(chopin::Json(json!({ "path": uploaded.stored_path })))
 }</code></pre>
 
                 <h3>S3 / Cloudflare R2 / MinIO</h3>
@@ -1060,7 +1060,7 @@ app.run().<span class="kw">await</span>?;</code></pre>
 
 <h4>With custom headers</h4>
 <pre><code><span class="kw">use</span> chopin::{App, FastRoute};
-<span class="kw">use</span> axum::http::header;
+<span class="kw">use</span> chopin::http::header;
 
 <span class="kw">let</span> app = App::new().<span class="kw">await</span>?
     <span class="comment">// Health endpoint with security headers</span>

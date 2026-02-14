@@ -429,7 +429,7 @@ async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
                         <span>protected_routes.rs</span>
                         <button class="copy-btn" onclick="copyCode('auth')">Copy</button>
                     </div>
-                    <pre><code id="code-auth">use axum::{routing::get, Router, Json};
+                    <pre><code id="code-auth">use chopin::{routing::get, Router, Json};
 use chopin::extractors::{AuthUser, AuthUserWithRole};
 use chopin::models::user::Role;
 use chopin::response::ApiResponse;
@@ -471,7 +471,7 @@ fn routes() -> Router {
                         <span>database.rs</span>
                         <button class="copy-btn" onclick="copyCode('database')">Copy</button>
                     </div>
-                    <pre><code id="code-database">use axum::{extract::State, routing::get, Router, Json};
+                    <pre><code id="code-database">use chopin::{extract::State, routing::get, Router, Json};
 use chopin::response::ApiResponse;
 use sea_orm::{EntityTrait, ColumnTrait, QueryFilter};
 
