@@ -157,7 +157,10 @@ async fn test_local_storage_store_and_exists() {
     assert!(uploaded.path.starts_with("uploads/"));
 
     // File should exist
-    let exists = storage.exists(&uploaded.stored_name).await.expect("exists failed");
+    let exists = storage
+        .exists(&uploaded.stored_name)
+        .await
+        .expect("exists failed");
     assert!(exists);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -189,7 +192,10 @@ async fn test_local_storage_url() {
         .await
         .expect("store failed");
 
-    let url = storage.url(&uploaded.stored_name).await.expect("url failed");
+    let url = storage
+        .url(&uploaded.stored_name)
+        .await
+        .expect("url failed");
     assert!(url.starts_with("/uploads/"));
     assert!(url.contains(&uploaded.stored_name));
 
@@ -211,10 +217,16 @@ async fn test_local_storage_delete() {
     assert!(exists);
 
     // Delete
-    storage.delete(&uploaded.stored_name).await.expect("delete failed");
+    storage
+        .delete(&uploaded.stored_name)
+        .await
+        .expect("delete failed");
 
     // File should no longer exist
-    let exists = storage.exists(&uploaded.stored_name).await.expect("exists after delete");
+    let exists = storage
+        .exists(&uploaded.stored_name)
+        .await
+        .expect("exists after delete");
     assert!(!exists);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -250,9 +262,18 @@ async fn test_local_storage_multiple_files() {
     let dir = format!("/tmp/chopin_test_{}", uuid::Uuid::new_v4());
     let storage = LocalStorage::new(&dir);
 
-    let f1 = storage.store("a.txt", "text/plain", b"aaa").await.expect("store a");
-    let f2 = storage.store("b.txt", "text/plain", b"bbb").await.expect("store b");
-    let f3 = storage.store("c.txt", "text/plain", b"ccc").await.expect("store c");
+    let f1 = storage
+        .store("a.txt", "text/plain", b"aaa")
+        .await
+        .expect("store a");
+    let f2 = storage
+        .store("b.txt", "text/plain", b"bbb")
+        .await
+        .expect("store b");
+    let f3 = storage
+        .store("c.txt", "text/plain", b"ccc")
+        .await
+        .expect("store c");
 
     // All should have unique stored names
     assert_ne!(f1.stored_name, f2.stored_name);

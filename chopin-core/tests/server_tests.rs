@@ -7,9 +7,17 @@ use hyper::Method;
 fn test_fast_route_json() {
     let route = FastRoute::json("/json", br#"{"message":"Hello"}"#);
     let display = format!("{}", route);
-    assert!(display.contains("/json"), "Should contain path: {}", display);
+    assert!(
+        display.contains("/json"),
+        "Should contain path: {}",
+        display
+    );
     // {"message":"Hello"} = 19 bytes
-    assert!(display.contains("19 bytes"), "Should contain body length: {}", display);
+    assert!(
+        display.contains("19 bytes"),
+        "Should contain body length: {}",
+        display
+    );
 }
 
 #[test]
@@ -43,7 +51,11 @@ fn test_fast_route_cors() {
     let route = FastRoute::json("/api/status", br#"{"ok":true}"#).cors();
     let display = format!("{}", route);
     assert!(display.contains("/api/status"));
-    assert!(display.contains("+cors"), "Display should include +cors: {}", display);
+    assert!(
+        display.contains("+cors"),
+        "Display should include +cors: {}",
+        display
+    );
 }
 
 #[test]
@@ -64,8 +76,7 @@ fn test_fast_route_get_only() {
 
 #[test]
 fn test_fast_route_custom_methods() {
-    let route = FastRoute::json("/data", br#"{}"#)
-        .methods(&[Method::GET, Method::POST]);
+    let route = FastRoute::json("/data", br#"{}"#).methods(&[Method::GET, Method::POST]);
     let display = format!("{}", route);
     assert!(display.contains("GET"));
     assert!(display.contains("POST"));
@@ -73,8 +84,7 @@ fn test_fast_route_custom_methods() {
 
 #[test]
 fn test_fast_route_single_method_post() {
-    let route = FastRoute::json("/post-only", br#"{}"#)
-        .methods(&[Method::POST]);
+    let route = FastRoute::json("/post-only", br#"{}"#).methods(&[Method::POST]);
     let display = format!("{}", route);
     assert!(display.contains("POST"));
     assert!(!display.contains("GET"));
@@ -133,7 +143,9 @@ fn test_multiple_fast_routes() {
     let routes = [
         FastRoute::json("/json", br#"{"message":"Hello, World!"}"#),
         FastRoute::text("/plaintext", b"Hello, World!"),
-        FastRoute::json("/api/status", br#"{"status":"ok"}"#).cors().get_only(),
+        FastRoute::json("/api/status", br#"{"status":"ok"}"#)
+            .cors()
+            .get_only(),
         FastRoute::text("/health", b"OK").cache_control("public, max-age=60"),
     ];
 
@@ -164,7 +176,11 @@ fn test_display_cors_only_no_methods() {
     let display = format!("{}", route);
     assert!(display.contains("+cors"));
     // No method filter → no brackets
-    assert!(!display.contains("["), "No method filter should mean no []: {}", display);
+    assert!(
+        !display.contains("["),
+        "No method filter should mean no []: {}",
+        display
+    );
 }
 
 #[test]

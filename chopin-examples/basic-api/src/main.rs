@@ -85,9 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(Scalar::with_url("/api-docs", ApiDoc::openapi()))
         .route(
             "/api-docs/openapi.json",
-            chopin::routing::get(|| async {
-                chopin::extractors::Json(ApiDoc::openapi())
-            }),
+            chopin::routing::get(|| async { chopin::extractors::Json(ApiDoc::openapi()) }),
         )
         .with_state(state)
         .layer(Extension(Arc::new(config.clone())))

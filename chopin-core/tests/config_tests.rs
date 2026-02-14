@@ -118,14 +118,20 @@ fn test_s3_configuration() {
     env::set_var("S3_REGION", "us-west-2");
     env::set_var("S3_ENDPOINT", "https://s3.example.com");
     env::set_var("S3_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE");
-    env::set_var("S3_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+    env::set_var(
+        "S3_SECRET_ACCESS_KEY",
+        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    );
     env::set_var("S3_PUBLIC_URL", "https://cdn.example.com");
     env::set_var("S3_PREFIX", "uploads/");
 
     let config = Config::from_env().expect("Failed to load config");
     assert_eq!(config.s3_bucket, Some("my-bucket".to_string()));
     assert_eq!(config.s3_region, Some("us-west-2".to_string()));
-    assert_eq!(config.s3_endpoint, Some("https://s3.example.com".to_string()));
+    assert_eq!(
+        config.s3_endpoint,
+        Some("https://s3.example.com".to_string())
+    );
     assert_eq!(
         config.s3_access_key_id,
         Some("AKIAIOSFODNN7EXAMPLE".to_string())

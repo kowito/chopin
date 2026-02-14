@@ -36,7 +36,10 @@ async fn test_openapi_json_endpoint() {
     let res = app.client.get(&app.url("/api-docs/openapi.json")).await;
     assert_eq!(res.status, 200, "OpenAPI endpoint should return 200");
     let json = res.json();
-    assert!(json.get("openapi").is_some(), "Should have openapi version field");
+    assert!(
+        json.get("openapi").is_some(),
+        "Should have openapi version field"
+    );
 }
 
 // ═══ Auth signup ═══
@@ -49,10 +52,20 @@ async fn test_signup_success() {
         "username": "integrationuser",
         "password": "password123"
     });
-    let res = app.client.post(&app.url("/api/auth/signup"), &body.to_string()).await;
-    assert!(res.is_success(), "Signup should succeed: status={}", res.status);
+    let res = app
+        .client
+        .post(&app.url("/api/auth/signup"), &body.to_string())
+        .await;
+    assert!(
+        res.is_success(),
+        "Signup should succeed: status={}",
+        res.status
+    );
     let data = res.data();
-    assert!(data.get("access_token").is_some(), "Should return an access_token");
+    assert!(
+        data.get("access_token").is_some(),
+        "Should return an access_token"
+    );
     assert!(data.get("user").is_some(), "Should return user info");
 }
 
@@ -66,7 +79,10 @@ async fn test_signup_duplicate_email() {
     });
 
     // First signup
-    let res = app.client.post(&app.url("/api/auth/signup"), &body.to_string()).await;
+    let res = app
+        .client
+        .post(&app.url("/api/auth/signup"), &body.to_string())
+        .await;
     assert!(res.is_success());
 
     // Second signup with same email should conflict
@@ -75,7 +91,10 @@ async fn test_signup_duplicate_email() {
         "username": "user2",
         "password": "password123"
     });
-    let res2 = app.client.post(&app.url("/api/auth/signup"), &body2.to_string()).await;
+    let res2 = app
+        .client
+        .post(&app.url("/api/auth/signup"), &body2.to_string())
+        .await;
     assert!(!res2.is_success(), "Duplicate email should fail");
     assert!(res2.status >= 400);
 }
@@ -92,15 +111,24 @@ async fn test_login_success() {
         "username": "loginuser",
         "password": "password123"
     });
-    app.client.post(&app.url("/api/auth/signup"), &body.to_string()).await;
+    app.client
+        .post(&app.url("/api/auth/signup"), &body.to_string())
+        .await;
 
     // Then login
     let login_body = serde_json::json!({
         "email": "login@test.com",
         "password": "password123"
     });
-    let res = app.client.post(&app.url("/api/auth/login"), &login_body.to_string()).await;
-    assert!(res.is_success(), "Login should succeed: status={}", res.status);
+    let res = app
+        .client
+        .post(&app.url("/api/auth/login"), &login_body.to_string())
+        .await;
+    assert!(
+        res.is_success(),
+        "Login should succeed: status={}",
+        res.status
+    );
     let data = res.data();
     assert!(data.get("access_token").is_some());
 }
@@ -114,13 +142,18 @@ async fn test_login_wrong_password() {
         "username": "wronguser",
         "password": "password123"
     });
-    app.client.post(&app.url("/api/auth/signup"), &body.to_string()).await;
+    app.client
+        .post(&app.url("/api/auth/signup"), &body.to_string())
+        .await;
 
     let login = serde_json::json!({
         "email": "wrong@test.com",
         "password": "wrongpassword"
     });
-    let res = app.client.post(&app.url("/api/auth/login"), &login.to_string()).await;
+    let res = app
+        .client
+        .post(&app.url("/api/auth/login"), &login.to_string())
+        .await;
     assert!(!res.is_success());
     assert_eq!(res.status, 401);
 }
@@ -133,7 +166,10 @@ async fn test_login_nonexistent_user() {
         "email": "nobody@test.com",
         "password": "password123"
     });
-    let res = app.client.post(&app.url("/api/auth/login"), &login.to_string()).await;
+    let res = app
+        .client
+        .post(&app.url("/api/auth/login"), &login.to_string())
+        .await;
     assert!(!res.is_success());
 }
 
@@ -168,7 +204,10 @@ async fn test_response_is_success_for_api_response() {
         "username": "issuccessuser",
         "password": "password123"
     });
-    let res = app.client.post(&app.url("/api/auth/signup"), &body.to_string()).await;
+    let res = app
+        .client
+        .post(&app.url("/api/auth/signup"), &body.to_string())
+        .await;
     assert!(res.is_success());
     assert_eq!(res.status, 200);
 }
@@ -180,7 +219,10 @@ async fn test_response_not_success_for_bad_login() {
         "email": "nobody@test.com",
         "password": "wrongpassword"
     });
-    let res = app.client.post(&app.url("/api/auth/login"), &login.to_string()).await;
+    let res = app
+        .client
+        .post(&app.url("/api/auth/login"), &login.to_string())
+        .await;
     assert!(!res.is_success());
     assert!(res.status >= 400);
 }

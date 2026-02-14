@@ -1,4 +1,4 @@
-use chopin::extractors::{Pagination, PaginatedResponse};
+use chopin::extractors::{PaginatedResponse, Pagination};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -110,7 +110,8 @@ fn test_paginated_response_creation() {
         offset: 0,
         page: None,
         per_page: None,
-    }.clamped();
+    }
+    .clamped();
 
     let response = PaginatedResponse::new(items.clone(), 50, &pagination);
 
@@ -129,7 +130,8 @@ fn test_paginated_response_page_calculation() {
         offset: 20,
         page: None,
         per_page: None,
-    }.clamped();
+    }
+    .clamped();
 
     let response = PaginatedResponse::new(items, 100, &pagination);
 
@@ -145,7 +147,8 @@ fn test_paginated_response_last_partial_page() {
         offset: 0,
         page: None,
         per_page: None,
-    }.clamped();
+    }
+    .clamped();
 
     let response = PaginatedResponse::new(items, 95, &pagination);
 
@@ -177,7 +180,8 @@ fn test_paginated_response_with_page_based_query() {
         offset: 0,
         page: Some(5),
         per_page: Some(20),
-    }.clamped();
+    }
+    .clamped();
 
     let response = PaginatedResponse::new(items, 200, &pagination);
 

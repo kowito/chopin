@@ -8,15 +8,15 @@
 //! routing functions so Chopin users never need to depend on `axum` directly.
 
 // ── Core types ─────────────────────────────────────────────────
-pub use crate::App;
 pub use crate::ApiResponse;
+pub use crate::App;
 pub use crate::ChopinError;
 pub use crate::Config;
 pub use crate::FastRoute;
 
 // ── Router & routing ───────────────────────────────────────────
-pub use crate::Router;
 pub use crate::routing::{any, delete, get, head, options, patch, post, put};
+pub use crate::Router;
 
 // ── Extractors ─────────────────────────────────────────────────
 pub use crate::extract::{Extension, Path, Query, State};

@@ -172,9 +172,7 @@ pub async fn update_post(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(ApiResponse::success(PostResponse::from(
-        updated,
-    ))))
+    Ok(Json(ApiResponse::success(PostResponse::from(updated))))
 }
 
 /// Delete a post by ID.

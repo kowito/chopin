@@ -143,9 +143,7 @@ fn test_internal_display() {
 
 #[test]
 fn test_validation_errors_display() {
-    let err = ChopinError::ValidationErrors(vec![
-        FieldError::new("email", "invalid"),
-    ]);
+    let err = ChopinError::ValidationErrors(vec![FieldError::new("email", "invalid")]);
     assert_eq!(err.to_string(), "Validation errors");
 }
 
@@ -236,9 +234,7 @@ fn test_error_detail_with_fields() {
     let detail = ErrorDetail {
         code: "VALIDATION_ERROR".to_string(),
         message: "Validation failed".to_string(),
-        fields: Some(vec![
-            FieldError::new("email", "required"),
-        ]),
+        fields: Some(vec![FieldError::new("email", "required")]),
     };
     let json = serde_json::to_string(&detail).expect("serialize");
     assert!(json.contains("\"fields\""));

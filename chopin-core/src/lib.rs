@@ -38,16 +38,12 @@ pub use testing::{TestApp, TestClient, TestResponse};
 
 // ── Axum re-exports ────────────────────────────────────────────
 // Users should never need `axum` in their Cargo.toml.
-pub use axum::{
-    Extension,
-    Router,
-    serve,
-};
+pub use axum::{serve, Extension, Router};
 
 // ── HTTP re-exports ────────────────────────────────────────────
+pub use axum::body;
 pub use axum::http;
 pub use axum::http::{HeaderMap, Method, StatusCode};
-pub use axum::body;
 pub use axum::middleware;
 
 /// Axum extractor re-exports.

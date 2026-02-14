@@ -1,8 +1,4 @@
-use axum::{
-    body::Body,
-    extract::FromRequestParts,
-    http::Request,
-};
+use axum::{body::Body, extract::FromRequestParts, http::Request};
 use std::sync::Arc;
 
 use chopin::auth;
@@ -134,7 +130,7 @@ async fn test_invalid_token_fails() {
 
     assert!(result.is_err());
     match result.unwrap_err() {
-        ChopinError::Unauthorized(_) => {},
+        ChopinError::Unauthorized(_) => {}
         _ => panic!("Expected Unauthorized error"),
     }
 }
@@ -143,7 +139,7 @@ async fn test_invalid_token_fails() {
 async fn test_token_with_wrong_secret_fails() {
     let config = Arc::new(test_config());
     let user_id = 42;
-    
+
     // Create token with different secret
     let token = auth::create_token(user_id, "wrong-secret", 1).expect("Failed to create token");
 
@@ -193,7 +189,8 @@ async fn test_different_user_ids_extract_correctly() {
     let user_ids = vec![1, 42, 999, 10000];
 
     for user_id in user_ids {
-        let token = auth::create_token(user_id, &config.jwt_secret, 1).expect("Failed to create token");
+        let token =
+            auth::create_token(user_id, &config.jwt_secret, 1).expect("Failed to create token");
 
         let mut req = Request::builder()
             .header("Authorization", format!("Bearer {}", token))
@@ -216,9 +213,9 @@ async fn test_different_user_ids_extract_correctly() {
 async fn test_auth_user_is_clone_and_debug() {
     let auth_user = AuthUser(42);
     let cloned = auth_user.clone();
-    
+
     assert_eq!(auth_user.0, cloned.0);
-    
+
     let debug_str = format!("{:?}", auth_user);
     assert!(debug_str.contains("AuthUser"));
     assert!(debug_str.contains("42"));
@@ -248,27 +245,28 @@ async fn test_case_sensitive_bearer_prefix() {
 
 #[tokio::test]
 async fn test_expired_token_fails() {
-    use jsonwebtoken::{encode, EncodingKey, Header};
     use chrono::Utc;
-    
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
     let config = Arc::new(test_config());
     let user_id = 42;
-    
+
     // Manually create a token that expired 2 minutes ago (beyond the 60s leeway)
     let now = Utc::now();
     let expired_time = now - chrono::Duration::minutes(2);
-    
+
     let claims = auth::Claims {
         sub: user_id.to_string(),
         exp: expired_time.timestamp() as usize,
         iat: (expired_time - chrono::Duration::hours(1)).timestamp() as usize,
     };
-    
+
     let token = encode(
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(config.jwt_secret.as_bytes()),
-    ).expect("Failed to create expired token");
+    )
+    .expect("Failed to create expired token");
 
     let mut req = Request::builder()
         .header("Authorization", format!("Bearer {}", token))

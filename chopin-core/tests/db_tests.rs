@@ -33,9 +33,7 @@ async fn test_connect_with_valid_sqlite_memory() {
 
     // Verify we can execute a simple query
     use sea_orm::ConnectionTrait;
-    let query_result = connection
-        .execute_unprepared("SELECT 1")
-        .await;
+    let query_result = connection.execute_unprepared("SELECT 1").await;
 
     assert!(query_result.is_ok());
 }
@@ -101,17 +99,17 @@ async fn test_multiple_connections_from_same_config() {
 #[tokio::test]
 async fn test_sqlite_file_database() {
     let temp_path = std::env::temp_dir().join(format!("test_{}.db", uuid::Uuid::new_v4()));
-    
+
     let mut config = test_config();
     config.database_url = format!("sqlite://{}?mode=rwc", temp_path.display());
 
     let result = db::connect(&config).await;
 
     assert!(result.is_ok());
-    
+
     // Verify the file was created
     assert!(temp_path.exists());
-    
+
     // Clean up
     let _ = std::fs::remove_file(temp_path);
 }
@@ -122,7 +120,7 @@ async fn test_connection_pool_can_execute_queries() {
     let connection = db::connect(&config).await.unwrap();
 
     use sea_orm::ConnectionTrait;
-    
+
     // Create a simple table
     let create_table = connection
         .execute_unprepared("CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT)")
@@ -148,13 +146,13 @@ async fn test_connection_pool_can_execute_queries() {
 #[tokio::test]
 async fn test_config_is_dev_method() {
     let mut config = test_config();
-    
+
     config.environment = "development".to_string();
     assert!(config.is_dev());
-    
+
     config.environment = "production".to_string();
     assert!(!config.is_dev());
-    
+
     config.environment = "test".to_string();
     assert!(!config.is_dev());
 }

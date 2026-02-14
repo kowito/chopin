@@ -65,7 +65,9 @@ async fn test_missing_required_fields_fails() {
 async fn test_extra_fields_are_ignored() {
     let req = Request::builder()
         .header("content-type", "application/json")
-        .body(Body::from(r#"{"name": "Charlie", "age": 25, "extra": "ignored"}"#))
+        .body(Body::from(
+            r#"{"name": "Charlie", "age": 25, "extra": "ignored"}"#,
+        ))
         .unwrap();
 
     let result = Json::<TestPayload>::from_request(req, &()).await;
@@ -167,7 +169,11 @@ async fn test_json_with_arrays() {
     }
 
     let payload = ListPayload {
-        items: vec!["apple".to_string(), "banana".to_string(), "cherry".to_string()],
+        items: vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "cherry".to_string(),
+        ],
     };
 
     let json_str = serde_json::to_string(&payload).unwrap();
