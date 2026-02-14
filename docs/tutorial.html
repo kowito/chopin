@@ -789,7 +789,7 @@ cache.flush().<span class="kw">await</span>?;                            <span c
 
                 <h3>Redis cache</h3>
 <pre><code><span class="comment"># Enable in Cargo.toml</span>
-chopin = { version = "0.1", features = ["redis"] }
+chopin = { version = "0.2", features = ["redis"] }
 
 <span class="comment"># Set in .env</span>
 REDIS_URL=redis://127.0.0.1:6379</code></pre>
@@ -860,7 +860,7 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
 
                 <h3>S3 / Cloudflare R2 / MinIO</h3>
 <pre><code><span class="comment"># Enable in Cargo.toml</span>
-chopin = { version = "0.1", features = ["s3"] }
+chopin = { version = "0.2", features = ["s3"] }
 
 <span class="comment"># Configure in .env</span>
 S3_BUCKET=my-bucket
@@ -898,7 +898,7 @@ S3_ENDPOINT=http://localhost:9000</code></pre>
                 <p>Chopin includes optional GraphQL support via <code>async-graphql</code>. Enable it with the <code>graphql</code> feature flag.</p>
 
 <pre><code><span class="comment"># Cargo.toml</span>
-chopin = { version = "0.1", features = ["graphql"] }</code></pre>
+chopin = { version = "0.2", features = ["graphql"] }</code></pre>
 
 <pre><code><span class="kw">use</span> async_graphql::{Object, Schema, EmptyMutation, EmptySubscription};
 <span class="kw">use</span> chopin::graphql::graphql_routes;

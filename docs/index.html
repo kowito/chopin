@@ -398,7 +398,7 @@ async fn hello() -> &'static str {
 }
 
 async fn get_user() -> ApiResponse&lt;User&gt; {
-    ApiResponse::ok(User {
+    ApiResponse::success(User {
         id: 1,
         name: "Alice".to_string(),
         email: "alice@example.com".to_string(),

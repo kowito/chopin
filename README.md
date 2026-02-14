@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/chopin)](https://crates.io/crates/chopin)
 [![Downloads](https://img.shields.io/crates/d/chopin.svg)](https://crates.io/crates/chopin)
 [![License](https://img.shields.io/badge/license-WTFPL-blue.svg)](https://github.com/kowito/chopin/blob/main/LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.70+-blue.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.75+-blue.svg)](https://www.rust-lang.org)
 
 > **High-fidelity engineering for the modern virtuoso.**
 
@@ -147,7 +147,7 @@ async fn hello() -> &'static str {
 
 // JSON response
 async fn get_user() -> ApiResponse<User> {
-    ApiResponse::ok(User {
+    ApiResponse::success(User {
         id: 1,
         name: "Alice".to_string(),
         email: "alice@example.com".to_string(),
@@ -157,7 +157,7 @@ async fn get_user() -> ApiResponse<User> {
 // JSON extraction
 async fn create_user(Json(user): Json<User>) -> ApiResponse<User> {
     // Auto-validation, database access, etc.
-    ApiResponse::created(user)
+    ApiResponse::success(user)
 }
 
 #[tokio::main]
@@ -186,12 +186,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use chopin::{App, ApiResponse, get, middleware::RequireAuth, extractors::AuthUser};
 
 async fn protected_route(user: AuthUser) -> ApiResponse<String> {
-    ApiResponse::ok(format!("Hello, {}! Your user ID is {}", user.username, user.id))
+    ApiResponse::success(format!("Hello, {}! Your user ID is {}", user.username, user.id))
 }
 
 async fn admin_only(user: AuthUser) -> ApiResponse<&'static str> {
     // Automatically enforced by RequireAuth middleware with Role::Admin
-    ApiResponse::ok("Welcome, admin!")
+    ApiResponse::success("Welcome, admin!")
 }
 
 #[tokio::main]
@@ -232,7 +232,7 @@ async fn list_posts(db: DatabaseConnection) -> ApiResponse<Vec<Post>> {
         .all(&db)
         .await?;
     
-    ApiResponse::ok(posts)
+    ApiResponse::success(posts)
 }
 
 #[tokio::main]
