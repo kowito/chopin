@@ -1,8 +1,8 @@
 # 🎹 Chopin
 
 [![Build status](https://github.com/kowito/chopin/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/kowito/chopin/actions/workflows/CI.yml)
-[![Crates.io](https://img.shields.io/crates/v/chopin-core)](https://crates.io/crates/chopin-core)
-[![Downloads](https://img.shields.io/crates/d/chopin-core.svg)](https://crates.io/crates/chopin-core)
+[![Crates.io](https://img.shields.io/crates/v/chopin)](https://crates.io/crates/chopin)
+[![Downloads](https://img.shields.io/crates/d/chopin.svg)](https://crates.io/crates/chopin)
 [![License](https://img.shields.io/badge/license-WTFPL-blue.svg)](https://github.com/kowito/chopin/blob/main/LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-blue.svg)](https://www.rust-lang.org)
 
@@ -130,7 +130,7 @@ REUSEPORT=true cargo run --release --features perf
 ### Your First API (90 seconds)
 
 ```rust
-use chopin_core::{App, Router, ApiResponse, get, Json};
+use chopin::{App, Router, ApiResponse, get, Json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -183,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### With Authentication
 
 ```rust
-use chopin_core::{App, ApiResponse, get, middleware::RequireAuth, extractors::AuthUser};
+use chopin::{App, ApiResponse, get, middleware::RequireAuth, extractors::AuthUser};
 
 async fn protected_route(user: AuthUser) -> ApiResponse<String> {
     ApiResponse::ok(format!("Hello, {}! Your user ID is {}", user.username, user.id))
@@ -223,7 +223,7 @@ curl -X POST http://localhost:3000/api/auth/login \
 ### With Database
 
 ```rust
-use chopin_core::{App, ApiResponse, get, database::DatabaseConnection};
+use chopin::{App, ApiResponse, get, database::DatabaseConnection};
 use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
 
 async fn list_posts(db: DatabaseConnection) -> ApiResponse<Vec<Post>> {
@@ -319,7 +319,7 @@ let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
 axum::serve(listener, app).await?;
 
 // After (Chopin) — 7% faster + auth + DB + OpenAPI
-use chopin_core::{App, get, Json};
+use chopin::{App, get, Json};
 
 let app = App::new().await?  // Auto auth + DB + OpenAPI
     .route("/users", get(list_users));
@@ -339,7 +339,7 @@ app.run().await?;
 
 - **[Website & Tutorial](https://kowito.github.io/chopin/)** — Getting started, full tutorial, and architecture overview
 - **[Examples](chopin-examples/)** — Hello world, CRUD API, benchmarks
-- **[API Docs (docs.rs)](https://docs.rs/chopin-core)** — Complete Rust API reference
+- **[API Docs (docs.rs)](https://docs.rs/chopin)** — Complete Rust API reference
 
 ---
 

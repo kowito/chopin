@@ -43,7 +43,7 @@ curl -X POST http://localhost:3000/api/auth/login \
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-    let app = chopin_core::App::new().await?;
+    let app = chopin::App::new().await?;
     app.run().await?;
     Ok(())
 }

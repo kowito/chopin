@@ -1,4 +1,4 @@
-use chopin_core::TestApp;
+use chopin::TestApp;
 
 #[tokio::test]
 async fn test_openapi_json_endpoint() {

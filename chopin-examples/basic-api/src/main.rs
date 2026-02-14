@@ -4,13 +4,12 @@
 
 use std::sync::Arc;
 
-use axum::Router;
+use chopin::{config::Config, db, serve, Extension, Router};
 use sea_orm_migration::MigratorTrait;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 
 use chopin_basic_api::{controllers, migrations, models, AppState};
-use chopin_core::{config::Config, db};
 
 /// OpenAPI documentation for the example API.
 #[derive(OpenApi)]
@@ -32,9 +31,9 @@ use chopin_core::{config::Config, db};
             models::post::PostResponse,
             controllers::posts::CreatePostRequest,
             controllers::posts::UpdatePostRequest,
-            chopin_core::response::ApiResponse<models::post::PostResponse>,
-            chopin_core::response::ApiResponse<Vec<models::post::PostResponse>>,
-            chopin_core::extractors::Pagination,
+            chopin::response::ApiResponse<models::post::PostResponse>,
+            chopin::response::ApiResponse<Vec<models::post::PostResponse>>,
+            chopin::extractors::Pagination,
         )
     ),
     tags(
@@ -74,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run migrations
     tracing::info!("Running migrations...");
     migrations::Migrator::up(&database_conn, None).await?;
-    chopin_core::migrations::Migrator::up(&database_conn, None).await?;
+    chopin::migrations::Migrator::up(&database_conn, None).await?;
 
     let state = AppState {
         db: database_conn,
@@ -86,10 +85,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(Scalar::with_url("/api-docs", ApiDoc::openapi()))
         .route(
             "/api-docs/openapi.json",
-            axum::routing::get(|| async { axum::Json(ApiDoc::openapi()) }),
+            chopin::routing::get(|| async {
+                chopin::extractors::Json(ApiDoc::openapi())
+            }),
         )
         .with_state(state)
-        .layer(axum::Extension(Arc::new(config.clone())))
+        .layer(Extension(Arc::new(config.clone())))
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
@@ -99,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   → API docs: http://{}/api-docs\n", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app)
+    serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 

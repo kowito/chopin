@@ -424,7 +424,7 @@ fn generate_controller_for_model(model_name: &str, snake_name: &str, fields: &[(
     }
 
     let content = format!(
-        r#"use axum::{{extract::{{Path, State}}, routing::{{get, post}}, Router}};
+        r#"use chopin::{{extract::{{Path, State}}, routing::{{get, post}}, Router}};
 use chrono::Utc;
 use sea_orm::{{ActiveModelTrait, EntityTrait, Set}};
 use serde::{{Deserialize, Serialize}};
@@ -548,7 +548,7 @@ fn generate_controller(name: &str) {
     let plural_name = format!("{}s", snake_name);
 
     let content = format!(
-        r#"use axum::{{extract::{{Path, State}}, routing::get, Router}};
+        r#"use chopin::{{extract::{{Path, State}}, routing::get, Router}};
 use serde::{{Deserialize, Serialize}};
 use utoipa::ToSchema;
 
@@ -876,7 +876,7 @@ fn create_superuser_inline(email: &str, username: &str, password: &str) {
         r#"
 // Add this to your main.rs to support `chopin createsuperuser`:
 //
-// use chopin_core::auth::hash_password;
+// use chopin::auth::hash_password;
 // use sea_orm::{{ActiveModelTrait, Set}};
 //
 // async fn create_superuser(db: &DatabaseConnection) {{
@@ -1056,7 +1056,7 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-chopin-core = {{ version = "0.2.0" }}
+chopin = {{ version = "0.2.0" }}
 tokio = {{ version = "1", features = ["rt-multi-thread", "macros"] }}
 serde = {{ version = "1", features = ["derive"] }}
 tracing = "0.1"
@@ -1077,7 +1077,7 @@ strip = true
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let app = chopin_core::App::new().await?;
+    let app = chopin::App::new().await?;
     app.run().await?;
 
     Ok(())
@@ -1171,7 +1171,7 @@ chopin generate model Post title:string body:text
 }
 
 fn export_openapi(format: &str, output: &str) {
-    use chopin_core::openapi::ApiDoc;
+    use chopin::openapi::ApiDoc;
     use utoipa::OpenApi;
 
     let spec = match format {

@@ -6,7 +6,7 @@ license.workspace = true
 description = "Performance mode deep-dive example with benchmarks"
 
 [dependencies]
-chopin-core = { path = "../../chopin-core", features = ["perf"] }
+chopin = { path = "../../chopin-core", features = ["perf"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"

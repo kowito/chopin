@@ -26,7 +26,7 @@
                     <a href="#benchmarks">Benchmarks</a>
                     <a href="#examples">Examples</a>
                     <a href="tutorial.html">Tutorial</a>
-                    <a href="https://docs.rs/chopin-core">API Docs</a>
+                    <a href="https://docs.rs/chopin">API Docs</a>
                     <a href="https://github.com/kowito/chopin" class="btn-primary">GitHub</a>
                 </div>
             </div>
@@ -383,7 +383,7 @@
                         <span>main.rs</span>
                         <button class="copy-btn" onclick="copyCode('hello')">Copy</button>
                     </div>
-                    <pre><code id="code-hello">use chopin_core::{App, ApiResponse, get, Json};
+                    <pre><code id="code-hello">use chopin::{App, ApiResponse, get, Json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -430,9 +430,9 @@ async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
                         <button class="copy-btn" onclick="copyCode('auth')">Copy</button>
                     </div>
                     <pre><code id="code-auth">use axum::{routing::get, Router, Json};
-use chopin_core::extractors::{AuthUser, AuthUserWithRole};
-use chopin_core::models::user::Role;
-use chopin_core::response::ApiResponse;
+use chopin::extractors::{AuthUser, AuthUserWithRole};
+use chopin::models::user::Role;
+use chopin::response::ApiResponse;
 use serde_json::json;
 
 // Any authenticated user can access this
@@ -472,7 +472,7 @@ fn routes() -> Router {
                         <button class="copy-btn" onclick="copyCode('database')">Copy</button>
                     </div>
                     <pre><code id="code-database">use axum::{extract::State, routing::get, Router, Json};
-use chopin_core::response::ApiResponse;
+use chopin::response::ApiResponse;
 use sea_orm::{EntityTrait, ColumnTrait, QueryFilter};
 
 #[derive(Clone)]
@@ -529,7 +529,7 @@ axum::serve(listener, app).await.unwrap();
 // ─────────────────────────────────────────────────────
 
 // After (Chopin) — 8% faster + built-in features
-use chopin_core::App;
+use chopin::App;
 
 let app = App::new().await?;  // Built-in: auth, DB, OpenAPI
 app.run().await?;
@@ -680,9 +680,9 @@ REUSEPORT=true cargo run --release --features perf</code></pre>
                 <div class="footer-column">
                     <h4>Product</h4>
                     <a href="https://github.com/kowito/chopin">GitHub</a>
-                    <a href="https://crates.io/crates/chopin-core">Crates.io</a>
+                    <a href="https://crates.io/crates/chopin">Crates.io</a>
                     <a href="https://github.com/kowito/chopin/tree/main/chopin-examples">Examples</a>
-                    <a href="https://docs.rs/chopin-core">API Reference</a>
+                    <a href="https://docs.rs/chopin">API Reference</a>
                 </div>
 
                 <!-- Documentation -->

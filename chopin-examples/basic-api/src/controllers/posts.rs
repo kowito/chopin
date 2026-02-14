@@ -1,15 +1,10 @@
-use axum::http::StatusCode;
-use axum::{
-    extract::{Path, Query, State},
-    routing::get,
-    Router,
-};
+use chopin::extractors::{Json, Pagination, Path, Query, State};
+use chopin::response::ApiResponse;
+use chopin::routing::get;
+use chopin::{Router, StatusCode};
 use sea_orm::*;
 use serde::Deserialize;
 use utoipa::ToSchema;
-
-use chopin_core::extractors::Pagination;
-use chopin_core::response::ApiResponse;
 
 use crate::models::post::{self, Entity as Post, PostResponse};
 use crate::AppState;
@@ -60,7 +55,7 @@ pub struct UpdatePostRequest {
 pub async fn list_posts(
     State(state): State<AppState>,
     Query(pagination): Query<Pagination>,
-) -> Result<axum::Json<ApiResponse<Vec<PostResponse>>>, StatusCode> {
+) -> Result<Json<ApiResponse<Vec<PostResponse>>>, StatusCode> {
     let p = pagination.clamped();
 
     let posts = Post::find()
@@ -72,7 +67,7 @@ pub async fn list_posts(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let items: Vec<PostResponse> = posts.into_iter().map(PostResponse::from).collect();
-    Ok(axum::Json(ApiResponse::success(items)))
+    Ok(Json(ApiResponse::success(items)))
 }
 
 /// Create a new post.
@@ -88,8 +83,8 @@ pub async fn list_posts(
 )]
 pub async fn create_post(
     State(state): State<AppState>,
-    axum::Json(payload): axum::Json<CreatePostRequest>,
-) -> Result<(StatusCode, axum::Json<ApiResponse<PostResponse>>), StatusCode> {
+    Json(payload): Json<CreatePostRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<PostResponse>>), StatusCode> {
     let now = chrono::Utc::now().naive_utc();
 
     let new_post = post::ActiveModel {
@@ -108,7 +103,7 @@ pub async fn create_post(
 
     Ok((
         StatusCode::CREATED,
-        axum::Json(ApiResponse::success(PostResponse::from(result))),
+        Json(ApiResponse::success(PostResponse::from(result))),
     ))
 }
 
@@ -126,14 +121,14 @@ pub async fn create_post(
 pub async fn get_post(
     State(state): State<AppState>,
     Path(id): Path<i32>,
-) -> Result<axum::Json<ApiResponse<PostResponse>>, StatusCode> {
+) -> Result<Json<ApiResponse<PostResponse>>, StatusCode> {
     let post = Post::find_by_id(id)
         .one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    Ok(axum::Json(ApiResponse::success(PostResponse::from(post))))
+    Ok(Json(ApiResponse::success(PostResponse::from(post))))
 }
 
 /// Update an existing post.
@@ -151,8 +146,8 @@ pub async fn get_post(
 pub async fn update_post(
     State(state): State<AppState>,
     Path(id): Path<i32>,
-    axum::Json(payload): axum::Json<UpdatePostRequest>,
-) -> Result<axum::Json<ApiResponse<PostResponse>>, StatusCode> {
+    Json(payload): Json<UpdatePostRequest>,
+) -> Result<Json<ApiResponse<PostResponse>>, StatusCode> {
     let existing = Post::find_by_id(id)
         .one(&state.db)
         .await
@@ -177,7 +172,7 @@ pub async fn update_post(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(axum::Json(ApiResponse::success(PostResponse::from(
+    Ok(Json(ApiResponse::success(PostResponse::from(
         updated,
     ))))
 }

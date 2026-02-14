@@ -36,7 +36,7 @@ cargo build --release --features perf    # With mimalloc
 
 ```bash
 cargo test                               # All tests
-cargo test -p chopin-core                # Core library only
+cargo test -p chopin                # Core library only
 cargo test -p chopin-basic-api           # Example tests
 ```
 
@@ -50,7 +50,7 @@ cargo run -p chopin-hello-world
 cargo run -p chopin-basic-api
 
 # Benchmark
-REUSEPORT=true cargo run -p chopin-benchmark --release --features chopin-core/perf
+REUSEPORT=true cargo run -p chopin-benchmark --release --features chopin/perf
 ```
 
 ## Code Style

@@ -1,4 +1,4 @@
-use chopin_core::TestApp;
+use chopin::TestApp;
 
 #[tokio::test]
 async fn test_signup_success() {

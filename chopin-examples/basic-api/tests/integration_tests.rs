@@ -1,10 +1,10 @@
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use chopin::body::Body;
+use chopin::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 /// Helper to build the test app router (same as main.rs but without starting the server).
-async fn setup() -> (axum::Router, sea_orm::DatabaseConnection) {
-    use chopin_core::{config::Config, db};
+async fn setup() -> (chopin::Router, sea_orm::DatabaseConnection) {
+    use chopin::{config::Config, db};
     use sea_orm_migration::MigratorTrait;
 
     // Use in-memory SQLite for tests
@@ -24,7 +24,7 @@ async fn setup() -> (axum::Router, sea_orm::DatabaseConnection) {
         config,
     };
 
-    let app = axum::Router::new()
+    let app = chopin::Router::new()
         .merge(chopin_basic_api::controllers::posts::routes())
         .with_state(state);
 

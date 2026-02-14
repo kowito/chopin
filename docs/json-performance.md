@@ -9,7 +9,7 @@ Chopin achieves **top-tier JSON serialization performance** by combining aggress
 ```toml
 # Cargo.toml
 [dependencies]
-chopin-core = { version = "0.2", features = ["perf"] }
+chopin = { version = "0.2", features = ["perf"] }
 ```
 
 This enables:
@@ -19,7 +19,7 @@ This enables:
 ### Use `to_bytes()` for HTTP responses (zero-alloc hot path)
 
 ```rust
-use chopin_core::response::ApiResponse;
+use chopin::response::ApiResponse;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -87,7 +87,7 @@ Response 2 serialized into BytesMut (zero-alloc)
 Use this for all handler return values. It serializes into a thread-local buffer and returns `Bytes`.
 
 ```rust
-use chopin_core::json;
+use chopin::json;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -117,7 +117,7 @@ async fn health() -> impl axum::response::IntoResponse {
 Use if you need the JSON bytes in a specific `Vec<u8>` or want to chain writers.
 
 ```rust
-use chopin_core::json;
+use chopin::json;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -141,7 +141,7 @@ println!("JSON: {}", String::from_utf8_lossy(&buf));
 ### `json::to_string(value)` — For debug/logging only
 
 ```rust
-use chopin_core::json;
+use chopin::json;
 
 let status = Status { ok: true };
 let json_str = json::to_string(&status)?;
@@ -166,7 +166,7 @@ For responses that never change, use `FastRoute` to **bypass serialization entir
 ### Example: TechEmpower plaintext endpoint
 
 ```rust
-use chopin_core::{App, FastRoute};
+use chopin::{App, FastRoute};
 
 #[tokio::main]
 async fn main() {
@@ -284,10 +284,10 @@ Uses standard `serde_json` and system malloc. Still benefits from thread-local b
 2. **Don't disable `perf` in production**
    ```toml
    # ❌ Production: missing features = ["perf"]
-   chopin-core = "0.2"
+   chopin = "0.2"
 
    # ✅ Production: enable perf
-   chopin-core = { version = "0.2", features = ["perf"] }
+   chopin = { version = "0.2", features = ["perf"] }
    ```
 
 3. **Don't use `Vec::with_capacity()` for small responses**
@@ -372,7 +372,7 @@ async fn bench_json_response() {
 
     let start = Instant::now();
     for _ in 0..100_000 {
-        let _ = chopin_core::json::to_bytes(&response)?;
+        let _ = chopin::json::to_bytes(&response)?;
     }
     let elapsed = start.elapsed();
 

@@ -3,6 +3,9 @@ use utoipa::ToSchema;
 
 use crate::error::ErrorDetail;
 
+// ── Axum response re-exports ───────────────────────────────────
+pub use axum::response::{Html, IntoResponse, Redirect, Response};
+
 /// Standard API response wrapper.
 ///
 /// All Chopin endpoints return this format:

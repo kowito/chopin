@@ -10,7 +10,7 @@
 //!
 //! ```rust,ignore
 //! use async_graphql::{Object, Schema, EmptyMutation, EmptySubscription};
-//! use chopin_core::graphql::graphql_routes;
+//! use chopin::graphql::graphql_routes;
 //!
 //! struct QueryRoot;
 //!

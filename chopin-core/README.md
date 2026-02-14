@@ -1,8 +1,8 @@
 # 🎹 Chopin Core
 
 [![Build status](https://github.com/kowito/chopin/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/kowito/chopin/actions/workflows/CI.yml)
-[![Crates.io](https://img.shields.io/crates/v/chopin-core)](https://crates.io/crates/chopin-core)
-[![Downloads](https://img.shields.io/crates/d/chopin-core.svg)](https://crates.io/crates/chopin-core)
+[![Crates.io](https://img.shields.io/crates/v/chopin)](https://crates.io/crates/chopin)
+[![Downloads](https://img.shields.io/crates/d/chopin.svg)](https://crates.io/crates/chopin)
 [![License](https://img.shields.io/badge/license-WTFPL-blue.svg)](https://github.com/kowito/chopin/blob/main/LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-blue.svg)](https://www.rust-lang.org)
 [![GitHub stars](https://img.shields.io/github/stars/kowito/chopin.svg)](https://github.com/kowito/chopin)
@@ -30,14 +30,14 @@ A high-performance Rust web framework combining the ease of Axum with production
 
 ```toml
 [dependencies]
-chopin-core = "0.1"
+chopin = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
 ## Quick Start
 
 ```rust
-use chopin_core::App;
+use chopin::App;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

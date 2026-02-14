@@ -28,7 +28,7 @@ Each FastRoute can be individually configured with **decorators** — all
 pre-computed at registration time with zero per-request overhead.
 
 ```rust
-use chopin_core::{App, FastRoute};
+use chopin::{App, FastRoute};
 
 let app = App::new().await?
     // Bare: maximum performance, no extras
@@ -143,7 +143,7 @@ Typical results on Apple M-series or modern x86_64 (adjust for your hardware):
 ### Per-route configuration
 
 ```rust
-use chopin_core::{App, FastRoute};
+use chopin::{App, FastRoute};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### SO_REUSEPORT (multi-core)
 
 ```rust
-use chopin_core::App;
+use chopin::App;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

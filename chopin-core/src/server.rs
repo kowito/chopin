@@ -30,7 +30,7 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use chopin_core::{App, FastRoute};
+//! use chopin::{App, FastRoute};
 //!
 //! let app = App::new().await?
 //!     // Bare: maximum performance, no middleware
@@ -112,7 +112,7 @@ static SERVER_NAME: HeaderValue = HeaderValue::from_static("chopin");
 /// # Examples
 ///
 /// ```rust,ignore
-/// use chopin_core::FastRoute;
+/// use chopin::FastRoute;
 ///
 /// // Bare: maximum performance, no extras
 /// FastRoute::json("/json", br#"{"message":"Hello, World!"}"#);
@@ -799,10 +799,10 @@ fn create_reuseport_listener(
 /// # Example
 ///
 /// ```rust,ignore
-/// use chopin_core::{App, FastRoute};
+/// use chopin::{App, FastRoute};
 ///
 /// fn main() {
-///     chopin_core::server::start_multicore(serve);
+///     chopin::server::start_multicore(serve);
 /// }
 ///
 /// async fn serve() {

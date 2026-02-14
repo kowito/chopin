@@ -403,7 +403,7 @@ pub use s3_backend::S3Storage;
 ///
 /// ```rust,ignore
 /// use axum::extract::Multipart;
-/// use chopin_core::storage::FileUploadService;
+/// use chopin::storage::FileUploadService;
 ///
 /// async fn upload_handler(
 ///     State(state): State<AppState>,

@@ -46,7 +46,7 @@
 //! ### Per-route trade-off with decorators
 //!
 //! ```rust ignore
-//! use chopin_core::{App, FastRoute};
+//! use chopin::{App, FastRoute};
 //!
 //! let app = App::new().await?
 //!     // Bare: maximum performance, no middleware
@@ -90,7 +90,7 @@
 //!
 //! **FastRoute is 28-142× faster** — decorators add zero per-request overhead.
 
-use chopin_core::{App, FastRoute};
+use chopin::{App, FastRoute};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
