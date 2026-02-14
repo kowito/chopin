@@ -103,9 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n🎹 Chopin Performance Mode Example");
     println!("   → REUSEPORT: {}", reuseport);
-    println!(
-        "   → Run with: REUSEPORT=true cargo run -p chopin-performance-mode --release"
-    );
+    println!("   → Run with: REUSEPORT=true cargo run -p chopin-performance-mode --release");
     println!();
 
     if std::env::var("DATABASE_URL").is_err() {

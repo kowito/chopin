@@ -59,14 +59,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // These bypass Axum entirely — zero allocation, maximum throughput.
         // .get_only() ensures only GET/HEAD hit the fast path; other methods
         // fall through to the Axum Router.
-        .fast_route(
-            FastRoute::json("/json", br#"{"message":"Hello, World!"}"#)
-                .get_only(),
-        )
-        .fast_route(
-            FastRoute::text("/plaintext", b"Hello, World!")
-                .get_only(),
-        );
+        .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#).get_only())
+        .fast_route(FastRoute::text("/plaintext", b"Hello, World!").get_only());
 
     app.run().await?;
 
