@@ -90,7 +90,8 @@ enum DocsCommands {
     },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
@@ -133,7 +134,7 @@ fn main() {
             run_dev_server();
         }
         Commands::CreateSuperuser => {
-            create_superuser();
+            create_superuser().await;
         }
         Commands::Info => {
             show_project_info();
@@ -780,11 +781,29 @@ fn seed_database() {
 
 // ── Create Superuser ──
 
-fn create_superuser() {
+async fn create_superuser() {
+    use sea_orm::{ActiveModelTrait, Database, Set};
     use std::io::{self, Write};
 
     println!("🎹 Creating superuser account...");
     println!();
+
+    // Load .env file
+    if let Err(e) = dotenvy::dotenv() {
+        eprintln!("  ✗ Failed to load .env file: {}", e);
+        eprintln!("  Make sure you have a .env file with DATABASE_URL set.");
+        return;
+    }
+
+    // Get DATABASE_URL
+    let database_url = match std::env::var("DATABASE_URL") {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("  ✗ DATABASE_URL not found in environment.");
+            eprintln!("  Add DATABASE_URL to your .env file.");
+            return;
+        }
+    };
 
     // Prompt for email
     print!("  Email: ");
@@ -834,70 +853,58 @@ fn create_superuser() {
         return;
     }
 
-    // Run a cargo command that creates the superuser
-    let status = Command::new("cargo")
-        .args([
-            "run",
-            "--quiet",
-            "--",
-            "--create-superuser",
-            &email,
-            &username,
-            &password,
-        ])
-        .status();
+    // Connect to database
+    println!();
+    println!("  Connecting to database...");
+    let db = match Database::connect(&database_url).await {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("  ✗ Failed to connect to database: {}", e);
+            return;
+        }
+    };
 
-    match status {
-        Ok(s) if s.success() => {
-            println!();
-            println!("  ✓ Superuser '{}' created successfully!", username);
+    // Hash password
+    let password_hash = match chopin_core::auth::hash_password(&password) {
+        Ok(hash) => hash,
+        Err(e) => {
+            eprintln!("  ✗ Failed to hash password: {}", e);
+            return;
         }
+    };
+
+    // Create user
+    let now = chrono::Utc::now().naive_utc();
+
+    // Import the user entity from chopin_core
+    use chopin_core::models::user;
+
+    let user_model = user::ActiveModel {
+        email: Set(email.clone()),
+        username: Set(username.clone()),
+        password_hash: Set(password_hash),
+        role: Set("superuser".to_string()),
+        is_active: Set(true),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+
+    // Insert user
+    match user_model.insert(&db).await {
         Ok(_) => {
-            eprintln!("  ✗ Failed to create superuser.");
-            eprintln!();
-            eprintln!("  Hint: Add superuser creation support to your main.rs:");
-            eprintln!("    if args.contains(&\"--create-superuser\") {{");
-            eprintln!("        // Hash password + insert user with role=\"superuser\"");
-            eprintln!("    }}");
-            eprintln!();
-            eprintln!("  Or use the built-in helper:");
-            create_superuser_inline(&email, &username, &password);
+            println!("  ✓ Superuser '{}' created successfully!", username);
+            println!();
         }
-        Err(_) => {
-            eprintln!("  ✗ Could not run cargo. Creating superuser directly...");
-            create_superuser_inline(&email, &username, &password);
+        Err(e) => {
+            eprintln!("  ✗ Failed to create superuser: {}", e);
+            eprintln!();
+            eprintln!("  This might be because:");
+            eprintln!("    - A user with this email or username already exists");
+            eprintln!("    - The users table doesn't exist (run migrations first)");
+            eprintln!("    - Database connection issues");
         }
     }
-}
-
-fn create_superuser_inline(email: &str, username: &str, password: &str) {
-    // Generate a helper script that creates the superuser
-    let script = format!(
-        r#"
-// Add this to your main.rs to support `chopin createsuperuser`:
-//
-// use chopin_core::auth::hash_password;
-// use sea_orm::{{ActiveModelTrait, Set}};
-//
-// async fn create_superuser(db: &DatabaseConnection) {{
-//     let password_hash = hash_password("{}").unwrap();
-//     let now = chrono::Utc::now().naive_utc();
-//     let user = user::ActiveModel {{
-//         email: Set("{}".to_string()),
-//         username: Set("{}".to_string()),
-//         password_hash: Set(password_hash),
-//         role: Set("superuser".to_string()),
-//         is_active: Set(true),
-//         created_at: Set(now),
-//         updated_at: Set(now),
-//         ..Default::default()
-//     }};
-//     user.insert(db).await.unwrap();
-// }}
-"#,
-        password, email, username
-    );
-    println!("{}", script);
 }
 
 // ── Project Info ──

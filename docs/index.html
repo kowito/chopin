@@ -314,7 +314,13 @@
                 <div class="feature-card">
                     <div class="feature-icon"><i data-lucide="shield-check"></i></div>
                     <h3>Built-in Auth</h3>
-                    <p>JWT + Argon2id authentication with signup/login endpoints. Role-based access control (User, Moderator, Admin).</p>
+                    <p>JWT + Argon2id authentication with signup/login endpoints. Role-based access control (User, Moderator, Admin). 2FA/TOTP, rate limiting, account lockout, refresh tokens, CSRF — all enabled by default.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon"><i data-lucide="lock"></i></div>
+                    <h3>Production Security</h3>
+                    <p>9 security features out of the box: 2FA/TOTP, rate limiting, account lockout, refresh token rotation, session management, password reset, email verification, CSRF protection, IP/device tracking. All configurable via env vars.</p>
                 </div>
 
                 <div class="feature-card">
@@ -459,9 +465,15 @@ fn routes() -> Router {
                 </div>
                 <div class="example-note">
                     Built-in endpoints (no code required):<br>
-                    <code>POST /api/auth/signup</code><br>
-                    <code>POST /api/auth/login</code><br>
-                    <i data-lucide="check-circle" class="inline-icon-sm"></i> JWT with role-based access control
+                    <code>POST /api/auth/signup</code> — Create account<br>
+                    <code>POST /api/auth/login</code> — Login (supports 2FA)<br>
+                    <code>POST /api/auth/logout</code> — Revoke sessions<br>
+                    <code>POST /api/auth/refresh</code> — Rotate tokens<br>
+                    <code>POST /api/auth/totp/setup</code> — Enable 2FA<br>
+                    <code>POST /api/auth/password-reset/request</code><br>
+                    <code>POST /api/auth/verify-email</code><br>
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> JWT with role-based access control<br>
+                    <i data-lucide="check-circle" class="inline-icon-sm"></i> Rate limiting, lockout, CSRF — all built-in
                 </div>
             </div>
 
@@ -691,6 +703,7 @@ REUSEPORT=true cargo run --release --features perf</code></pre>
                     <a href="tutorial.html">Tutorial</a>
                     <a href="tutorial.html#configuration">Configuration</a>
                     <a href="tutorial.html#authentication">Authentication</a>
+                    <a href="tutorial.html#security">Security</a>
                     <a href="tutorial.html#performance">Performance</a>
                     <a href="tutorial.html#production">Deployment</a>
                 </div>

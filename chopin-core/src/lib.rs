@@ -30,7 +30,7 @@ pub mod testing;
 // ── Core type re-exports ───────────────────────────────────────
 pub use app::App;
 pub use cache::CacheService;
-pub use config::Config;
+pub use config::{Config, SecurityConfig};
 pub use error::ChopinError;
 pub use response::ApiResponse;
 pub use server::FastRoute;

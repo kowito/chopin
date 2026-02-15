@@ -32,6 +32,9 @@ pub enum ChopinError {
     #[error("Internal server error: {0}")]
     Internal(String),
 
+    #[error("Too many requests: {0}")]
+    TooManyRequests(String),
+
     #[error("Database error: {0}")]
     Database(#[from] sea_orm::DbErr),
 }
@@ -48,6 +51,7 @@ impl ChopinError {
             ChopinError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ChopinError::ValidationErrors(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ChopinError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ChopinError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             ChopinError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -63,6 +67,7 @@ impl ChopinError {
             ChopinError::Validation(_) => "VALIDATION_ERROR",
             ChopinError::ValidationErrors(_) => "VALIDATION_ERROR",
             ChopinError::Internal(_) => "INTERNAL_ERROR",
+            ChopinError::TooManyRequests(_) => "TOO_MANY_REQUESTS",
             ChopinError::Database(_) => "DATABASE_ERROR",
         }
     }

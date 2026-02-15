@@ -47,6 +47,7 @@
                     <li><a href="#migrations" class="toc-link">Migrations</a></li>
                     <li><a href="#controllers" class="toc-link">Controllers & Routing</a></li>
                     <li><a href="#authentication" class="toc-link">Authentication</a></li>
+                    <li><a href="#security" class="toc-link">Security Features</a></li>
                     <li><a href="#roles" class="toc-link">Roles & Permissions</a></li>
                     <li><a href="#extractors" class="toc-link">Extractors</a></li>
                     <li><a href="#pagination" class="toc-link">Pagination</a></li>
@@ -152,7 +153,12 @@ cargo run
                         <tbody>
                             <tr><td><span class="method get">GET</span></td><td><code>/</code></td><td>Welcome JSON</td></tr>
                             <tr><td><span class="method post">POST</span></td><td><code>/api/auth/signup</code></td><td>Create a user account</td></tr>
-                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/login</code></td><td>Login &amp; get JWT token</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/login</code></td><td>Login (supports 2FA)</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/logout</code></td><td>Logout &amp; revoke sessions</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/totp/setup</code></td><td>Setup 2FA</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/password-reset/request</code></td><td>Request password reset</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/verify-email</code></td><td>Verify email address</td></tr>
                             <tr><td><span class="method get">GET</span></td><td><code>/api-docs</code></td><td>Scalar OpenAPI UI</td></tr>
                             <tr><td><span class="method get">GET</span></td><td><code>/api-docs/openapi.json</code></td><td>Raw OpenAPI spec</td></tr>
                         </tbody>
@@ -180,6 +186,25 @@ DATABASE_URL=sqlite://chopin.db?mode=rwc
 <span class="comment"># Authentication</span>
 JWT_SECRET=change-me-in-production
 JWT_EXPIRY_HOURS=24
+
+<span class="comment"># Security (all enabled by default — set to false to disable)</span>
+SECURITY_2FA=true
+SECURITY_RATE_LIMIT=true
+SECURITY_RATE_LIMIT_MAX=5
+SECURITY_RATE_LIMIT_WINDOW=300
+SECURITY_ACCOUNT_LOCKOUT=true
+SECURITY_LOCKOUT_MAX=5
+SECURITY_LOCKOUT_DURATION=900
+SECURITY_REFRESH_TOKENS=true
+SECURITY_REFRESH_EXPIRY_DAYS=30
+SECURITY_SESSION_MANAGEMENT=true
+SECURITY_PASSWORD_RESET=true
+SECURITY_RESET_EXPIRY=3600
+SECURITY_EMAIL_VERIFICATION=true
+SECURITY_EMAIL_VERIFY_EXPIRY=86400
+SECURITY_CSRF=true
+SECURITY_DEVICE_TRACKING=true
+SECURITY_MIN_PASSWORD_LENGTH=12
 
 <span class="comment"># Redis (requires `redis` feature)</span>
 REDIS_URL=redis://127.0.0.1:6379
@@ -502,6 +527,153 @@ chopin generate controller posts</code></pre>
 
 <span class="kw">let</span> claims = jwt::validate_token(&token, &config.jwt_secret)?;
 <span class="comment">// claims.sub = user_id, claims.email, claims.role</span></code></pre>
+            </section>
+
+            <!-- 7b. Security Features -->
+            <section id="security" class="tutorial-section">
+                <div class="section-number">07b</div>
+                <h2>Security Features</h2>
+                <p>Chopin includes <strong>9 production security features</strong>, all <strong>enabled by default</strong>. No extra code or config needed — just deploy. Each feature can be individually disabled via environment variables.</p>
+
+                <h3>Overview</h3>
+                <table class="config-table">
+                    <thead>
+                        <tr>
+                            <th>Feature</th>
+                            <th>What It Does</th>
+                            <th>Env Var to Disable</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><strong>2FA/TOTP</strong></td><td>Time-based One-Time Password (Google Authenticator compatible)</td><td><code>SECURITY_2FA=false</code></td></tr>
+                        <tr><td><strong>Rate Limiting</strong></td><td>Blocks login after 5 attempts per 5 min window</td><td><code>SECURITY_RATE_LIMIT=false</code></td></tr>
+                        <tr><td><strong>Account Lockout</strong></td><td>Locks account after 5 failed attempts for 15 min</td><td><code>SECURITY_ACCOUNT_LOCKOUT=false</code></td></tr>
+                        <tr><td><strong>Refresh Tokens</strong></td><td>Automatic rotation with reuse detection</td><td><code>SECURITY_REFRESH_TOKENS=false</code></td></tr>
+                        <tr><td><strong>Session Management</strong></td><td>Server-side sessions, revoke one or all</td><td><code>SECURITY_SESSION_MANAGEMENT=false</code></td></tr>
+                        <tr><td><strong>Password Reset</strong></td><td>Secure token-based password reset flow</td><td><code>SECURITY_PASSWORD_RESET=false</code></td></tr>
+                        <tr><td><strong>Email Verification</strong></td><td>Require email verification on signup</td><td><code>SECURITY_EMAIL_VERIFICATION=false</code></td></tr>
+                        <tr><td><strong>CSRF Protection</strong></td><td>Token issued on login, verified on state-changing requests</td><td><code>SECURITY_CSRF=false</code></td></tr>
+                        <tr><td><strong>IP/Device Tracking</strong></td><td>Audit log of all login events with IP and user agent</td><td><code>SECURITY_DEVICE_TRACKING=false</code></td></tr>
+                    </tbody>
+                </table>
+
+                <h3>Auth Endpoints</h3>
+                <p>When security features are enabled, the following endpoints are available under <code>/api/auth/</code>:</p>
+                <table class="config-table">
+                    <thead>
+                        <tr>
+                            <th>Method</th>
+                            <th>Endpoint</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><span class="method post">POST</span></td><td><code>/api/auth/signup</code></td><td>Create account (returns access + refresh + CSRF tokens)</td></tr>
+                        <tr><td><span class="method post">POST</span></td><td><code>/api/auth/login</code></td><td>Login with optional TOTP code</td></tr>
+                        <tr><td><span class="method post">POST</span></td><td><code>/api/auth/logout</code></td><td>Revoke current session or all sessions</td></tr>
+                        <tr><td><span class="method post">POST</span></td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token, get new access token</td></tr>
+                        <tr><td><span class="method post">POST</span></td><td><code>/api/auth/totp/setup</code></td><td>Get TOTP secret + QR URI (requires auth)</td></tr>
+                        <tr><td><span class="method post">POST</span></td><td><code>/api/auth/totp/enable</code></td><td>Verify &amp; enable 2FA (requires auth + TOTP code)</td></tr>
+                        <tr><td><span class="method post">POST</span></td><td><code>/api/auth/totp/disable</code></td><td>Disable 2FA (requires auth + password + TOTP code)</td></tr>
+                        <tr><td><span class="method post">POST</span></td><td><code>/api/auth/password-reset/request</code></td><td>Request a password reset token</td></tr>
+                        <tr><td><span class="method post">POST</span></td><td><code>/api/auth/password-reset/confirm</code></td><td>Set new password with reset token</td></tr>
+                        <tr><td><span class="method post">POST</span></td><td><code>/api/auth/verify-email</code></td><td>Verify email with verification token</td></tr>
+                    </tbody>
+                </table>
+
+                <h3>2FA / TOTP Setup Flow</h3>
+                <p>Users enable two-factor authentication in 3 steps:</p>
+<pre><code><span class="comment"># 1. Setup — get the TOTP secret and QR code URI</span>
+curl -X POST http://localhost:3000/api/auth/totp/setup \
+  -H "Authorization: Bearer &lt;access_token&gt;"
+
+<span class="comment"># Response:</span>
+<span class="comment"># { "secret": "JBSWY3DPEHPK3PXP", "otpauth_uri": "otpauth://totp/..." }</span>
+
+<span class="comment"># 2. User scans QR code in Google Authenticator / Authy</span>
+<span class="comment"># 3. Verify and enable with a code from the app:</span>
+curl -X POST http://localhost:3000/api/auth/totp/enable \
+  -H "Authorization: Bearer &lt;access_token&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{ "code": "123456" }'
+
+<span class="comment"># Future logins now require the totp_code field:</span>
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "user@example.com", "password": "pw", "totp_code": "654321" }'</code></pre>
+
+                <h3>Refresh Token Flow</h3>
+                <p>Chopin uses <strong>automatic token rotation</strong> — each refresh issues a new pair of tokens (access + refresh). Old refresh tokens are revoked. If a revoked refresh token is reused, <strong>all tokens for that user are revoked</strong> (detecting token theft).</p>
+<pre><code><span class="comment"># Exchange refresh token for new access + refresh tokens</span>
+curl -X POST http://localhost:3000/api/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{ "refresh_token": "&lt;current_refresh_token&gt;" }'
+
+<span class="comment"># Response:</span>
+<span class="comment"># { "access_token": "eyJ...", "refresh_token": "new_token_here" }</span></code></pre>
+
+                <h3>Password Reset Flow</h3>
+<pre><code><span class="comment"># 1. Request reset (returns token — in production, email it)</span>
+curl -X POST http://localhost:3000/api/auth/password-reset/request \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "user@example.com" }'
+
+<span class="comment"># 2. Confirm with token + new password</span>
+curl -X POST http://localhost:3000/api/auth/password-reset/confirm \
+  -H "Content-Type: application/json" \
+  -d '{ "token": "&lt;reset_token&gt;", "new_password": "newSecurePass123" }'</code></pre>
+
+                <h3>Logout &amp; Session Revocation</h3>
+<pre><code><span class="comment"># Logout current session</span>
+curl -X POST http://localhost:3000/api/auth/logout \
+  -H "Authorization: Bearer &lt;access_token&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{ "all_sessions": false }'
+
+<span class="comment"># Logout everywhere (revoke ALL sessions)</span>
+curl -X POST http://localhost:3000/api/auth/logout \
+  -H "Authorization: Bearer &lt;access_token&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{ "all_sessions": true }'</code></pre>
+
+                <h3>Configuration</h3>
+                <p>All security features are configured via <code>SecurityConfig</code> and environment variables:</p>
+<pre><code><span class="kw">use</span> chopin_core::config::{Config, SecurityConfig};
+
+<span class="comment">// All features enabled by default</span>
+<span class="kw">let</span> config = Config::from_env()?;
+assert!(config.security.enable_2fa);
+assert!(config.security.enable_rate_limit);
+assert!(config.security.enable_refresh_tokens);
+
+<span class="comment">// Override programmatically</span>
+<span class="kw">let mut</span> config = Config::from_env()?;
+config.security.enable_2fa = <span class="kw">false</span>;
+config.security.min_password_length = <span class="num">16</span>;</code></pre>
+
+                <h3>Testing with Security</h3>
+                <p><code>TestApp::new()</code> disables all security features for backward compatibility. Use <code>TestApp::new_secure()</code> to test with security enabled:</p>
+<pre><code><span class="kw">use</span> chopin_core::testing::TestApp;
+
+<span class="comment">// Without security (backward compatible)</span>
+<span class="kw">let</span> app = TestApp::new().<span class="kw">await</span>;
+
+<span class="comment">// With all security features enabled</span>
+<span class="kw">let</span> app = TestApp::new_secure().<span class="kw">await</span>;</code></pre>
+
+                <h3>Database Tables</h3>
+                <p>Security features use 4 additional tables, auto-created by the migration:</p>
+                <table class="config-table">
+                    <thead>
+                        <tr><th>Table</th><th>Purpose</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>refresh_tokens</code></td><td>Stores hashed refresh tokens with rotation tracking</td></tr>
+                        <tr><td><code>sessions</code></td><td>Server-side session management / token blacklist</td></tr>
+                        <tr><td><code>security_tokens</code></td><td>Password reset and email verification tokens</td></tr>
+                        <tr><td><code>login_events</code></td><td>Audit log with IP, user agent, success/failure</td></tr>
+                    </tbody>
+                </table>
             </section>
 
             <!-- 8. Roles & Permissions -->
@@ -1774,6 +1946,9 @@ sudo systemctl status my-api</code></pre>
                     <label><input type="checkbox"> Configure S3/R2 for file uploads</label>
                     <label><input type="checkbox"> Build with <code>--release --features perf</code></label>
                     <label><input type="checkbox"> Set up HTTPS via reverse proxy (nginx/Caddy)</label>
+                    <label><input type="checkbox"> Verify all security features are enabled (default)</label>
+                    <label><input type="checkbox"> Set <code>SECURITY_MIN_PASSWORD_LENGTH=12</code> or higher</label>
+                    <label><input type="checkbox"> Integrate email sending for password reset &amp; verification tokens</label>
                     <label><input type="checkbox"> Configure logging and monitoring</label>
                     <label><input type="checkbox"> Set up database backups</label>
                     <label><input type="checkbox"> Run <code>cargo test --all</code> before deploying</label>

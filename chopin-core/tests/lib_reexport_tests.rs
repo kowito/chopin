@@ -23,6 +23,7 @@ fn test_config_reexport() {
         s3_secret_access_key: None,
         s3_public_url: None,
         s3_prefix: None,
+        security: chopin_core::config::SecurityConfig::default(),
     };
 }
 

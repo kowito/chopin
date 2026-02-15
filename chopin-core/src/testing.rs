@@ -3,7 +3,7 @@ use sea_orm::DatabaseConnection;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
-use crate::config::Config;
+use crate::config::{Config, SecurityConfig};
 
 /// A test application builder for integration testing.
 ///
@@ -26,6 +26,8 @@ pub struct TestApp {
 
 impl TestApp {
     /// Create a new test app with an in-memory SQLite database.
+    /// All security features are **disabled** by default for simpler testing.
+    /// Use `new_secure()` to test with security features enabled.
     pub async fn new() -> Self {
         let config = Config {
             reuseport: false,
@@ -45,6 +47,51 @@ impl TestApp {
             s3_secret_access_key: None,
             s3_public_url: None,
             s3_prefix: None,
+            security: SecurityConfig {
+                enable_2fa: false,
+                enable_rate_limit: false,
+                rate_limit_max_attempts: 5,
+                rate_limit_window_secs: 300,
+                enable_account_lockout: false,
+                lockout_max_attempts: 5,
+                lockout_duration_secs: 900,
+                enable_refresh_tokens: false,
+                refresh_token_expiry_days: 30,
+                enable_session_management: false,
+                enable_password_reset: false,
+                password_reset_expiry_secs: 3600,
+                enable_email_verification: false,
+                email_verification_expiry_secs: 86400,
+                enable_csrf: false,
+                enable_device_tracking: false,
+                min_password_length: 8,
+            },
+        };
+
+        Self::with_config(config).await
+    }
+
+    /// Create a new test app with all security features enabled.
+    pub async fn new_secure() -> Self {
+        let config = Config {
+            reuseport: false,
+            database_url: "sqlite::memory:".to_string(),
+            jwt_secret: "test-secret-key-for-testing".to_string(),
+            jwt_expiry_hours: 24,
+            server_host: "127.0.0.1".to_string(),
+            server_port: 0,
+            environment: "test".to_string(),
+            redis_url: None,
+            upload_dir: "/tmp/chopin-test-uploads".to_string(),
+            max_upload_size: 10_485_760,
+            s3_bucket: None,
+            s3_region: None,
+            s3_endpoint: None,
+            s3_access_key_id: None,
+            s3_secret_access_key: None,
+            s3_public_url: None,
+            s3_prefix: None,
+            security: SecurityConfig::default(),
         };
 
         Self::with_config(config).await

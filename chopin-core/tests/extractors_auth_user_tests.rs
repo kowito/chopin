@@ -2,7 +2,7 @@ use axum::{body::Body, extract::FromRequestParts, http::Request};
 use std::sync::Arc;
 
 use chopin_core::auth;
-use chopin_core::config::Config;
+use chopin_core::config::{Config, SecurityConfig};
 use chopin_core::error::ChopinError;
 use chopin_core::extractors::auth_user::AuthUser;
 
@@ -25,6 +25,7 @@ fn test_config() -> Config {
         s3_secret_access_key: None,
         s3_public_url: None,
         s3_prefix: None,
+        security: SecurityConfig::default(),
     }
 }
 

@@ -104,6 +104,11 @@ fn test_user_model_creation() {
         is_active: true,
         created_at: now,
         updated_at: now,
+        email_verified: false,
+        totp_secret: None,
+        totp_enabled: false,
+        failed_login_attempts: 0,
+        locked_until: None,
     };
 
     assert_eq!(user.id, 1);
@@ -125,6 +130,11 @@ fn test_user_response_conversion() {
         is_active: true,
         created_at: now,
         updated_at: now,
+        email_verified: false,
+        totp_secret: None,
+        totp_enabled: false,
+        failed_login_attempts: 0,
+        locked_until: None,
     };
 
     let response: UserResponse = user.into();
@@ -150,6 +160,11 @@ fn test_user_response_excludes_password() {
         is_active: true,
         created_at: now,
         updated_at: now,
+        email_verified: false,
+        totp_secret: None,
+        totp_enabled: false,
+        failed_login_attempts: 0,
+        locked_until: None,
     };
 
     let response: UserResponse = user.into();
@@ -177,6 +192,11 @@ fn test_user_model_serialization() {
         is_active: true,
         created_at: now,
         updated_at: now,
+        email_verified: false,
+        totp_secret: None,
+        totp_enabled: false,
+        failed_login_attempts: 0,
+        locked_until: None,
     };
 
     let json = serde_json::to_string(&user).expect("Failed to serialize");
@@ -201,6 +221,8 @@ fn test_user_response_serialization() {
         role: "admin".to_string(),
         is_active: false,
         created_at: now,
+        email_verified: false,
+        totp_enabled: false,
     };
 
     let json = serde_json::to_string(&response).expect("Failed to serialize");
@@ -228,6 +250,11 @@ fn test_different_user_roles() {
             is_active: true,
             created_at: now,
             updated_at: now,
+            email_verified: false,
+            totp_secret: None,
+            totp_enabled: false,
+            failed_login_attempts: 0,
+            locked_until: None,
         };
 
         let response: UserResponse = user.into();
@@ -248,6 +275,11 @@ fn test_inactive_user() {
         is_active: false,
         created_at: now,
         updated_at: now,
+        email_verified: false,
+        totp_secret: None,
+        totp_enabled: false,
+        failed_login_attempts: 0,
+        locked_until: None,
     };
 
     assert!(!user.is_active);

@@ -80,6 +80,7 @@ Unlike bare-metal frameworks, Chopin ships with everything you need:
 | Feature | Chopin | Axum | Description |
 |---------|--------|------|-------------|
 | **Built-in Auth** | ✅ | ❌ | JWT + Argon2id with signup/login endpoints |
+| **Production Security** | ✅ | ❌ | 2FA/TOTP, rate limiting, account lockout, refresh tokens, CSRF, session management |
 | **Database ORM** | ✅ | ❌ | SeaORM with auto-migrations (SQLite/PostgreSQL/MySQL) |
 | **OpenAPI Docs** | ✅ | ❌ | Auto-generated Scalar UI at `/api-docs` |
 | **Role-Based Access** | ✅ | ❌ | User, Moderator, Admin with extractors |
@@ -217,7 +218,47 @@ curl -X POST http://localhost:3000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"alice","password":"secret123"}'
 
-# Returns: {"token":"eyJ0eXAi..."}
+# Returns: {"access_token":"eyJ0eXAi...", "refresh_token":"abc123...", "csrf_token":"def456..."}
+```
+
+### Production Security (Enabled by Default)
+
+Chopin ships with **9 production security features**, all enabled by default. No extra setup — just deploy:
+
+| Feature | Endpoint / Mechanism | Description |
+|---------|---------------------|-------------|
+| **2FA/TOTP** | `POST /api/auth/totp/setup`, `/enable`, `/disable` | Google Authenticator compatible |
+| **Rate Limiting** | Automatic on login | 5 attempts per 5 min (configurable) |
+| **Account Lockout** | Automatic on login | Locks after 5 failed attempts for 15 min |
+| **Refresh Tokens** | `POST /api/auth/refresh` | Automatic rotation with reuse detection |
+| **Session Management** | `POST /api/auth/logout` | Server-side sessions, revoke one or all |
+| **Password Reset** | `POST /api/auth/password-reset/request`, `/confirm` | Secure token-based flow |
+| **Email Verification** | `POST /api/auth/verify-email` | Required on signup when enabled |
+| **CSRF Protection** | Automatic | Token issued on login, verified on mutations |
+| **IP/Device Tracking** | Automatic | Audit log of all login events |
+
+**Configure via environment variables:**
+```bash
+# Toggle features on/off
+SECURITY_2FA=true
+SECURITY_RATE_LIMIT=true
+SECURITY_ACCOUNT_LOCKOUT=true
+SECURITY_REFRESH_TOKENS=true
+SECURITY_SESSION_MANAGEMENT=true
+SECURITY_PASSWORD_RESET=true
+SECURITY_EMAIL_VERIFICATION=true
+SECURITY_CSRF=true
+SECURITY_DEVICE_TRACKING=true
+
+# Tune parameters
+SECURITY_RATE_LIMIT_MAX=5            # Max attempts per window
+SECURITY_RATE_LIMIT_WINDOW=300       # Window in seconds (5 min)
+SECURITY_LOCKOUT_MAX=5               # Failed attempts before lockout
+SECURITY_LOCKOUT_DURATION=900        # Lockout duration in seconds (15 min)
+SECURITY_REFRESH_EXPIRY_DAYS=30      # Refresh token lifetime
+SECURITY_RESET_EXPIRY=3600           # Password reset token TTL (1 hr)
+SECURITY_EMAIL_VERIFY_EXPIRY=86400   # Email verification TTL (24 hrs)
+SECURITY_MIN_PASSWORD_LENGTH=12      # Minimum password length
 ```
 
 ### With Database

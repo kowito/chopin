@@ -1,4 +1,4 @@
-use chopin_core::config::Config;
+use chopin_core::config::{Config, SecurityConfig};
 use chopin_core::db;
 
 fn test_config() -> Config {
@@ -20,6 +20,7 @@ fn test_config() -> Config {
         s3_secret_access_key: None,
         s3_public_url: None,
         s3_prefix: None,
+        security: SecurityConfig::default(),
     }
 }
 

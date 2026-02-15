@@ -1,5 +1,142 @@
 use serde::Deserialize;
 
+/// Security configuration for optional production-ready features.
+///
+/// All features are **enabled by default** but can be individually disabled
+/// via environment variables.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SecurityConfig {
+    /// Enable 2FA/TOTP support (default: true)
+    pub enable_2fa: bool,
+
+    /// Enable login rate limiting (default: true)
+    pub enable_rate_limit: bool,
+
+    /// Max login attempts per window before rate-limiting (default: 5)
+    pub rate_limit_max_attempts: u32,
+
+    /// Rate limit window in seconds (default: 300 = 5 min)
+    pub rate_limit_window_secs: u64,
+
+    /// Enable account lockout after failed attempts (default: true)
+    pub enable_account_lockout: bool,
+
+    /// Failed login attempts before lockout (default: 5)
+    pub lockout_max_attempts: u32,
+
+    /// Lockout duration in seconds (default: 900 = 15 min)
+    pub lockout_duration_secs: u64,
+
+    /// Enable refresh token rotation (default: true)
+    pub enable_refresh_tokens: bool,
+
+    /// Refresh token expiry in days (default: 30)
+    pub refresh_token_expiry_days: u64,
+
+    /// Enable server-side session management / token blacklist (default: true)
+    pub enable_session_management: bool,
+
+    /// Enable password reset flow (default: true)
+    pub enable_password_reset: bool,
+
+    /// Password reset token expiry in seconds (default: 3600 = 1 hr)
+    pub password_reset_expiry_secs: u64,
+
+    /// Enable email verification on signup (default: true)
+    pub enable_email_verification: bool,
+
+    /// Email verification token expiry in seconds (default: 86400 = 24 hrs)
+    pub email_verification_expiry_secs: u64,
+
+    /// Enable CSRF protection for state-changing endpoints (default: true)
+    pub enable_csrf: bool,
+
+    /// Enable IP / device tracking on login (default: true)
+    pub enable_device_tracking: bool,
+
+    /// Minimum password length (default: 12)
+    pub min_password_length: usize,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            enable_2fa: true,
+            enable_rate_limit: true,
+            rate_limit_max_attempts: 5,
+            rate_limit_window_secs: 300,
+            enable_account_lockout: true,
+            lockout_max_attempts: 5,
+            lockout_duration_secs: 900,
+            enable_refresh_tokens: true,
+            refresh_token_expiry_days: 30,
+            enable_session_management: true,
+            enable_password_reset: true,
+            password_reset_expiry_secs: 3600,
+            enable_email_verification: true,
+            email_verification_expiry_secs: 86400,
+            enable_csrf: true,
+            enable_device_tracking: true,
+            min_password_length: 12,
+        }
+    }
+}
+
+impl SecurityConfig {
+    /// Load from environment variables, falling back to secure defaults.
+    pub fn from_env() -> Self {
+        let parse_bool = |key: &str, default: bool| -> bool {
+            std::env::var(key)
+                .map(|v| !matches!(v.to_lowercase().as_str(), "false" | "0" | "no"))
+                .unwrap_or(default)
+        };
+
+        Self {
+            enable_2fa: parse_bool("SECURITY_2FA", true),
+            enable_rate_limit: parse_bool("SECURITY_RATE_LIMIT", true),
+            rate_limit_max_attempts: std::env::var("SECURITY_RATE_LIMIT_MAX")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
+            rate_limit_window_secs: std::env::var("SECURITY_RATE_LIMIT_WINDOW")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300),
+            enable_account_lockout: parse_bool("SECURITY_ACCOUNT_LOCKOUT", true),
+            lockout_max_attempts: std::env::var("SECURITY_LOCKOUT_MAX")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
+            lockout_duration_secs: std::env::var("SECURITY_LOCKOUT_DURATION")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(900),
+            enable_refresh_tokens: parse_bool("SECURITY_REFRESH_TOKENS", true),
+            refresh_token_expiry_days: std::env::var("SECURITY_REFRESH_EXPIRY_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
+            enable_session_management: parse_bool("SECURITY_SESSION_MANAGEMENT", true),
+            enable_password_reset: parse_bool("SECURITY_PASSWORD_RESET", true),
+            password_reset_expiry_secs: std::env::var("SECURITY_RESET_EXPIRY")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3600),
+            enable_email_verification: parse_bool("SECURITY_EMAIL_VERIFICATION", true),
+            email_verification_expiry_secs: std::env::var("SECURITY_EMAIL_VERIFY_EXPIRY")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(86400),
+            enable_csrf: parse_bool("SECURITY_CSRF", true),
+            enable_device_tracking: parse_bool("SECURITY_DEVICE_TRACKING", true),
+            min_password_length: std::env::var("SECURITY_MIN_PASSWORD_LENGTH")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(12),
+        }
+    }
+}
+
 /// Application configuration loaded from environment variables.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -63,6 +200,10 @@ pub struct Config {
 
     /// S3 key prefix / folder (default: "uploads/")
     pub s3_prefix: Option<String>,
+
+    /// Security configuration (all features enabled by default).
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 impl Config {
@@ -106,6 +247,7 @@ impl Config {
             s3_secret_access_key: std::env::var("S3_SECRET_ACCESS_KEY").ok(),
             s3_public_url: std::env::var("S3_PUBLIC_URL").ok(),
             s3_prefix: std::env::var("S3_PREFIX").ok(),
+            security: SecurityConfig::from_env(),
         })
     }
 

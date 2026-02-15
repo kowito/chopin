@@ -1,4 +1,4 @@
-use chopin_core::config::Config;
+use chopin_core::config::{Config, SecurityConfig};
 
 /// Build a test Config struct with known values.
 fn test_config() -> Config {
@@ -20,6 +20,7 @@ fn test_config() -> Config {
         s3_secret_access_key: None,
         s3_public_url: None,
         s3_prefix: None,
+        security: SecurityConfig::default(),
     }
 }
 
@@ -162,6 +163,7 @@ fn test_config_all_s3_fields() {
         s3_secret_access_key: Some("secret123".to_string()),
         s3_public_url: Some("https://cdn.example.com".to_string()),
         s3_prefix: Some("uploads/".to_string()),
+        security: SecurityConfig::default(),
     };
     assert!(config.has_s3());
     assert_eq!(config.s3_region.as_deref(), Some("us-east-1"));

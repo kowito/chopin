@@ -75,6 +75,26 @@ pub struct Model {
 
     pub is_active: bool,
 
+    /// Whether email has been verified
+    #[sea_orm(default_value = false)]
+    pub email_verified: bool,
+
+    /// TOTP secret for 2FA (None = 2FA not enabled)
+    #[serde(skip_serializing)]
+    #[schema(read_only)]
+    pub totp_secret: Option<String>,
+
+    /// Whether 2FA is enabled for this user
+    #[sea_orm(default_value = false)]
+    pub totp_enabled: bool,
+
+    /// Failed login attempts counter (for account lockout)
+    #[sea_orm(default_value = 0)]
+    pub failed_login_attempts: i32,
+
+    /// When the account was locked (None = not locked)
+    pub locked_until: Option<NaiveDateTime>,
+
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }
@@ -92,6 +112,8 @@ pub struct UserResponse {
     pub username: String,
     pub role: String,
     pub is_active: bool,
+    pub email_verified: bool,
+    pub totp_enabled: bool,
     pub created_at: NaiveDateTime,
 }
 
@@ -103,6 +125,8 @@ impl From<Model> for UserResponse {
             username: user.username,
             role: user.role,
             is_active: user.is_active,
+            email_verified: user.email_verified,
+            totp_enabled: user.totp_enabled,
             created_at: user.created_at,
         }
     }

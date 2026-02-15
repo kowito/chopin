@@ -13,6 +13,7 @@ use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 
+use crate::auth::rate_limit::RateLimiter;
 use crate::cache::CacheService;
 use crate::config::Config;
 use crate::controllers::AppState;
@@ -111,10 +112,16 @@ impl App {
         let config = Arc::new(self.config.clone());
         let is_dev = self.config.is_dev();
 
+        let rate_limiter = Arc::new(RateLimiter::new(
+            self.config.security.rate_limit_max_attempts,
+            self.config.security.rate_limit_window_secs,
+        ));
+
         let state = AppState {
             db: self.db.clone(),
             config: config.clone(),
             cache: self.cache.clone(),
+            rate_limiter,
         };
 
         // Initialize cached Date header (updated every 500ms by background task)
