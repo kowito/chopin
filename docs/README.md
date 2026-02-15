@@ -33,17 +33,36 @@ Your site will be available at: `https://kowito.github.io/chopin/`
 ## Structure
 
 ```
-website/
-├── index.html          # Main landing page
+docs/
+├── index.html               # Main landing page
+├── tutorial-index.html      # Tutorial guide index (recommended starting point)
+├── tutorial.html            # Complete reference tutorial (all content in one page)
+├── debugging-and-logging.md # Complete debugging guide
+├── LOGGING.md               # Quick logging reference
+├── json-performance.md      # JSON performance guide
 ├── css/
-│   └── style.css       # Styles
+│   ├── style.css            # Main styles
+│   └── tutorial.css         # Tutorial styles
 ├── js/
-│   └── main.js         # JavaScript interactions
-├── debugging-and-logging.md  # Complete debugging guide
-├── LOGGING.md          # Quick logging reference
-├── json-performance.md # JSON performance guide
-└── README.md           # This file
+│   └── main.js              # JavaScript interactions
+└── README.md                # This file
 ```
+
+## Tutorial Structure
+
+The tutorial is available in two formats:
+
+1. **Organized Navigation** - `tutorial-index.html` 
+   - Friendly landing page with organized topics
+   - Quick access to specific sections
+   - Recommended for new users
+   - Better mobile experience
+
+2. **Complete Reference** - `tutorial.html`
+   - All content in one comprehensive page
+   - Full table of contents sidebar
+   - Easy to search and reference
+   - Better for advanced users who want everything at once
 
 ## Features
 
