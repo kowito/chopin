@@ -71,9 +71,24 @@ pub struct CreateItemRequest {
 )]
 async fn list_items() -> Json<ApiResponse<Vec<Item>>> {
     let items = vec![
-        Item { id: 1, name: "Notebook".into(), price: 999, in_stock: true },
-        Item { id: 2, name: "Pen".into(), price: 199, in_stock: true },
-        Item { id: 3, name: "Eraser".into(), price: 50, in_stock: false },
+        Item {
+            id: 1,
+            name: "Notebook".into(),
+            price: 999,
+            in_stock: true,
+        },
+        Item {
+            id: 2,
+            name: "Pen".into(),
+            price: 199,
+            in_stock: true,
+        },
+        Item {
+            id: 3,
+            name: "Eraser".into(),
+            price: 50,
+            in_stock: false,
+        },
     ];
     Json(ApiResponse::success(items))
 }
@@ -90,7 +105,9 @@ async fn list_items() -> Json<ApiResponse<Vec<Item>>> {
     ),
     security(("bearer_auth" = []))
 )]
-async fn create_item(Json(payload): Json<CreateItemRequest>) -> (StatusCode, Json<ApiResponse<Item>>) {
+async fn create_item(
+    Json(payload): Json<CreateItemRequest>,
+) -> (StatusCode, Json<ApiResponse<Item>>) {
     let item = Item {
         id: 42,
         name: payload.name,
@@ -166,9 +183,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/items", get(list_items).post(create_item))
         .route("/api/items/{id}", get(get_item));
 
-    let app = chopin_core::App::new().await?
-        .routes(items)                      // mount your endpoints
-        .api_docs(MyApiDoc::openapi());     // merge OpenAPI docs
+    let app = chopin_core::App::new()
+        .await?
+        .routes(items) // mount your endpoints
+        .api_docs(MyApiDoc::openapi()); // merge OpenAPI docs
 
     app.run().await?;
 

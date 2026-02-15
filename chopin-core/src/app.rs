@@ -124,9 +124,7 @@ impl App {
         // If user provided a custom spec, merge it with built-in auth docs.
         // Otherwise, use the built-in auth docs only.
         let openapi_spec = match &self.custom_openapi {
-            Some(user_spec) => {
-                crate::openapi::merge_openapi(ApiDoc::openapi(), user_spec.clone())
-            }
+            Some(user_spec) => crate::openapi::merge_openapi(ApiDoc::openapi(), user_spec.clone()),
             None => ApiDoc::openapi(),
         };
         let openapi_spec_clone = openapi_spec.clone();
