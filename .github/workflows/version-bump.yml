@@ -73,7 +73,7 @@ jobs:
       - name: Publish chopin-core to crates.io
         run: cargo publish -p chopin-core
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
       
       - name: Wait before next publish
         run: sleep 30
@@ -81,4 +81,4 @@ jobs:
       - name: Publish chopin-cli to crates.io
         run: cargo publish -p chopin-cli
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
