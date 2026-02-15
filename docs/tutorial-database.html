@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Chopin Tutorial - Database: Configuration, Models, and Migrations.">
+    <title>Tutorial: Database - Chopin Framework</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/tutorial.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="container">
+            <div class="nav-content">
+                <div class="nav-logo">
+                    <a href="index.html" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;color:inherit;">
+                        <i data-lucide="music" class="logo-icon"></i>
+                        <span class="logo-text">Chopin</span>
+                    </a>
+                </div>
+                <div class="nav-links">
+                    <a href="index.html#features">Features</a>
+                    <a href="index.html#benchmarks">Benchmarks</a>
+                    <a href="tutorial-index.html">Tutorial</a>
+                    <a href="https://docs.rs/chopin">API Docs</a>
+                    <a href="https://github.com/kowito/chopin" class="btn-primary">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="tutorial-layout">
+        <!-- Sidebar TOC -->
+        <aside class="tutorial-sidebar">
+            <div class="toc">
+                <h3 class="toc-title">Database</h3>
+                <ol class="toc-list">
+                    <li><a href="#configuration" class="toc-link">Configuration</a></li>
+                    <li><a href="#database" class="toc-link">Database & Models</a></li>
+                    <li><a href="#migrations" class="toc-link">Migrations</a></li>
+                </ol>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="tutorial-content">
+
+            <!-- Hero -->
+            <div class="tutorial-hero">
+                <h1>Database & Configuration</h1>
+                <p>Configure your server (environment, database, security), define models with SeaORM, and run migrations automatically on startup.</p>
+                <div class="page-indicator">Page 2 of 6</div>
+            </div>
+
+            <!-- 1. Configuration -->
+            <section id="configuration" class="tutorial-section">
+                <div class="section-number">04</div>
+                <h2>Configuration</h2>
+                <p>Chopin loads configuration from environment variables via a <code>.env</code> file. Every setting has a sensible default.</p>
+
+<pre><code><span class="comment"># .env — Chopin configuration</span>
+
+<span class="comment"># Server</span>
+REUSEPORT=false               <span class="comment"># true for multi-core SO_REUSEPORT</span>
+SERVER_HOST=127.0.0.1
+SERVER_PORT=3000
+ENVIRONMENT=development       <span class="comment"># development | production</span>
+
+<span class="comment"># Database (SeaORM — supports SQLite, PostgreSQL, MySQL)</span>
+DATABASE_URL=sqlite://chopin.db?mode=rwc
+
+<span class="comment"># Authentication</span>
+JWT_SECRET=change-me-in-production
+JWT_EXPIRY_HOURS=24
+
+<span class="comment"># Security (all enabled by default — set to false to disable)</span>
+SECURITY_2FA=true
+SECURITY_RATE_LIMIT=true
+SECURITY_RATE_LIMIT_MAX=5
+SECURITY_RATE_LIMIT_WINDOW=300
+SECURITY_ACCOUNT_LOCKOUT=true
+SECURITY_LOCKOUT_MAX=5
+SECURITY_LOCKOUT_DURATION=900
+SECURITY_REFRESH_TOKENS=true
+SECURITY_REFRESH_EXPIRY_DAYS=30
+SECURITY_SESSION_MANAGEMENT=true
+SECURITY_PASSWORD_RESET=true
+SECURITY_RESET_EXPIRY=3600
+SECURITY_EMAIL_VERIFICATION=true
+SECURITY_EMAIL_VERIFY_EXPIRY=86400
+SECURITY_CSRF=true
+SECURITY_DEVICE_TRACKING=true
+SECURITY_MIN_PASSWORD_LENGTH=12
+
+<span class="comment"># Redis (requires `redis` feature)</span>
+REDIS_URL=redis://127.0.0.1:6379
+
+<span class="comment"># File Uploads</span>
+UPLOAD_DIR=./uploads
+MAX_UPLOAD_SIZE=10485760      <span class="comment"># 10MB in bytes</span>
+
+<span class="comment"># S3 Storage (requires `s3` feature)</span>
+S3_BUCKET=my-bucket
+S3_REGION=us-east-1
+S3_ENDPOINT=                  <span class="comment"># For R2/MinIO</span>
+S3_ACCESS_KEY=
+S3_SECRET_KEY=
+S3_PUBLIC_URL=                <span class="comment"># CDN or public URL prefix</span>
+S3_PREFIX=uploads             <span class="comment"># Object key prefix</span></code></pre>
+
+                <p>Access config in your code:</p>
+<pre><code><span class="kw">use</span> chopin_core::config::Config;
+
+<span class="kw">let</span> config = Config::from_env()?;
+
+<span class="comment">// Useful helpers</span>
+config.is_dev()       <span class="comment">// true if ENVIRONMENT=development</span>
+config.has_s3()       <span class="comment">// true if S3_BUCKET is set</span>
+config.server_addr()  <span class="comment">// "127.0.0.1:3000"</span></code></pre>
+
+                <h3>Custom config with App</h3>
+<pre><code><span class="comment">// Override config programmatically</span>
+<span class="kw">let mut</span> config = Config::from_env()?;
+config.server_port = <span class="num">8080</span>;
+
+<span class="kw">let</span> app = App::with_config(config).<span class="kw">await</span>?;
+app.run().<span class="kw">await</span>?;</code></pre>
+            </section>
+
+            <!-- 2. Database & Models -->
+            <section id="database" class="tutorial-section">
+                <div class="section-number">05</div>
+                <h2>Database & Models</h2>
+                <p>Chopin uses <strong>SeaORM</strong> for database access. It supports SQLite, PostgreSQL, and MySQL with the same code. Models are defined as Rust structs with derive macros.</p>
+
+                <h3>Connection</h3>
+                <p>Chopin connects automatically when you call <code>App::new()</code>. To connect manually:</p>
+<pre><code><span class="kw">use</span> chopin_core::{config::Config, db};
+
+<span class="kw">let</span> config = Config::from_env()?;
+<span class="kw">let</span> conn = db::connect(&config).<span class="kw">await</span>?;
+
+<span class="comment">// Connection pool is pre-configured:</span>
+<span class="comment">// max_connections: 100, min_connections: 5</span>
+<span class="comment">// connect_timeout: 8s, idle_timeout: 8s</span></code></pre>
+
+                <h3>Defining a model</h3>
+                <p>Use the CLI to scaffold, or define manually:</p>
+<pre><code><span class="comment"># Generate model + migration + controller</span>
+chopin generate model Post title:string body:text published:bool</code></pre>
+
+<pre><code><span class="comment">// src/models/post.rs</span>
+<span class="kw">use</span> chrono::NaiveDateTime;
+<span class="kw">use</span> sea_orm::entity::prelude::*;
+<span class="kw">use</span> serde::{Deserialize, Serialize};
+<span class="kw">use</span> utoipa::ToSchema;
+
+<span class="attr">#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]</span>
+<span class="attr">#[sea_orm(table_name = "posts")]</span>
+<span class="kw">pub struct</span> <span class="type">Model</span> {
+    <span class="attr">#[sea_orm(primary_key)]</span>
+    <span class="kw">pub</span> id: <span class="type">i32</span>,
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+    <span class="attr">#[sea_orm(column_type = "Text")]</span>
+    <span class="kw">pub</span> body: <span class="type">String</span>,
+    <span class="attr">#[sea_orm(default_value = "false")]</span>
+    <span class="kw">pub</span> published: <span class="type">bool</span>,
+    <span class="kw">pub</span> created_at: <span class="type">NaiveDateTime</span>,
+    <span class="kw">pub</span> updated_at: <span class="type">NaiveDateTime</span>,
+}
+
+<span class="attr">#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]</span>
+<span class="kw">pub enum</span> <span class="type">Relation</span> {}
+
+<span class="kw">impl</span> ActiveModelBehavior <span class="kw">for</span> ActiveModel {}
+
+<span class="comment">// Response DTO — what clients see</span>
+<span class="attr">#[derive(Debug, Serialize, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> <span class="type">PostResponse</span> {
+    <span class="kw">pub</span> id: <span class="type">i32</span>,
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+    <span class="kw">pub</span> body: <span class="type">String</span>,
+    <span class="kw">pub</span> published: <span class="type">bool</span>,
+    <span class="kw">pub</span> created_at: <span class="type">String</span>,
+    <span class="kw">pub</span> updated_at: <span class="type">String</span>,
+}
+
+<span class="kw">impl</span> From&lt;Model&gt; <span class="kw">for</span> <span class="type">PostResponse</span> {
+    <span class="kw">fn</span> <span class="fn">from</span>(m: Model) -> <span class="type">Self</span> {
+        <span class="type">PostResponse</span> {
+            id: m.id,
+            title: m.title,
+            body: m.body,
+            published: m.published,
+            created_at: m.created_at.format(<span class="str">"%Y-%m-%dT%H:%M:%S"</span>).to_string(),
+            updated_at: m.updated_at.format(<span class="str">"%Y-%m-%dT%H:%M:%S"</span>).to_string(),
+        }
+    }
+}</code></pre>
+
+                <h3>CRUD operations</h3>
+<pre><code><span class="kw">use</span> sea_orm::*;
+<span class="kw">use</span> crate::models::post::{self, Entity <span class="kw">as</span> Post};
+
+<span class="comment">// Create</span>
+<span class="kw">let</span> new = post::ActiveModel {
+    title: Set(<span class="str">"Hello"</span>.into()),
+    body: Set(<span class="str">"World"</span>.into()),
+    ..Default::default()
+};
+<span class="kw">let</span> result = new.insert(&db).<span class="kw">await</span>?;
+
+<span class="comment">// Read</span>
+<span class="kw">let</span> post = Post::find_by_id(<span class="num">1</span>).one(&db).<span class="kw">await</span>?;
+<span class="kw">let</span> all = Post::find().all(&db).<span class="kw">await</span>?;
+
+<span class="comment">// Update</span>
+<span class="kw">let mut</span> active: post::ActiveModel = post.unwrap().into();
+active.title = Set(<span class="str">"Updated"</span>.into());
+<span class="kw">let</span> updated = active.update(&db).<span class="kw">await</span>?;
+
+<span class="comment">// Delete</span>
+Post::delete_by_id(<span class="num">1</span>).exec(&db).<span class="kw">await</span>?;</code></pre>
+            </section>
+
+            <!-- 3. Migrations -->
+            <section id="migrations" class="tutorial-section">
+                <div class="section-number">06</div>
+                <h2>Migrations</h2>
+                <p>Migrations run <strong>automatically on startup</strong>. Chopin uses SeaORM's migration system &mdash; define them as Rust code, and they're applied when the app boots.</p>
+
+<pre><code><span class="comment">// src/migrations/m20250101_000001_create_posts_table.rs</span>
+<span class="kw">use</span> sea_orm_migration::{prelude::*, schema::*};
+
+<span class="attr">#[derive(DeriveMigrationName)]</span>
+<span class="kw">pub struct</span> <span class="type">Migration</span>;
+
+<span class="attr">#[async_trait::async_trait]</span>
+<span class="kw">impl</span> MigrationTrait <span class="kw">for</span> <span class="type">Migration</span> {
+    <span class="kw">async fn</span> <span class="fn">up</span>(&self, manager: &SchemaManager) -> <span class="type">Result</span>&lt;(), DbErr&gt; {
+        manager
+            .create_table(
+                Table::create()
+                    .table(Posts::Table)
+                    .if_not_exists()
+                    .col(pk_auto(Posts::Id))
+                    .col(string(Posts::Title))
+                    .col(text(Posts::Body))
+                    .col(boolean(Posts::Published).default(<span class="kw">false</span>))
+                    .col(timestamp(Posts::CreatedAt))
+                    .col(timestamp(Posts::UpdatedAt))
+                    .to_owned(),
+            )
+            .<span class="kw">await</span>
+    }
+
+    <span class="kw">async fn</span> <span class="fn">down</span>(&self, manager: &SchemaManager) -> <span class="type">Result</span>&lt;(), DbErr&gt; {
+        manager
+            .drop_table(Table::drop().table(Posts::Table).to_owned())
+            .<span class="kw">await</span>
+    }
+}
+
+<span class="attr">#[derive(DeriveIden)]</span>
+<span class="kw">enum</span> <span class="type">Posts</span> {
+    Table, Id, Title, Body, Published, CreatedAt, UpdatedAt,
+}</code></pre>
+
+                <h3>Register migrations</h3>
+<pre><code><span class="comment">// src/migrations/mod.rs</span>
+<span class="kw">pub use</span> sea_orm_migration::prelude::*;
+
+<span class="kw">mod</span> m20250101_000001_create_posts_table;
+
+<span class="kw">pub struct</span> <span class="type">Migrator</span>;
+
+<span class="attr">#[async_trait::async_trait]</span>
+<span class="kw">impl</span> MigratorTrait <span class="kw">for</span> <span class="type">Migrator</span> {
+    <span class="kw">fn</span> <span class="fn">migrations</span>() -> Vec&lt;Box&lt;<span class="kw">dyn</span> MigrationTrait&gt;&gt; {
+        <span class="kw">vec!</span>[Box::new(m20250101_000001_create_posts_table::Migration)]
+    }
+}</code></pre>
+
+                <h3>CLI migration commands</h3>
+<pre><code><span class="comment"># Run pending migrations</span>
+chopin db migrate
+
+<span class="comment"># Rollback last migration</span>
+chopin db rollback
+
+<span class="comment"># Rollback N migrations</span>
+chopin db rollback --steps 3
+
+<span class="comment"># Show migration status</span>
+chopin db status
+
+<span class="comment"># Reset database (rollback all + migrate)</span>
+chopin db reset</code></pre>
+            </section>
+
+            <!-- Navigation -->
+            <nav class="tutorial-nav">
+                <a href="tutorial-basics.html" class="btn-secondary">&larr; Basics</a>
+                <a href="tutorial-api.html" class="btn-primary">Next: API →</a>
+            </nav>
+
+        </main>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-bottom" style="border-top: none; padding-top: 0;">
+                <div class="footer-bottom-left">
+                    <p>&copy; 2026 Chopin. All rights reserved.</p>
+                </div>
+                <div class="footer-bottom-right">
+                    <p>Made with <i data-lucide="music" class="inline-icon-sm"></i> by the <a href="https://github.com/kowito">Chopin team</a></p>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+    <script>
+        lucide.createIcons();
+
+        const sections = document.querySelectorAll('.tutorial-section');
+        const tocLinks = document.querySelectorAll('.toc-link');
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    tocLinks.forEach(link => link.classList.remove('active'));
+                    const id = entry.target.getAttribute('id');
+                    const activeLink = document.querySelector(`.toc-link[href="#${id}"]`);
+                    if (activeLink) activeLink.classList.add('active');
+                }
+            });
+        }, { rootMargin: '-80px 0px -60% 0px' });
+
+        sections.forEach(section => observer.observe(section));
+    </script>
+</body>
+</html>

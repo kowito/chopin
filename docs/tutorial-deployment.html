@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Chopin Tutorial - Deployment: Testing, Performance Optimization, and Production Deployment.">
+    <title>Tutorial: Deployment - Chopin Framework</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/tutorial.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="container">
+            <div class="nav-content">
+                <div class="nav-logo">
+                    <a href="index.html" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;color:inherit;">
+                        <i data-lucide="music" class="logo-icon"></i>
+                        <span class="logo-text">Chopin</span>
+                    </a>
+                </div>
+                <div class="nav-links">
+                    <a href="index.html#features">Features</a>
+                    <a href="index.html#benchmarks">Benchmarks</a>
+                    <a href="tutorial-index.html">Tutorial</a>
+                    <a href="https://docs.rs/chopin">API Docs</a>
+                    <a href="https://github.com/kowito/chopin" class="btn-primary">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="tutorial-layout">
+        <!-- Sidebar TOC -->
+        <aside class="tutorial-sidebar">
+            <div class="toc">
+                <h3 class="toc-title">Deployment</h3>
+                <ol class="toc-list">
+                    <li><a href="#testing" class="toc-link">Testing</a></li>
+                    <li><a href="#performance" class="toc-link">Performance</a></li>
+                    <li><a href="#production" class="toc-link">Production</a></li>
+                </ol>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="tutorial-content">
+
+            <!-- Hero -->
+            <div class="tutorial-hero">
+                <h1>Testing, Performance & Production</h1>
+                <p>Write integration tests, optimize performance with zero-allocation routes, and deploy your Chopin API to production with confidence.</p>
+                <div class="page-indicator">Page 5 of 6</div>
+            </div>
+
+            <!-- 1. Testing -->
+            <section id="testing" class="tutorial-section">
+                <div class="section-number">17</div>
+                <h2>Testing</h2>
+                <p>Chopin provides a built-in test harness with <strong>in-memory SQLite</strong>, a test client, and response assertions. Write integration tests with zero configuration.</p>
+
+                <h3>TestApp — spin up a test server</h3>
+<pre><code><span class="kw">use</span> chopin_core::testing::{TestApp, TestClient};
+
+<span class="attr">#[tokio::test]</span>
+<span class="kw">async fn</span> <span class="fn">test_signup_and_login</span>() {
+    <span class="comment">// Creates in-memory SQLite DB, runs all migrations</span>
+    <span class="kw">let</span> test_app = TestApp::new().<span class="kw">await</span>;
+    <span class="kw">let</span> client = test_app.client();
+
+    <span class="comment">// Sign up</span>
+    <span class="kw">let</span> res = client.post_json(
+        <span class="str">"/api/auth/signup"</span>,
+        <span class="str">r#"{"email":"test@example.com","password":"password123","name":"Test"}"#</span>,
+    ).<span class="kw">await</span>;
+
+    assert_eq!(res.status, <span class="num">200</span>);
+    assert!(res.is_success());
+
+    <span class="comment">// Extract token from response</span>
+    <span class="kw">let</span> token = res.data()[<span class="str">"token"</span>].as_str().unwrap();
+
+    <span class="comment">// Login</span>
+    <span class="kw">let</span> res = client.post_json(
+        <span class="str">"/api/auth/login"</span>,
+        <span class="str">r#"{"email":"test@example.com","password":"password123"}"#</span>,
+    ).<span class="kw">await</span>;
+
+    assert_eq!(res.status, <span class="num">200</span>);
+    assert!(res.is_success());
+}</code></pre>
+
+                <h3>Authenticated requests</h3>
+<pre><code><span class="attr">#[tokio::test]</span>
+<span class="kw">async fn</span> <span class="fn">test_protected_endpoint</span>() {
+    <span class="kw">let</span> test_app = TestApp::new().<span class="kw">await</span>;
+    <span class="kw">let</span> client = test_app.client();
+
+    <span class="comment">// Sign up to get a token</span>
+    <span class="kw">let</span> res = client.post_json(<span class="str">"/api/auth/signup"</span>, <span class="str">r#"{"email":"a@b.com","password":"pass1234","name":"A"}"#</span>).<span class="kw">await</span>;
+    <span class="kw">let</span> token = res.data()[<span class="str">"token"</span>].as_str().unwrap().to_string();
+
+    <span class="comment">// Make authenticated requests</span>
+    <span class="kw">let</span> res = client.get_with_auth(<span class="str">"/api/profile"</span>, &token).<span class="kw">await</span>;
+    assert_eq!(res.status, <span class="num">200</span>);
+
+    <span class="comment">// POST with auth</span>
+    <span class="kw">let</span> res = client.post_with_auth(
+        <span class="str">"/api/posts"</span>, &token,
+        <span class="str">r#"{"title":"Test","body":"Content"}"#</span>,
+    ).<span class="kw">await</span>;
+    assert_eq!(res.status, <span class="num">201</span>);
+}</code></pre>
+
+                <h3>TestResponse helpers</h3>
+<pre><code><span class="kw">let</span> res = client.get(<span class="str">"/"</span>).<span class="kw">await</span>;
+
+res.status         <span class="comment">// u16 — HTTP status code</span>
+res.body           <span class="comment">// String — raw response body</span>
+res.json()         <span class="comment">// serde_json::Value</span>
+res.is_success()   <span class="comment">// checks json["success"] == true</span>
+res.data()         <span class="comment">// json["data"]</span>
+res.error()        <span class="comment">// json["error"]</span></code></pre>
+
+<pre><code><span class="comment"># Run all tests</span>
+cargo test --all
+
+<span class="comment"># Run specific test</span>
+cargo test test_signup_and_login -- --nocapture</code></pre>
+            </section>
+
+            <!-- 2. Performance -->
+            <section id="performance" class="tutorial-section">
+                <div class="section-number">18</div>
+                <h2>Performance Optimization</h2>
+                <p>Chopin uses a <strong>ChopinService</strong> dispatcher with FastRoute zero-allocation endpoints. Enable <strong>SO_REUSEPORT</strong> for multi-core parallelism and achieve 500K-1.7M+ req/s.</p>
+
+                <div class="mode-comparison">
+                    <div class="mode-card">
+                        <h4><i data-lucide="shield" class="inline-icon"></i> Default</h4>
+                        <ul>
+                            <li>Single listener, multi-thread tokio</li>
+                            <li>FastRoute zero-alloc fast path</li>
+                            <li>Full Axum middleware for other routes</li>
+                            <li>~150K-300K req/s</li>
+                        </ul>
+                        <code>cargo run --release</code>
+                    </div>
+                    <div class="mode-card">
+                        <h4><i data-lucide="zap" class="inline-icon"></i> REUSEPORT=true</h4>
+                        <ul>
+                            <li>Per-core current_thread tokio runtimes</li>
+                            <li>SO_REUSEPORT kernel-level load balancing</li>
+                            <li>Zero cross-thread synchronization</li>
+                            <li>~500K-1.7M+ req/s</li>
+                        </ul>
+                        <code>REUSEPORT=true cargo run --release</code>
+                    </div>
+                </div>
+
+                <h3>Fast routes — zero-allocation endpoints</h3>
+                <p>FastRoute bypasses Axum middleware for maximum performance. Configure with decorators pre-computed at registration time.</p>
+
+<h4>Basic usage</h4>
+<pre><code><span class="kw">use</span> chopin_core::{App, FastRoute};
+
+<span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+    .fast_route(FastRoute::json(<span class="str">"/json"</span>, <span class="kw">br#</span><span class="str">{"message":"Hello, World!"}</span><span class="kw">#</span>))
+    .fast_route(FastRoute::text(<span class="str">"/plaintext"</span>, <span class="kw">b</span><span class="str">"Hello, World!"</span>));
+
+app.run().<span class="kw">await</span>?;</code></pre>
+
+<h4>With CORS</h4>
+<pre><code><span class="kw">use</span> chopin_core::{App, FastRoute};
+
+<span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+    .fast_route(
+        FastRoute::json(<span class="str">"/api/status"</span>, <span class="kw">br#</span><span class="str">{"status":"ok"}</span><span class="kw">#</span>)
+            .cors()                              <span class="comment">// Enable CORS</span>
+            .get_only()                          <span class="comment">// GET/HEAD only</span>
+            .cache_control(<span class="str">"public, max-age=5"</span>)
+    );
+
+app.run().<span class="kw">await</span>?;</code></pre>
+
+<h4>Per-route trade-offs</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Feature</th>
+                            <th>FastRoute</th>
+                            <th>Axum Router</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Performance</strong></td>
+                            <td>~35ns (~28M req/s)</td>
+                            <td>~1,000-5,000ns (~200K-1M req/s)</td>
+                        </tr>
+                        <tr>
+                            <td>CORS</td>
+                            <td><code>.cors()</code></td>
+                            <td>CorsLayer</td>
+                        </tr>
+                        <tr>
+                            <td>Cache-Control</td>
+                            <td><code>.cache_control()</code></td>
+                            <td>manual</td>
+                        </tr>
+                        <tr>
+                            <td>Auth</td>
+                            <td>—</td>
+                            <td>middleware</td>
+                        </tr>
+                        <tr>
+                            <td>Logging</td>
+                            <td>—</td>
+                            <td>TraceLayer</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="tip">
+                    <strong>When to use FastRoute:</strong>
+                    <ul>
+                        <li><strong>Health checks</strong> — <code>/health</code>, <code>/ready</code>, <code>/metrics</code></li>
+                        <li><strong>Static API responses</strong> — <code>/api/status</code>, <code>/api/version</code></li>
+                        <li><strong>Benchmark endpoints</strong> — <code>/json</code>, <code>/plaintext</code></li>
+                    </ul>
+                    <strong>When to use Axum Router:</strong>
+                    <ul>
+                        <li>Dynamic content (database queries)</li>
+                        <li>Authentication required</li>
+                        <li>Request logging/tracing</li>
+                    </ul>
+                </div>
+
+                <h3>Cargo.toml profile for optimized builds</h3>
+<pre><code><span class="comment"># Cargo.toml — add this for maximum throughput</span>
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.release.build-override]
+opt-level = 3</code></pre>
+
+                <h3>Benchmark with wrk</h3>
+<pre><code><span class="comment"># Start server with SO_REUSEPORT</span>
+REUSEPORT=true cargo run --release
+
+<span class="comment"># Benchmark (in another terminal)</span>
+wrk -t4 -c256 -d10s http://127.0.0.1:3000/json
+wrk -t4 -c256 -d10s http://127.0.0.1:3000/plaintext</code></pre>
+            </section>
+
+            <!-- 3. Production Deployment -->
+            <section id="production" class="tutorial-section">
+                <div class="section-number">19</div>
+                <h2>Production Deployment</h2>
+                <p>Ship your Chopin API to production with a compiled Rust binary. No runtime, no garbage collector, no cold starts.</p>
+
+                <h3>Build for production</h3>
+<pre><code><span class="comment"># Optimized release build</span>
+cargo build --release
+
+<span class="comment"># With performance features</span>
+cargo build --release --features perf
+
+<span class="comment"># Result: a single static binary</span>
+ls -lh target/release/my-api
+<span class="comment"># -rwxr-xr-x  1 user  staff  12M  my-api</span></code></pre>
+
+                <h3>Production .env</h3>
+<pre><code><span class="comment"># Production environment</span>
+ENVIRONMENT=production
+REUSEPORT=true                  <span class="comment"># enable multi-core SO_REUSEPORT</span>
+SERVER_HOST=0.0.0.0
+SERVER_PORT=3000
+
+<span class="comment"># Production database</span>
+DATABASE_URL=postgres://user:pass@db.example.com/myapp
+
+<span class="comment"># Strong JWT secret (generate with: openssl rand -hex 64)</span>
+JWT_SECRET=your-very-long-random-secret-here
+JWT_EXPIRY_HOURS=24
+
+<span class="comment"># Redis for caching</span>
+REDIS_URL=redis://redis.example.com:6379
+
+<span class="comment"># S3 for file uploads</span>
+S3_BUCKET=prod-uploads
+S3_REGION=us-east-1
+S3_ACCESS_KEY=AKIA...
+S3_SECRET_KEY=...</span></code></pre>
+
+                <h3>Docker</h3>
+<pre><code><span class="comment"># Dockerfile</span>
+FROM rust:1.82-slim AS builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release --features perf
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/my-api /usr/local/bin/
+EXPOSE 3000
+CMD ["my-api"]</code></pre>
+
+<pre><code><span class="comment"># Build and run</span>
+docker build -t my-api .
+docker run -p 3000:3000 --env-file .env my-api</code></pre>
+
+                <h3>Systemd service</h3>
+<pre><code><span class="comment"># /etc/systemd/system/my-api.service</span>
+[Unit]
+Description=My Chopin API
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/my-api
+EnvironmentFile=/opt/my-api/.env
+ExecStart=/opt/my-api/my-api
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+
+<pre><code><span class="comment"># Deploy</span>
+sudo systemctl daemon-reload
+sudo systemctl enable my-api
+sudo systemctl start my-api
+sudo systemctl status my-api</code></pre>
+
+                <h3>Production checklist</h3>
+                <div class="checklist">
+                    <label><input type="checkbox"> Change <code>JWT_SECRET</code> to a strong random value</label>
+                    <label><input type="checkbox"> Set <code>ENVIRONMENT=production</code></label>
+                    <label><input type="checkbox"> Use PostgreSQL or MySQL instead of SQLite</label>
+                    <label><input type="checkbox"> Set up Redis for caching</label>
+                    <label><input type="checkbox"> Configure S3/R2 for file uploads</label>
+                    <label><input type="checkbox"> Build with <code>--release --features perf</code></label>
+                    <label><input type="checkbox"> Set up HTTPS via reverse proxy (nginx/Caddy)</label>
+                    <label><input type="checkbox"> Verify all security features are enabled (default)</label>
+                    <label><input type="checkbox"> Set <code>SECURITY_MIN_PASSWORD_LENGTH=12</code> or higher</label>
+                    <label><input type="checkbox"> Configure logging and monitoring</label>
+                    <label><input type="checkbox"> Set up database backups</label>
+                    <label><input type="checkbox"> Run <code>cargo test --all</code> before deploying</label>
+                </div>
+            </section>
+
+            <!-- Navigation -->
+            <nav class="tutorial-nav">
+                <a href="tutorial-advanced.html" class="btn-secondary">&larr; Advanced</a>
+                <a href="tutorial-index.html" class="btn-primary">Back to Index</a>
+            </nav>
+
+        </main>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-bottom" style="border-top: none; padding-top: 0;">
+                <div class="footer-bottom-left">
+                    <p>&copy; 2026 Chopin. All rights reserved.</p>
+                </div>
+                <div class="footer-bottom-right">
+                    <p>Made with <i data-lucide="music" class="inline-icon-sm"></i> by the <a href="https://github.com/kowito">Chopin team</a></p>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+    <script>
+        lucide.createIcons();
+
+        const sections = document.querySelectorAll('.tutorial-section');
+        const tocLinks = document.querySelectorAll('.toc-link');
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    tocLinks.forEach(link => link.classList.remove('active'));
+                    const id = entry.target.getAttribute('id');
+                    const activeLink = document.querySelector(`.toc-link[href="#${id}"]`);
+                    if (activeLink) activeLink.classList.add('active');
+                }
+            });
+        }, { rootMargin: '-80px 0px -60% 0px' });
+
+        sections.forEach(section => observer.observe(section));
+    </script>
+</body>
+</html>

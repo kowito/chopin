@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Chopin Tutorial - Advanced Features: OpenAPI Documentation, Caching, File Uploads, and GraphQL.">
+    <title>Tutorial: Advanced Features - Chopin Framework</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/tutorial.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="container">
+            <div class="nav-content">
+                <div class="nav-logo">
+                    <a href="index.html" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;color:inherit;">
+                        <i data-lucide="music" class="logo-icon"></i>
+                        <span class="logo-text">Chopin</span>
+                    </a>
+                </div>
+                <div class="nav-links">
+                    <a href="index.html#features">Features</a>
+                    <a href="index.html#benchmarks">Benchmarks</a>
+                    <a href="tutorial-index.html">Tutorial</a>
+                    <a href="https://docs.rs/chopin">API Docs</a>
+                    <a href="https://github.com/kowito/chopin" class="btn-primary">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="tutorial-layout">
+        <!-- Sidebar TOC -->
+        <aside class="tutorial-sidebar">
+            <div class="toc">
+                <h3 class="toc-title">Advanced</h3>
+                <ol class="toc-list">
+                    <li><a href="#openapi" class="toc-link">OpenAPI Docs</a></li>
+                    <li><a href="#caching" class="toc-link">Caching</a></li>
+                    <li><a href="#file-uploads" class="toc-link">File Uploads</a></li>
+                    <li><a href="#graphql" class="toc-link">GraphQL</a></li>
+                </ol>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="tutorial-content">
+
+            <!-- Hero -->
+            <div class="tutorial-hero">
+                <h1>Advanced Features</h1>
+                <p>Automatic API documentation with OpenAPI, high-performance caching, file uploads to S3, and optional GraphQL support.</p>
+                <div class="page-indicator">Page 4 of 6</div>
+            </div>
+
+            <!-- 1. OpenAPI Docs -->
+            <section id="openapi" class="tutorial-section">
+                <div class="section-number">13</div>
+                <h2>API Documentation (OpenAPI)</h2>
+                <p>Chopin provides <strong>first-class OpenAPI 3.1 documentation</strong> with the beautiful <strong>Scalar UI</strong>, following the same pattern as Axum + utoipa. You get built-in auth endpoint docs out of the box, and can add your own endpoints with simple annotations — no extra crates needed.</p>
+
+                <div class="callout">
+                    <i data-lucide="external-link" class="inline-icon"></i>
+                    <div>
+                        Visit <code>http://localhost:3000/api-docs</code> after starting your server to see the interactive API documentation. The raw OpenAPI JSON spec is at <code>/api-docs/openapi.json</code>.
+                    </div>
+                </div>
+
+                <h3>What you get for free</h3>
+                <p>Every Chopin app includes automatic API docs for the built-in auth endpoints.</p>
+
+                <h3>Step 1: Define your request & response types</h3>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="doc">/// Request body for creating a post.</span>
+<span class="attr">#[derive(Debug, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> <span class="type">CreatePostRequest</span> {
+    <span class="doc">/// Post title (required, 1-200 characters)</span>
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+    <span class="doc">/// Post body content in markdown (required)</span>
+    <span class="kw">pub</span> body: <span class="type">String</span>,
+    <span class="doc">/// Optional tags for categorization</span>
+    <span class="kw">pub</span> tags: Option&lt;Vec&lt;<span class="type">String</span>&gt;&gt;,
+}
+
+<span class="doc">/// Response body for a post.</span>
+<span class="attr">#[derive(Debug, Serialize, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> <span class="type">PostResponse</span> {
+    <span class="kw">pub</span> id: <span class="type">i32</span>,
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+    <span class="kw">pub</span> body: <span class="type">String</span>,
+    <span class="kw">pub</span> published: <span class="type">bool</span>,
+    <span class="kw">pub</span> created_at: <span class="type">String</span>,
+}</code></pre>
+
+                <h3>Step 2: Annotate your handlers</h3>
+<pre><code><span class="doc">/// List all posts with pagination.</span>
+<span class="attr">#[utoipa::path(
+    get,
+    path = "/api/posts",
+    tag = "posts",
+    params(Pagination),
+    responses(
+        (status = 200, description = "Paginated list of posts",
+         body = ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;)
+    )
+)]</span>
+<span class="kw">pub async fn</span> <span class="fn">list_posts</span>(...) { }
+
+<span class="doc">/// Create a new post.</span>
+<span class="attr">#[utoipa::path(
+    post,
+    path = "/api/posts",
+    tag = "posts",
+    request_body = CreatePostRequest,
+    responses(
+        (status = 201, description = "Post created successfully",
+         body = ApiResponse&lt;PostResponse&gt;),
+        (status = 400, description = "Validation error"),
+        (status = 401, description = "Unauthorized")
+    ),
+    security(("bearer_auth" = []))
+)]</span>
+<span class="kw">pub async fn</span> <span class="fn">create_post</span>(...) { }</code></pre>
+
+                <h3>Step 3: Create your OpenAPI doc struct</h3>
+<pre><code><span class="attr">#[derive(OpenApi)]</span>
+<span class="attr">#[openapi(
+    info(
+        title = "My Blog API",
+        version = "1.0.0",
+        description = "A blog API built with Chopin"
+    ),
+    paths(
+        controllers::posts::list_posts,
+        controllers::posts::create_post,
+    ),
+    components(
+        schemas(PostResponse, CreatePostRequest)
+    ),
+    tags(
+        (name = "posts", description = "Blog post management")
+    ),
+    security(("bearer_auth" = [])),
+    modifiers(&SecurityAddon)
+)]</span>
+<span class="kw">pub struct</span> <span class="type">MyApiDoc</span>;</code></pre>
+
+                <h3>Step 4: Mount your docs</h3>
+<pre><code><span class="attr">#[tokio::main]</span>
+<span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    init_logging();
+
+    <span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+        .api_docs(MyApiDoc::openapi());  <span class="comment">// ← merged with built-in auth docs</span>
+
+    app.run().<span class="kw">await</span>?;
+    <span class="type">Ok</span>(())
+}</code></pre>
+
+                <h3>ToSchema tips</h3>
+<pre><code><span class="comment">// Rename fields in the schema</span>
+<span class="attr">#[derive(Serialize, ToSchema)]</span>
+<span class="attr">#[schema(rename_all = "camelCase")]</span>
+<span class="kw">pub struct</span> <span class="type">PostResponse</span> {
+    <span class="kw">pub</span> created_at: <span class="type">String</span>,  <span class="comment">// → "createdAt" in docs</span>
+}
+
+<span class="comment">// Add examples to fields</span>
+<span class="attr">#[derive(Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> <span class="type">CreatePostRequest</span> {
+    <span class="attr">#[schema(example = "My First Post")]</span>
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+
+    <span class="attr">#[schema(minimum = 0, maximum = 10)]</span>
+    <span class="kw">pub</span> priority: Option&lt;<span class="type">i32</span>&gt;,
+}</code></pre>
+
+                <p>Everything you need is from <code>chopin_core</code> — no need to add extra crates. Re-exported: <code>OpenApi</code>, <code>ToSchema</code>, <code>Scalar</code>, <code>Servable</code>, and <code>SecurityAddon</code>.</p>
+            </section>
+
+            <!-- 2. Caching -->
+            <section id="caching" class="tutorial-section">
+                <div class="section-number">14</div>
+                <h2>Caching</h2>
+                <p>Chopin provides a unified caching API with two backends: <strong>in-memory</strong> (default) and <strong>Redis</strong> (feature-gated). Cache any serializable data with TTL support.</p>
+
+                <h3>In-memory cache (default)</h3>
+<pre><code><span class="kw">use</span> chopin_core::cache::CacheService;
+
+<span class="kw">let</span> cache = CacheService::in_memory();
+
+<span class="comment">// Basic string operations</span>
+cache.set(<span class="str">"key"</span>, <span class="str">"value"</span>).<span class="kw">await</span>?;
+<span class="kw">let</span> val = cache.get(<span class="str">"key"</span>).<span class="kw">await</span>?;            <span class="comment">// Option&lt;String&gt;</span>
+
+<span class="comment">// With TTL (seconds)</span>
+cache.set_with_ttl(<span class="str">"key"</span>, <span class="str">"value"</span>, <span class="num">300</span>).<span class="kw">await</span>?;  <span class="comment">// 5 minutes</span>
+
+<span class="comment">// JSON operations — cache any Serialize/Deserialize type</span>
+cache.set_json(<span class="str">"post:1"</span>, &post_response).<span class="kw">await</span>?;
+<span class="kw">let</span> cached: Option&lt;PostResponse&gt; = cache.get_json(<span class="str">"post:1"</span>).<span class="kw">await</span>?;
+
+<span class="comment">// Other operations</span>
+cache.delete(<span class="str">"key"</span>).<span class="kw">await</span>?;
+cache.exists(<span class="str">"key"</span>).<span class="kw">await</span>?;                    <span class="comment">// bool</span>
+cache.flush().<span class="kw">await</span>?;                            <span class="comment">// Clear all</span></code></pre>
+
+                <h3>Redis cache</h3>
+<pre><code><span class="comment"># Enable in Cargo.toml</span>
+chopin-core = { version = "0.2", features = ["redis"] }
+
+<span class="comment"># Set in .env</span>
+REDIS_URL=redis://127.0.0.1:6379</code></pre>
+
+<pre><code><span class="comment">// Redis backend is used automatically when REDIS_URL is set</span>
+<span class="comment">// The API is identical — same methods, same types</span>
+<span class="kw">let</span> cache = CacheService::redis(<span class="str">"redis://127.0.0.1:6379"</span>).<span class="kw">await</span>?;</code></pre>
+
+                <h3>Caching in handlers</h3>
+<pre><code><span class="kw">pub async fn</span> <span class="fn">get_post</span>(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;<span class="type">i32</span>&gt;,
+) -> <span class="type">Result</span>&lt;chopin_core::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
+    <span class="kw">let</span> cache_key = <span class="kw">format!</span>(<span class="str">"post:{}"</span>, id);
+
+    <span class="comment">// Check cache first</span>
+    <span class="kw">if let</span> Some(cache) = &state.cache {
+        <span class="kw">if let</span> Ok(Some(cached)) = cache.get_json(&cache_key).<span class="kw">await</span> {
+            <span class="kw">return</span> <span class="type">Ok</span>(chopin_core::Json(ApiResponse::success(cached)));
+        }
+    }
+
+    <span class="comment">// Fetch from database</span>
+    <span class="kw">let</span> post = Post::find_by_id(id).one(&state.db).<span class="kw">await</span>?
+        .ok_or_else(|| ChopinError::NotFound(<span class="str">"Post not found"</span>.into()))?;
+    <span class="kw">let</span> response = PostResponse::from(post);
+
+    <span class="comment">// Store in cache for 5 minutes</span>
+    <span class="kw">if let</span> Some(cache) = &state.cache {
+        <span class="kw">let</span> _ = cache.set_json(&cache_key, &response).<span class="kw">await</span>;
+    }
+
+    <span class="type">Ok</span>(chopin_core::Json(ApiResponse::success(response)))
+}</code></pre>
+            </section>
+
+            <!-- 3. File Uploads -->
+            <section id="file-uploads" class="tutorial-section">
+                <div class="section-number">15</div>
+                <h2>File Uploads</h2>
+                <p>Upload files to <strong>local disk</strong> or <strong>S3-compatible storage</strong> (AWS S3, Cloudflare R2, MinIO). Chopin handles multipart parsing, validation, and storage.</p>
+
+                <h3>Local storage</h3>
+<pre><code><span class="kw">use</span> chopin_core::storage::{LocalStorage, FileUploadService};
+<span class="kw">use</span> chopin_core::extract::Multipart;
+
+<span class="kw">let</span> storage = LocalStorage::new(<span class="str">"./uploads"</span>);
+<span class="kw">let</span> upload_service = FileUploadService::new(
+    Box::new(storage),
+    <span class="num">10</span> * <span class="num">1024</span> * <span class="num">1024</span>,  <span class="comment">// 10MB max size</span>
+);
+
+<span class="kw">pub async fn</span> <span class="fn">upload_file</span>(
+    <span class="kw">mut</span> multipart: Multipart,
+) -> <span class="type">Result</span>&lt;<span class="kw">impl</span> IntoResponse, ChopinError&gt; {
+    <span class="comment">// Process single file from multipart form</span>
+    <span class="kw">let</span> uploaded = upload_service
+        .process_single_upload(&<span class="kw">mut</span> multipart, <span class="str">"file"</span>)
+        .<span class="kw">await</span>?;
+
+    <span class="comment">// uploaded.filename: original filename</span>
+    <span class="comment">// uploaded.stored_path: "uploads/uuid-filename.ext"</span>
+    <span class="comment">// uploaded.content_type: "image/png"</span>
+    <span class="comment">// uploaded.size: bytes</span>
+
+    <span class="type">Ok</span>(chopin_core::Json(json!({ "path": uploaded.stored_path })))
+}</code></pre>
+
+                <h3>S3 / Cloudflare R2 / MinIO</h3>
+<pre><code><span class="comment"># Enable in Cargo.toml</span>
+chopin-core = { version = "0.2", features = ["s3"] }
+
+<span class="comment"># Configure in .env</span>
+S3_BUCKET=my-bucket
+S3_REGION=us-east-1
+S3_ACCESS_KEY=AKIA...
+S3_SECRET_KEY=...
+S3_PUBLIC_URL=https://cdn.example.com
+
+<span class="comment"># For Cloudflare R2</span>
+S3_ENDPOINT=https://&lt;account-id&gt;.r2.cloudflarestorage.com
+
+<span class="comment"># For MinIO</span>
+S3_ENDPOINT=http://localhost:9000</code></pre>
+
+<pre><code><span class="kw">use</span> chopin_core::storage::S3Storage;
+<span class="kw">use</span> chopin_core::config::Config;
+
+<span class="kw">let</span> config = Config::from_env()?;
+<span class="kw">let</span> s3 = S3Storage::from_config(&config).<span class="kw">await</span>;
+
+<span class="comment">// Same API as LocalStorage</span>
+<span class="kw">let</span> upload_service = FileUploadService::new(
+    Box::new(s3),
+    config.max_upload_size,
+);
+
+<span class="comment">// Files are stored as: {prefix}/{uuid}-{filename}</span>
+<span class="comment">// e.g., uploads/550e8400-e29b-41d4-a716-446655440000-photo.jpg</span></code></pre>
+            </section>
+
+            <!-- 4. GraphQL -->
+            <section id="graphql" class="tutorial-section">
+                <div class="section-number">16</div>
+                <h2>GraphQL</h2>
+                <p>Chopin includes optional GraphQL support via <code>async-graphql</code>. Enable it with the <code>graphql</code> feature flag.</p>
+
+<pre><code><span class="comment"># Cargo.toml</span>
+chopin-core = { version = "0.2", features = ["graphql"] }</code></pre>
+
+<pre><code><span class="kw">use</span> async_graphql::{Object, Schema, EmptyMutation, EmptySubscription};
+<span class="kw">use</span> chopin_core::graphql::graphql_routes;
+
+<span class="kw">struct</span> <span class="type">QueryRoot</span>;
+
+<span class="attr">#[Object]</span>
+<span class="kw">impl</span> <span class="type">QueryRoot</span> {
+    <span class="kw">async fn</span> <span class="fn">hello</span>(&self) -> &<span class="type">str</span> {
+        <span class="str">"Hello from Chopin GraphQL!"</span>
+    }
+
+    <span class="kw">async fn</span> <span class="fn">posts</span>(&self) -> Vec&lt;<span class="type">String</span>&gt; {
+        <span class="kw">vec!</span>[<span class="str">"Post 1"</span>.into(), <span class="str">"Post 2"</span>.into()]
+    }
+}
+
+<span class="comment">// Build schema</span>
+<span class="kw">let</span> schema = Schema::build(<span class="type">QueryRoot</span>, EmptyMutation, EmptySubscription)
+    .finish();
+
+<span class="comment">// Add to your router — provides:</span>
+<span class="comment">// POST /graphql — endpoint</span>
+<span class="comment">// GET /graphql  — GraphQL Playground UI</span>
+<span class="kw">let</span> graphql = graphql_routes(schema);</code></pre>
+            </section>
+
+            <!-- Navigation -->
+            <nav class="tutorial-nav">
+                <a href="tutorial-api.html" class="btn-secondary">&larr; API</a>
+                <a href="tutorial-deployment.html" class="btn-primary">Next: Deployment →</a>
+            </nav>
+
+        </main>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-bottom" style="border-top: none; padding-top: 0;">
+                <div class="footer-bottom-left">
+                    <p>&copy; 2026 Chopin. All rights reserved.</p>
+                </div>
+                <div class="footer-bottom-right">
+                    <p>Made with <i data-lucide="music" class="inline-icon-sm"></i> by the <a href="https://github.com/kowito">Chopin team</a></p>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+    <script>
+        lucide.createIcons();
+
+        const sections = document.querySelectorAll('.tutorial-section');
+        const tocLinks = document.querySelectorAll('.toc-link');
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    tocLinks.forEach(link => link.classList.remove('active'));
+                    const id = entry.target.getAttribute('id');
+                    const activeLink = document.querySelector(`.toc-link[href="#${id}"]`);
+                    if (activeLink) activeLink.classList.add('active');
+                }
+            });
+        }, { rootMargin: '-80px 0px -60% 0px' });
+
+        sections.forEach(section => observer.observe(section));
+    </script>
+</body>
+</html>

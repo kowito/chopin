@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Chopin Tutorial - Basics: Installation, Hello World, and Debugging.">
+    <title>Tutorial: Basics - Chopin Framework</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/tutorial.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="container">
+            <div class="nav-content">
+                <div class="nav-logo">
+                    <a href="index.html" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;color:inherit;">
+                        <i data-lucide="music" class="logo-icon"></i>
+                        <span class="logo-text">Chopin</span>
+                    </a>
+                </div>
+                <div class="nav-links">
+                    <a href="index.html#features">Features</a>
+                    <a href="index.html#benchmarks">Benchmarks</a>
+                    <a href="tutorial-index.html">Tutorial</a>
+                    <a href="https://docs.rs/chopin">API Docs</a>
+                    <a href="https://github.com/kowito/chopin" class="btn-primary">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="tutorial-layout">
+        <!-- Sidebar TOC -->
+        <aside class="tutorial-sidebar">
+            <div class="toc">
+                <h3 class="toc-title">Basics</h3>
+                <ol class="toc-list">
+                    <li><a href="#installation" class="toc-link">Installation</a></li>
+                    <li><a href="#hello-world" class="toc-link">Hello World</a></li>
+                    <li><a href="#debugging" class="toc-link">Debugging & Logging</a></li>
+                </ol>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="tutorial-content">
+
+            <!-- Hero -->
+            <div class="tutorial-hero">
+                <h1>Getting Started with Chopin</h1>
+                <p>Install Chopin, create your first server, and enable debugging in under 5 minutes. Everything you need to begin.</p>
+                <div class="page-indicator">Page 1 of 6</div>
+            </div>
+
+            <!-- 1. Installation -->
+            <section id="installation" class="tutorial-section">
+                <div class="section-number">01</div>
+                <h2>Installation</h2>
+                <p>Chopin requires <strong>Rust 1.75+</strong>. Install the CLI tool and scaffold your first project in seconds.</p>
+
+                <h3>Install the CLI</h3>
+<pre><code><span class="comment"># Install Chopin CLI from crates.io</span>
+cargo install chopin-cli</code></pre>
+
+                <h3>Create a new project</h3>
+<pre><code><span class="comment"># Scaffold a new Chopin project</span>
+chopin new my-api
+<span class="kw">cd</span> my-api
+
+<span class="comment"># Your project structure:</span>
+<span class="comment"># my-api/</span>
+<span class="comment">#   Cargo.toml</span>
+<span class="comment">#   .env</span>
+<span class="comment">#   src/</span>
+<span class="comment">#     main.rs</span>
+<span class="comment">#     lib.rs</span>
+<span class="comment">#     controllers/</span>
+<span class="comment">#     models/</span>
+<span class="comment">#     migrations/</span></code></pre>
+
+                <h3>Or add to an existing project</h3>
+<pre><code><span class="comment"># Add chopin as a dependency</span>
+cargo add chopin
+
+<span class="comment"># With optional features</span>
+cargo add chopin-core --features redis,s3,graphql,perf</code></pre>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Feature flags:</strong>
+                        <code>redis</code> &mdash; Redis caching backend,
+                        <code>s3</code> &mdash; S3/R2/MinIO file storage,
+                        <code>graphql</code> &mdash; GraphQL support,
+                        <code>perf</code> &mdash; mimalloc + sonic-rs SIMD JSON
+                    </div>
+                </div>
+            </section>
+
+            <!-- 2. Hello World -->
+            <section id="hello-world" class="tutorial-section">
+                <div class="section-number">02</div>
+                <h2>Hello World</h2>
+                <p>The simplest Chopin app is <strong>4 lines of code</strong>. It gives you a running server with auth endpoints, database, and OpenAPI docs out of the box.</p>
+
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="attr">#[tokio::main]</span>
+<span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    init_logging();  <span class="comment">// Enable console logs and request traces</span>
+
+    <span class="kw">let</span> app = App::new().<span class="kw">await</span>?;
+    app.run().<span class="kw">await</span>?;
+
+    <span class="type">Ok</span>(())
+}</code></pre>
+
+<pre><code><span class="comment"># Run it</span>
+cargo run
+
+<span class="comment"># Output:</span>
+<span class="comment"># 🎹 Chopin is running</span>
+<span class="comment">#    → Server:    http://127.0.0.1:3000</span>
+<span class="comment">#    → API docs:  http://127.0.0.1:3000/api-docs</span>
+<span class="comment">#    → Mode:      standard</span></code></pre>
+
+                <p>You already have these endpoints:</p>
+                <div class="endpoint-table">
+                    <table>
+                        <thead>
+                            <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td><span class="method get">GET</span></td><td><code>/</code></td><td>Welcome JSON</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/signup</code></td><td>Create a user account</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/login</code></td><td>Login (supports 2FA)</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/logout</code></td><td>Logout & revoke sessions</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/totp/setup</code></td><td>Setup 2FA</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/password-reset/request</code></td><td>Request password reset</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/verify-email</code></td><td>Verify email address</td></tr>
+                            <tr><td><span class="method get">GET</span></td><td><code>/api-docs</code></td><td>Scalar OpenAPI UI</td></tr>
+                            <tr><td><span class="method get">GET</span></td><td><code>/api-docs/openapi.json</code></td><td>Raw OpenAPI spec</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- 3. Debugging & Logging -->
+            <section id="debugging" class="tutorial-section">
+                <div class="section-number">03</div>
+                <h2>Debugging & Logging</h2>
+                <p>To see console output when your server handles requests, you must <strong>initialize logging</strong>. Without it, you won't see any logs, making debugging difficult.</p>
+
+                <h3>Enable logging (required for debugging)</h3>
+                <p>Call <code>init_logging()</code> at the start of your <code>main()</code> function, <strong>before</strong> creating the App:</p>
+
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="attr">#[tokio::main]</span>
+<span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    init_logging();  <span class="comment">// ← Add this line to enable console output</span>
+
+    <span class="kw">let</span> app = App::new().<span class="kw">await</span>?;
+    app.run().<span class="kw">await</span>?;
+    <span class="type">Ok</span>(())
+}</code></pre>
+
+                <p>Now you'll see:</p>
+<pre><code><span class="comment"># Server startup logs</span>
+2026-02-15T23:00:00.123Z  INFO chopin_core::app: Running pending database migrations...
+2026-02-15T23:00:00.234Z  INFO chopin_core::app: Migrations complete.
+2026-02-15T23:00:00.345Z  INFO chopin_core::app: Using in-memory cache
+2026-02-15T23:00:00.456Z  INFO chopin_core::app: Chopin server running on http://127.0.0.1:3000
+
+<span class="comment"># HTTP request traces (in development mode)</span>
+2026-02-15T23:00:05.123Z  INFO tower_http::trace::on_request: started processing request method=GET uri=/api/users
+2026-02-15T23:00:05.125Z  INFO tower_http::trace::on_response: finished processing request latency=2 ms status=200</code></pre>
+
+                <h3>Other logging options</h3>
+                <p>Chopin provides four logging functions:</p>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Logging functions:</strong>
+                        <ul>
+                            <li><code>init_logging()</code> — Simple default, respects RUST_LOG env var</li>
+                            <li><code>init_logging_with_level("debug")</code> — Set level programmatically</li>
+                            <li><code>init_logging_pretty()</code> — Colorized output for development</li>
+                            <li><code>init_logging_json()</code> — JSON format for production log aggregation</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h3>Control log levels via environment variable</h3>
+<pre><code><span class="comment"># Show all logs (very verbose)</span>
+<span class="kw">RUST_LOG</span>=debug cargo run
+
+<span class="comment"># Show only warnings and errors (production)</span>
+<span class="kw">RUST_LOG</span>=warn cargo run
+
+<span class="comment"># Fine-grained control per module</span>
+<span class="kw">RUST_LOG</span>=chopin_core=debug,tower_http=debug,sqlx=warn cargo run</code></pre>
+
+                <h3>Development vs Production</h3>
+                <p>In <strong>development mode</strong> (<code>APP_ENV=development</code> or not set), Chopin automatically enables HTTP request tracing middleware. You'll see detailed logs for every request.</p>
+                <p>In <strong>production mode</strong> (<code>APP_ENV=production</code>), request tracing is disabled by default for performance. You'll still see important logs like migrations, startup, and errors.</p>
+
+                <div class="callout">
+                    <i data-lucide="alert-circle" class="inline-icon"></i>
+                    <div>
+                        <strong>Common mistake:</strong> If you don't see any console output, make sure you called <code>init_logging()</code> before <code>App::new()</code>. This is the most common debugging issue for new users!
+                    </div>
+                </div>
+
+                <p>For complete documentation, see the <a href="debugging-and-logging.md">Debugging & Logging Guide</a>.</p>
+            </section>
+
+            <!-- Navigation -->
+            <nav class="tutorial-nav">
+                <a href="tutorial-index.html" class="btn-secondary">&larr; Back to Index</a>
+                <a href="tutorial-database.html" class="btn-primary">Next: Database →</a>
+            </nav>
+
+        </main>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-bottom" style="border-top: none; padding-top: 0;">
+                <div class="footer-bottom-left">
+                    <p>&copy; 2026 Chopin. All rights reserved.</p>
+                </div>
+                <div class="footer-bottom-right">
+                    <p>Made with <i data-lucide="music" class="inline-icon-sm"></i> by the <a href="https://github.com/kowito">Chopin team</a></p>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+    <script>
+        lucide.createIcons();
+
+        // Active TOC highlighting on scroll
+        const sections = document.querySelectorAll('.tutorial-section');
+        const tocLinks = document.querySelectorAll('.toc-link');
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    tocLinks.forEach(link => link.classList.remove('active'));
+                    const id = entry.target.getAttribute('id');
+                    const activeLink = document.querySelector(`.toc-link[href="#${id}"]`);
+                    if (activeLink) activeLink.classList.add('active');
+                }
+            });
+        }, { rootMargin: '-80px 0px -60% 0px' });
+
+        sections.forEach(section => observer.observe(section));
+    </script>
+</body>
+</html>
