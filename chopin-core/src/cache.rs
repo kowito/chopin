@@ -228,6 +228,7 @@ impl CacheBackend for InMemoryCache {
 /// ```
 #[cfg(feature = "redis")]
 pub struct RedisCache {
+    #[allow(dead_code)]
     client: redis::Client,
     pool: Arc<RwLock<redis::aio::MultiplexedConnection>>,
 }
@@ -300,7 +301,6 @@ impl CacheBackend for RedisCache {
     }
 
     async fn flush(&self) -> Result<(), ChopinError> {
-        use redis::AsyncCommands;
         let mut conn = self.pool.write().await;
         let _: () = redis::cmd("FLUSHDB")
             .query_async(&mut *conn)
