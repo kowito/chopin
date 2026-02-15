@@ -70,9 +70,9 @@ chopin db reset
 
 For more information, see the [main repository](https://github.com/kowito/chopin):
 
-- [Getting Started Guide](https://github.com/kowito/chopin/blob/main/docs/getting-started.md)
-- [CLI Cheatsheet](https://github.com/kowito/chopin/blob/main/docs/cli.md)
+- [Debugging & Logging Guide](https://github.com/kowito/chopin/blob/main/docs/debugging-and-logging.md) — Enable request logging (essential for development!)
 - [Example Projects](https://github.com/kowito/chopin/tree/main/chopin-examples)
+- [API Reference](https://docs.rs/chopin-core)
 
 ## License
 

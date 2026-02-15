@@ -37,15 +37,52 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ## Quick Start
 
 ```rust
-use chopin_core::App;
+use chopin_core::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logging to see request traces
+    init_logging();
+    
     let app = App::new().await?;
     app.run().await?;
     Ok(())
 }
 ```
+
+### With Logging and Debugging
+
+To see request logs and debug output in your console, call `init_logging()` before creating the app:
+
+```rust
+use chopin_core::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_logging();  // Shows startup logs, migrations, and HTTP requests
+    
+    let app = App::new().await?;
+    app.run().await?;
+    Ok(())
+}
+```
+
+For more control:
+```rust
+// Development: detailed logs including HTTP traces
+init_logging_pretty();
+
+// Production: JSON format for log aggregation
+init_logging_json();
+
+// Custom level
+init_logging_with_level("debug");
+
+// Or use RUST_LOG environment variable:
+// RUST_LOG=debug cargo run
+```
+
+See [Debugging and Logging Guide](https://github.com/kowito/chopin/blob/main/docs/debugging-and-logging.md) for details.
 
 ## Maximum Performance
 
@@ -68,10 +105,9 @@ This enables:
 
 See the [main repository](https://github.com/kowito/chopin) for comprehensive guides:
 
-- [Getting Started](https://github.com/kowito/chopin/blob/main/docs/getting-started.md)
-- [Architecture](https://github.com/kowito/chopin/blob/main/docs/architecture.md)
-- [Security](https://github.com/kowito/chopin/blob/main/docs/security.md)
-- [Performance Guide](https://github.com/kowito/chopin/blob/main/docs/performance.md)
+- [Debugging & Logging](https://github.com/kowito/chopin/blob/main/docs/debugging-and-logging.md) — Enable request logging (required for debugging!)
+- [JSON Performance](https://github.com/kowito/chopin/blob/main/docs/json-performance.md) — SIMD JSON optimization guide
+- [API Reference](https://docs.rs/chopin-core) — Complete API documentation
 
 ## License
 

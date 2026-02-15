@@ -42,6 +42,7 @@
                 <ol class="toc-list">
                     <li><a href="#installation" class="toc-link">Installation</a></li>
                     <li><a href="#hello-world" class="toc-link">Hello World</a></li>
+                    <li><a href="#debugging" class="toc-link">Debugging & Logging</a></li>
                     <li><a href="#configuration" class="toc-link">Configuration</a></li>
                     <li><a href="#database" class="toc-link">Database & Models</a></li>
                     <li><a href="#migrations" class="toc-link">Migrations</a></li>
@@ -123,11 +124,11 @@ cargo add chopin-core --features redis,s3,graphql,perf</code></pre>
                 <h2>Hello World</h2>
                 <p>The simplest Chopin app is <strong>4 lines of code</strong>. It gives you a running server with auth endpoints, database, and OpenAPI docs out of the box.</p>
 
-<pre><code><span class="kw">use</span> chopin_core::App;
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
 
 <span class="attr">#[tokio::main]</span>
 <span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
-    tracing_subscriber::fmt::init();
+    init_logging();  <span class="comment">// Enable console logs and request traces</span>
 
     <span class="kw">let</span> app = App::new().<span class="kw">await</span>?;
     app.run().<span class="kw">await</span>?;
@@ -166,9 +167,80 @@ cargo run
                 </div>
             </section>
 
-            <!-- 3. Configuration -->
-            <section id="configuration" class="tutorial-section">
+            <!-- 3. Debugging & Logging -->
+            <section id="debugging" class="tutorial-section">
                 <div class="section-number">03</div>
+                <h2>Debugging & Logging</h2>
+                <p>To see console output when your server handles requests, you must <strong>initialize logging</strong>. Without it, you won't see any logs, making debugging difficult.</p>
+
+                <h3>Enable logging (required for debugging)</h3>
+                <p>Call <code>init_logging()</code> at the start of your <code>main()</code> function, <strong>before</strong> creating the App:</p>
+
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="attr">#[tokio::main]</span>
+<span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    init_logging();  <span class="comment">// ← Add this line to enable console output</span>
+
+    <span class="kw">let</span> app = App::new().<span class="kw">await</span>?;
+    app.run().<span class="kw">await</span>?;
+    <span class="type">Ok</span>(())
+}</code></pre>
+
+                <p>Now you'll see:</p>
+<pre><code><span class="comment"># Server startup logs</span>
+2026-02-15T23:00:00.123Z  INFO chopin_core::app: Running pending database migrations...
+2026-02-15T23:00:00.234Z  INFO chopin_core::app: Migrations complete.
+2026-02-15T23:00:00.345Z  INFO chopin_core::app: Using in-memory cache
+2026-02-15T23:00:00.456Z  INFO chopin_core::app: Chopin server running on http://127.0.0.1:3000
+
+<span class="comment"># HTTP request traces (in development mode)</span>
+2026-02-15T23:00:05.123Z  INFO tower_http::trace::on_request: started processing request method=GET uri=/api/users
+2026-02-15T23:00:05.125Z  INFO tower_http::trace::on_response: finished processing request latency=2 ms status=200</code></pre>
+
+                <h3>Other logging options</h3>
+                <p>Chopin provides four logging functions:</p>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Logging functions:</strong>
+                        <ul>
+                            <li><code>init_logging()</code> — Simple default, respects RUST_LOG env var</li>
+                            <li><code>init_logging_with_level("debug")</code> — Set level programmatically</li>
+                            <li><code>init_logging_pretty()</code> — Colorized output for development</li>
+                            <li><code>init_logging_json()</code> — JSON format for production log aggregation</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h3>Control log levels via environment variable</h3>
+<pre><code><span class="comment"># Show all logs (very verbose)</span>
+<span class="kw">RUST_LOG</span>=debug cargo run
+
+<span class="comment"># Show only warnings and errors (production)</span>
+<span class="kw">RUST_LOG</span>=warn cargo run
+
+<span class="comment"># Fine-grained control per module</span>
+<span class="kw">RUST_LOG</span>=chopin_core=debug,tower_http=debug,sqlx=warn cargo run</code></pre>
+
+                <h3>Development vs Production</h3>
+                <p>In <strong>development mode</strong> (<code>APP_ENV=development</code> or not set), Chopin automatically enables HTTP request tracing middleware. You'll see detailed logs for every request.</p>
+                <p>In <strong>production mode</strong> (<code>APP_ENV=production</code>), request tracing is disabled by default for performance. You'll still see important logs like migrations, startup, and errors.</p>
+
+                <div class="callout">
+                    <i data-lucide="alert-circle" class="inline-icon"></i>
+                    <div>
+                        <strong>Common mistake:</strong> If you don't see any console output, make sure you called <code>init_logging()</code> before <code>App::new()</code>. This is the most common debugging issue for new users!
+                    </div>
+                </div>
+
+                <p>For complete documentation, see the <a href="debugging-and-logging.md">Debugging & Logging Guide</a>.</p>
+            </section>
+
+            <!-- 4. Configuration -->
+            <section id="configuration" class="tutorial-section">
+                <div class="section-number">04</div>
                 <h2>Configuration</h2>
                 <p>Chopin loads configuration from environment variables via a <code>.env</code> file. Every setting has a sensible default.</p>
 
@@ -241,9 +313,9 @@ config.server_port = <span class="num">8080</span>;
 app.run().<span class="kw">await</span>?;</code></pre>
             </section>
 
-            <!-- 4. Database & Models -->
+            <!-- 5. Database & Models -->
             <section id="database" class="tutorial-section">
-                <div class="section-number">04</div>
+                <div class="section-number">05</div>
                 <h2>Database & Models</h2>
                 <p>Chopin uses <strong>SeaORM</strong> for database access. It supports SQLite, PostgreSQL, and MySQL with the same code. Models are defined as Rust structs with derive macros.</p>
 
@@ -337,9 +409,9 @@ active.title = Set(<span class="str">"Updated"</span>.into());
 Post::delete_by_id(<span class="num">1</span>).exec(&db).<span class="kw">await</span>?;</code></pre>
             </section>
 
-            <!-- 5. Migrations -->
+            <!-- 6. Migrations -->
             <section id="migrations" class="tutorial-section">
-                <div class="section-number">05</div>
+                <div class="section-number">06</div>
                 <h2>Migrations</h2>
                 <p>Migrations run <strong>automatically on startup</strong>. Chopin uses SeaORM's migration system &mdash; define them as Rust code, and they're applied when the app boots.</p>
 
@@ -412,9 +484,9 @@ chopin db status
 chopin db reset</code></pre>
             </section>
 
-            <!-- 6. Controllers & Routing -->
+            <!-- 7. Controllers & Routing -->
             <section id="controllers" class="tutorial-section">
-                <div class="section-number">06</div>
+                <div class="section-number">07</div>
                 <h2>Controllers & Routing</h2>
                 <p>Controllers are Axum handlers grouped into modules. Chopin follows the standard Axum routing pattern with shared application state.</p>
 
@@ -475,9 +547,9 @@ chopin db reset</code></pre>
 chopin generate controller posts</code></pre>
             </section>
 
-            <!-- 7. Authentication -->
+            <!-- 8. Authentication -->
             <section id="authentication" class="tutorial-section">
-                <div class="section-number">07</div>
+                <div class="section-number">08</div>
                 <h2>Authentication</h2>
                 <p>Chopin provides <strong>built-in JWT authentication</strong> with Argon2id password hashing. The <code>/api/auth/signup</code> and <code>/api/auth/login</code> endpoints are included automatically.</p>
 
@@ -529,9 +601,9 @@ chopin generate controller posts</code></pre>
 <span class="comment">// claims.sub = user_id, claims.email, claims.role</span></code></pre>
             </section>
 
-            <!-- 7b. Security Features -->
+            <!-- 8b. Security Features -->
             <section id="security" class="tutorial-section">
-                <div class="section-number">07b</div>
+                <div class="section-number">08b</div>
                 <h2>Security Features</h2>
                 <p>Chopin includes <strong>9 production security features</strong>, all <strong>enabled by default</strong>. No extra code or config needed — just deploy. Each feature can be individually disabled via environment variables.</p>
 
@@ -676,9 +748,9 @@ config.security.min_password_length = <span class="num">16</span>;</code></pre>
                 </table>
             </section>
 
-            <!-- 8. Roles & Permissions -->
+            <!-- 9. Roles & Permissions -->
             <section id="roles" class="tutorial-section">
-                <div class="section-number">08</div>
+                <div class="section-number">09</div>
                 <h2>Roles & Permissions</h2>
                 <p>Chopin has a simple but effective <strong>hierarchical role system</strong>. Higher roles inherit all permissions of lower roles.</p>
 
@@ -729,9 +801,9 @@ config.security.min_password_length = <span class="num">16</span>;</code></pre>
 chopin createsuperuser</code></pre>
             </section>
 
-            <!-- 9. Extractors -->
+            <!-- 10. Extractors -->
             <section id="extractors" class="tutorial-section">
-                <div class="section-number">09</div>
+                <div class="section-number">10</div>
                 <h2>Extractors</h2>
                 <p>Extractors are Axum's way of parsing request data. Chopin provides custom extractors for common patterns.</p>
 
@@ -776,9 +848,9 @@ chopin createsuperuser</code></pre>
 }</code></pre>
             </section>
 
-            <!-- 10. Pagination -->
+            <!-- 11. Pagination -->
             <section id="pagination" class="tutorial-section">
-                <div class="section-number">10</div>
+                <div class="section-number">11</div>
                 <h2>Pagination</h2>
                 <p>Chopin provides a complete pagination system with clamped values and a standardized response format.</p>
 
@@ -815,9 +887,9 @@ chopin createsuperuser</code></pre>
 <span class="comment">// }</span></code></pre>
             </section>
 
-            <!-- 11. Error Handling -->
+            <!-- 12. Error Handling -->
             <section id="error-handling" class="tutorial-section">
-                <div class="section-number">11</div>
+                <div class="section-number">12</div>
                 <h2>Error Handling</h2>
                 <p>Chopin provides a unified error type that automatically maps to HTTP status codes and JSON responses.</p>
 
@@ -869,9 +941,9 @@ ChopinError::Internal(<span class="str">"Something broke"</span>.into())        
 }</code></pre>
             </section>
 
-            <!-- 12. OpenAPI Docs -->
+            <!-- 13. OpenAPI Docs -->
             <section id="openapi" class="tutorial-section">
-                <div class="section-number">12</div>
+                <div class="section-number">13</div>
                 <h2>API Documentation (OpenAPI)</h2>
                 <p>Chopin provides <strong>first-class OpenAPI 3.1 documentation</strong> with the beautiful <strong>Scalar UI</strong>, following the same pattern as Axum + utoipa. You get built-in auth endpoint docs out of the box, and can add your own endpoints with simple annotations &mdash; no extra crates needed.</p>
 
@@ -1403,9 +1475,9 @@ curl http://localhost:3000/api-docs/openapi.json > openapi.json</code></pre>
                 </div>
             </section>
 
-            <!-- 13. Caching -->
+            <!-- 14. Caching -->
             <section id="caching" class="tutorial-section">
-                <div class="section-number">13</div>
+                <div class="section-number">14</div>
                 <h2>Caching</h2>
                 <p>Chopin provides a unified caching API with two backends: <strong>in-memory</strong> (default) and <strong>Redis</strong> (feature-gated). Cache any serializable data with TTL support.</p>
 
@@ -1472,9 +1544,9 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
 }</code></pre>
             </section>
 
-            <!-- 14. File Uploads -->
+            <!-- 15. File Uploads -->
             <section id="file-uploads" class="tutorial-section">
-                <div class="section-number">14</div>
+                <div class="section-number">15</div>
                 <h2>File Uploads</h2>
                 <p>Upload files to <strong>local disk</strong> or <strong>S3-compatible storage</strong> (AWS S3, Cloudflare R2, MinIO). Chopin handles multipart parsing, validation, and storage.</p>
 
@@ -1537,9 +1609,9 @@ S3_ENDPOINT=http://localhost:9000</code></pre>
 <span class="comment">// e.g., uploads/550e8400-e29b-41d4-a716-446655440000-photo.jpg</span></code></pre>
             </section>
 
-            <!-- 15. GraphQL -->
+            <!-- 16. GraphQL -->
             <section id="graphql" class="tutorial-section">
-                <div class="section-number">15</div>
+                <div class="section-number">16</div>
                 <h2>GraphQL</h2>
                 <p>Chopin includes optional GraphQL support via <code>async-graphql</code>. Enable it with the <code>graphql</code> feature flag.</p>
 
@@ -1572,9 +1644,9 @@ chopin-core = { version = "0.2", features = ["graphql"] }</code></pre>
 <span class="kw">let</span> graphql = graphql_routes(schema);</code></pre>
             </section>
 
-            <!-- 16. Testing -->
+            <!-- 17. Testing -->
             <section id="testing" class="tutorial-section">
-                <div class="section-number">16</div>
+                <div class="section-number">17</div>
                 <h2>Testing</h2>
                 <p>Chopin provides a built-in test harness with <strong>in-memory SQLite</strong>, a test client, and response assertions. Write integration tests with zero configuration.</p>
 
@@ -1648,9 +1720,9 @@ cargo test --all
 cargo test test_signup_and_login -- --nocapture</code></pre>
             </section>
 
-            <!-- 17. Performance -->
+            <!-- 18. Performance -->
             <section id="performance" class="tutorial-section">
-                <div class="section-number">17</div>
+                <div class="section-number">18</div>
                 <h2>Performance</h2>
                 <p>Chopin uses a unified <strong>ChopinService</strong> dispatcher for all requests. FastRoute endpoints bypass Axum with zero allocation, and all other routes go through the full middleware stack. Enable <strong>SO_REUSEPORT</strong> for multi-core parallelism.</p>
 
@@ -1855,9 +1927,9 @@ wrk -t4 -c256 -d10s http://127.0.0.1:3000/json
 wrk -t4 -c256 -d10s http://127.0.0.1:3000/plaintext</code></pre>
             </section>
 
-            <!-- 18. Production Deployment -->
+            <!-- 19. Production Deployment -->
             <section id="production" class="tutorial-section">
-                <div class="section-number">18</div>
+                <div class="section-number">19</div>
                 <h2>Production Deployment</h2>
                 <p>Ship your Chopin API to production with a compiled Rust binary. No runtime, no garbage collector, no cold starts.</p>
 

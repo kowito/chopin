@@ -33,13 +33,12 @@
 //! wrk -t4 -c256 -d10s http://127.0.0.1:3000/
 //! ```
 
-use chopin_core::{App, FastRoute};
+use chopin_core::prelude::*;
+use chopin_core::FastRoute;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::WARN)
-        .init();
+    init_logging_with_level("warn");
 
     // REUSEPORT=true activates SO_REUSEPORT multi-core accept loops
     // Set via environment or .env file

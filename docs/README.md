@@ -39,6 +39,9 @@ website/
 │   └── style.css       # Styles
 ├── js/
 │   └── main.js         # JavaScript interactions
+├── debugging-and-logging.md  # Complete debugging guide
+├── LOGGING.md          # Quick logging reference
+├── json-performance.md # JSON performance guide
 └── README.md           # This file
 ```
 

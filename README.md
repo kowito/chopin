@@ -163,6 +163,9 @@ async fn create_user(Json(user): Json<User>) -> ApiResponse<User> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logging to see request traces
+    chopin_core::init_logging();
+    
     let app = App::new().await?
         .route("/", get(hello))
         .route("/users/:id", get(get_user))
@@ -179,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - ✅ Built-in auth endpoints at `/api/auth/signup` and `/api/auth/login`
 - ✅ Database connection (via `.env` configuration)
 - ✅ Graceful shutdown
-- ✅ Request logging
+- ✅ Request logging (call `init_logging()` to enable console output)
 
 ### With Authentication
 
@@ -197,6 +200,8 @@ async fn admin_only(user: AuthUser) -> ApiResponse<&'static str> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    chopin_core::init_logging();
+    
     let app = App::new().await?
         .route("/protected", get(protected_route).layer(RequireAuth::any()))
         .route("/admin", get(admin_only).layer(RequireAuth::admin()));
@@ -379,6 +384,7 @@ app.run().await?;
 ## 📚 Documentation
 
 - **[Website & Tutorial](https://kowito.github.io/chopin/)** — Getting started, full tutorial, and architecture overview
+- **[Debugging & Logging](docs/debugging-and-logging.md)** — Enable request logging and debugging (important for development!)
 - **[Examples](chopin-examples/)** — Hello world, CRUD API, benchmarks
 - **[API Docs (docs.rs)](https://docs.rs/chopin)** — Complete Rust API reference
 

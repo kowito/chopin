@@ -14,6 +14,11 @@ pub use crate::ChopinError;
 pub use crate::Config;
 pub use crate::FastRoute;
 
+// ── Logging ────────────────────────────────────────────────────
+pub use crate::logging::{
+    init_logging, init_logging_json, init_logging_pretty, init_logging_with_level,
+};
+
 // ── Router & routing ───────────────────────────────────────────
 pub use crate::routing::{any, delete, get, head, options, patch, post, put};
 pub use crate::Router;

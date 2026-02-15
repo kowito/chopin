@@ -52,7 +52,17 @@ cargo run -p chopin-basic-api
 # Benchmark
 REUSEPORT=true cargo run -p chopin-benchmark --release --features chopin/perf
 ```
+**Note:** All examples automatically enable logging. You'll see request traces, database migrations, and server startup logs. To adjust log levels, use the `RUST_LOG` environment variable:
 
+```bash
+# Debug level (verbose)
+RUST_LOG=debug cargo run -p chopin-hello-world
+
+# Warn level (minimal)
+RUST_LOG=warn cargo run -p chopin-hello-world
+```
+
+See [docs/debugging-and-logging.md](docs/debugging-and-logging.md) for more details.
 ## Code Style
 
 - Use `rustfmt` for formatting: `cargo fmt --all`

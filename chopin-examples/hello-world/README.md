@@ -40,13 +40,17 @@ curl -X POST http://localhost:3000/api/auth/login \
 ## Source
 
 ```rust
+use chopin_core::prelude::*;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
-    let app = chopin_core::App::new().await?;
+    init_logging();  // Enable console logs and request traces
+    let app = App::new().await?;
     app.run().await?;
     Ok(())
 }
 ```
 
 That's it. Two lines of actual code.
+
+**Note:** The `init_logging()` call enables console output for server startup, database migrations, and HTTP request traces. Without it, you won't see any logs. See the [Debugging & Logging Guide](../../docs/debugging-and-logging.md) for more details.

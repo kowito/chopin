@@ -69,7 +69,7 @@ pub struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    init_logging();
 
     let config = Config::from_env()?;
     let database_conn = db::connect(&config).await?;

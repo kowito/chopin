@@ -16,6 +16,7 @@ pub mod extractors;
 #[cfg(feature = "graphql")]
 pub mod graphql;
 pub mod json;
+pub mod logging;
 pub mod migrations;
 pub mod models;
 pub mod openapi;
@@ -32,6 +33,7 @@ pub use app::App;
 pub use cache::CacheService;
 pub use config::{Config, SecurityConfig};
 pub use error::ChopinError;
+pub use logging::{init_logging, init_logging_json, init_logging_pretty, init_logging_with_level};
 pub use response::ApiResponse;
 pub use server::FastRoute;
 pub use testing::{TestApp, TestClient, TestResponse};

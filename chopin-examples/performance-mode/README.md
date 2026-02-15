@@ -13,7 +13,7 @@ cargo run -p chopin-performance-mode
 ```bash
 REUSEPORT=true cargo run -p chopin-performance-mode --release --features perf
 ```
-
+**Note:** This example uses `init_logging_with_level("info")` to minimize logging overhead during performance testing. For development with full request traces, use `init_logging()` or `RUST_LOG=debug`. See [Debugging & Logging Guide](../../docs/debugging-and-logging.md).
 ## Configuration Comparison
 
 | Config | Architecture | Use Case |

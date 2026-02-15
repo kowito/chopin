@@ -25,6 +25,8 @@ export JWT_SECRET="dev-secret"
 cargo run -p chopin-basic-api
 ```
 
+**Note:** This example calls `init_logging()` to enable console output showing server startup, database migrations, and HTTP request traces. See [Debugging & Logging Guide](../../docs/debugging-and-logging.md) for more details.
+
 Open http://localhost:3000/api-docs for the interactive API explorer, then try:
 
 ```bash

@@ -40,6 +40,9 @@ impl App {
         let config = Config::from_env()?;
         let db = crate::db::connect(&config).await?;
 
+        // Check for CLI database operations (--migrate, --rollback) and exit if present
+        Self::handle_db_cli_args(&db).await?;
+
         // Run pending migrations automatically on startup
         tracing::info!("Running pending database migrations...");
         Migrator::up(&db, None).await?;
@@ -62,6 +65,9 @@ impl App {
     /// Create a new Chopin application with a given config.
     pub async fn with_config(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
         let db = crate::db::connect(&config).await?;
+
+        // Check for CLI database operations (--migrate, --rollback) and exit if present
+        Self::handle_db_cli_args(&db).await?;
 
         // Run pending migrations automatically on startup
         tracing::info!("Running pending database migrations...");
@@ -102,6 +108,35 @@ impl App {
         let _ = config; // suppress unused warning when redis feature is off
         tracing::info!("Using in-memory cache");
         CacheService::in_memory()
+    }
+
+    /// Handle CLI database operations passed as command-line arguments.
+    /// If --migrate or --rollback is detected, perform the operation and exit the process.
+    async fn handle_db_cli_args(db: &DatabaseConnection) -> Result<(), Box<dyn std::error::Error>> {
+        let args: Vec<String> = std::env::args().collect();
+
+        // Check for --migrate flag
+        if args.contains(&"--migrate".to_string()) {
+            tracing::info!("Running pending database migrations...");
+            Migrator::up(db, None).await?;
+            tracing::info!("Migrations complete.");
+            std::process::exit(0);
+        }
+
+        // Check for --rollback flag
+        if let Some(pos) = args.iter().position(|arg| arg == "--rollback") {
+            let steps = if pos + 1 < args.len() {
+                args[pos + 1].parse::<u32>().unwrap_or(1)
+            } else {
+                1
+            };
+            tracing::info!("Rolling back {} migration(s)...", steps);
+            Migrator::down(db, Some(steps)).await?;
+            tracing::info!("Rollback complete.");
+            std::process::exit(0);
+        }
+
+        Ok(())
     }
 
     /// Build the Axum router for API routes only.

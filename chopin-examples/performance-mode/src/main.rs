@@ -90,13 +90,12 @@
 //!
 //! **FastRoute is 28-142× faster** — decorators add zero per-request overhead.
 
-use chopin_core::{App, FastRoute};
+use chopin_core::prelude::*;
+use chopin_core::FastRoute;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+    init_logging_with_level("info");
 
     // Show current configuration
     let reuseport = std::env::var("REUSEPORT").unwrap_or_else(|_| "false".to_string());

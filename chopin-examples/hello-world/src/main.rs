@@ -176,7 +176,7 @@ struct MyApiDoc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    init_logging();
 
     // Custom routes
     let items = Router::new()

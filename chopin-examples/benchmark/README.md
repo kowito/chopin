@@ -21,7 +21,7 @@ DATABASE_URL=sqlite::memory: \
 JWT_SECRET=bench \
 cargo run -p chopin-benchmark --release
 ```
-
+**Note:** This example uses `init_logging_with_level("warn")` to minimize logging overhead and get accurate benchmark numbers. For development, use `init_logging()` to see all request traces. See [Debugging & Logging Guide](../../docs/debugging-and-logging.md).
 ## Benchmarking with wrk
 
 Install [wrk](https://github.com/wg/wrk):
