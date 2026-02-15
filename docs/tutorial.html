@@ -51,7 +51,7 @@
                     <li><a href="#extractors" class="toc-link">Extractors</a></li>
                     <li><a href="#pagination" class="toc-link">Pagination</a></li>
                     <li><a href="#error-handling" class="toc-link">Error Handling</a></li>
-                    <li><a href="#openapi" class="toc-link">OpenAPI Docs</a></li>
+                    <li><a href="#openapi" class="toc-link">API Documentation (OpenAPI)</a></li>
                     <li><a href="#caching" class="toc-link">Caching</a></li>
                     <li><a href="#file-uploads" class="toc-link">File Uploads</a></li>
                     <li><a href="#graphql" class="toc-link">GraphQL</a></li>
@@ -700,61 +700,535 @@ ChopinError::Internal(<span class="str">"Something broke"</span>.into())        
             <!-- 12. OpenAPI Docs -->
             <section id="openapi" class="tutorial-section">
                 <div class="section-number">12</div>
-                <h2>OpenAPI Documentation</h2>
-                <p>Chopin auto-generates OpenAPI 3.0 documentation with <strong>Scalar UI</strong>. Your auth endpoints are documented automatically. Add your own endpoints with utoipa annotations.</p>
+                <h2>API Documentation (OpenAPI)</h2>
+                <p>Chopin provides <strong>first-class OpenAPI 3.1 documentation</strong> with the beautiful <strong>Scalar UI</strong>, following the same pattern as Axum + utoipa. You get built-in auth endpoint docs out of the box, and can add your own endpoints with simple annotations &mdash; no extra crates needed.</p>
 
                 <div class="callout">
                     <i data-lucide="external-link" class="inline-icon"></i>
                     <div>
-                        Visit <code>http://localhost:3000/api-docs</code> after starting your server to see the interactive API documentation.
+                        Visit <code>http://localhost:3000/api-docs</code> after starting your server to see the interactive API documentation. The raw OpenAPI JSON spec is at <code>/api-docs/openapi.json</code>.
                     </div>
                 </div>
 
-                <h3>Annotate your handlers</h3>
-<pre><code><span class="kw">use</span> utoipa::ToSchema;
+                <h3>What you get for free</h3>
+                <p>Every Chopin app includes automatic API docs for the built-in auth endpoints. Just run <code>App::new().await?.run().await?</code> and you have:</p>
+                <div class="endpoint-table">
+                    <table>
+                        <thead>
+                            <tr><th>Method</th><th>Path</th><th>Documented?</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/signup</code></td><td>Auto-documented with request/response schemas</td></tr>
+                            <tr><td><span class="method post">POST</span></td><td><code>/api/auth/login</code></td><td>Auto-documented with request/response schemas</td></tr>
+                            <tr><td><span class="method get">GET</span></td><td><code>/api-docs</code></td><td>Scalar interactive UI</td></tr>
+                            <tr><td><span class="method get">GET</span></td><td><code>/api-docs/openapi.json</code></td><td>Raw OpenAPI 3.1 spec</td></tr>
+                        </tbody>
+                    </table>
+                </div>
 
-<span class="attr">#[derive(Deserialize, ToSchema)]</span>
+                <h3>Step 1: Define your request &amp; response types</h3>
+                <p>Add <code>#[derive(ToSchema)]</code> to any struct you want in your API docs. Chopin re-exports everything from <code>utoipa</code> &mdash; you never need to add <code>utoipa</code> to your Cargo.toml.</p>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="doc">/// Request body for creating a post.</span>
+<span class="attr">#[derive(Debug, Deserialize, ToSchema)]</span>
 <span class="kw">pub struct</span> <span class="type">CreatePostRequest</span> {
-    <span class="doc">/// Post title (required)</span>
+    <span class="doc">/// Post title (required, 1-200 characters)</span>
     <span class="kw">pub</span> title: <span class="type">String</span>,
-    <span class="doc">/// Post body content (required)</span>
+    <span class="doc">/// Post body content in markdown (required)</span>
     <span class="kw">pub</span> body: <span class="type">String</span>,
+    <span class="doc">/// Optional tags for categorization</span>
+    <span class="kw">pub</span> tags: Option&lt;Vec&lt;<span class="type">String</span>&gt;&gt;,
 }
 
+<span class="doc">/// Response body for a post.</span>
+<span class="attr">#[derive(Debug, Serialize, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> <span class="type">PostResponse</span> {
+    <span class="kw">pub</span> id: <span class="type">i32</span>,
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+    <span class="kw">pub</span> body: <span class="type">String</span>,
+    <span class="kw">pub</span> published: <span class="type">bool</span>,
+    <span class="kw">pub</span> created_at: <span class="type">String</span>,
+}
+
+<span class="doc">/// Request body for updating a post.</span>
+<span class="attr">#[derive(Debug, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> <span class="type">UpdatePostRequest</span> {
+    <span class="doc">/// Updated title (optional)</span>
+    <span class="kw">pub</span> title: Option&lt;<span class="type">String</span>&gt;,
+    <span class="doc">/// Updated body (optional)</span>
+    <span class="kw">pub</span> body: Option&lt;<span class="type">String</span>&gt;,
+    <span class="doc">/// Publish or unpublish (optional)</span>
+    <span class="kw">pub</span> published: Option&lt;<span class="type">bool</span>&gt;,
+}</code></pre>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Tip:</strong> Use <code>///</code> doc comments on fields &mdash; they appear as field descriptions in the Scalar UI. This is the best way to document your API for frontend developers.
+                    </div>
+                </div>
+
+                <h3>Step 2: Annotate your handlers</h3>
+                <p>Add <code>#[utoipa::path(...)]</code> to each handler function. This is the same pattern used in Axum &mdash; define the HTTP method, path, request body, and all possible responses.</p>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+<span class="kw">use</span> chopin_core::response::ApiResponse;
+<span class="kw">use</span> chopin_core::extractors::{Json, Pagination, Path, Query, State};
+
+<span class="doc">/// List all posts with pagination.</span>
+<span class="attr">#[utoipa::path(
+    get,
+    path = "/api/posts",
+    tag = "posts",
+    params(Pagination),
+    responses(
+        (status = 200, description = "Paginated list of posts",
+         body = ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;)
+    )
+)]</span>
+<span class="kw">pub async fn</span> <span class="fn">list_posts</span>(
+    State(state): State&lt;AppState&gt;,
+    Query(pagination): Query&lt;Pagination&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;&gt;, StatusCode&gt; {
+    <span class="comment">// ...handler logic...</span>
+}
+
+<span class="doc">/// Create a new post.</span>
 <span class="attr">#[utoipa::path(
     post,
     path = "/api/posts",
     tag = "posts",
     request_body = CreatePostRequest,
     responses(
-        (status = 201, description = "Post created", body = ApiResponse&lt;PostResponse&gt;),
-        (status = 400, description = "Invalid input")
+        (status = 201, description = "Post created successfully",
+         body = ApiResponse&lt;PostResponse&gt;),
+        (status = 400, description = "Validation error"),
+        (status = 401, description = "Unauthorized — missing or invalid token")
+    ),
+    security(("bearer_auth" = []))
+)]</span>
+<span class="kw">pub async fn</span> <span class="fn">create_post</span>(
+    State(state): State&lt;AppState&gt;,
+    Json(payload): Json&lt;CreatePostRequest&gt;,
+) -> <span class="type">Result</span>&lt;(StatusCode, Json&lt;ApiResponse&lt;PostResponse&gt;&gt;), StatusCode&gt; {
+    <span class="comment">// ...handler logic...</span>
+}
+
+<span class="doc">/// Get a single post by ID.</span>
+<span class="attr">#[utoipa::path(
+    get,
+    path = "/api/posts/{id}",
+    tag = "posts",
+    params(
+        ("id" = i32, Path, description = "Post ID")
+    ),
+    responses(
+        (status = 200, description = "Post found", body = ApiResponse&lt;PostResponse&gt;),
+        (status = 404, description = "Post not found")
     )
 )]</span>
-<span class="kw">pub async fn</span> <span class="fn">create_post</span>(...) { <span class="comment">/* ... */</span> }</code></pre>
+<span class="kw">pub async fn</span> <span class="fn">get_post</span>(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;<span class="type">i32</span>&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, StatusCode&gt; {
+    <span class="comment">// ...handler logic...</span>
+}
 
-                <h3>Custom OpenAPI doc</h3>
-<pre><code><span class="kw">use</span> utoipa::OpenApi;
+<span class="doc">/// Update an existing post.</span>
+<span class="attr">#[utoipa::path(
+    put,
+    path = "/api/posts/{id}",
+    tag = "posts",
+    params(("id" = i32, Path, description = "Post ID")),
+    request_body = UpdatePostRequest,
+    responses(
+        (status = 200, description = "Post updated", body = ApiResponse&lt;PostResponse&gt;),
+        (status = 404, description = "Post not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    security(("bearer_auth" = []))
+)]</span>
+<span class="kw">pub async fn</span> <span class="fn">update_post</span>(...) { <span class="comment">/* ... */</span> }
+
+<span class="doc">/// Delete a post by ID.</span>
+<span class="attr">#[utoipa::path(
+    delete,
+    path = "/api/posts/{id}",
+    tag = "posts",
+    params(("id" = i32, Path, description = "Post ID")),
+    responses(
+        (status = 200, description = "Post deleted"),
+        (status = 404, description = "Post not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    security(("bearer_auth" = []))
+)]</span>
+<span class="kw">pub async fn</span> <span class="fn">delete_post</span>(...) { <span class="comment">/* ... */</span> }</code></pre>
+
+                <h3>Step 3: Create your OpenAPI doc struct</h3>
+                <p>Define a struct with <code>#[derive(OpenApi)]</code> that lists all your documented paths and schemas. Use <code>SecurityAddon</code> (re-exported by Chopin) to add JWT Bearer auth.</p>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
 
 <span class="attr">#[derive(OpenApi)]</span>
 <span class="attr">#[openapi(
-    info(title = "My API", version = "1.0.0"),
+    info(
+        title = "My Blog API",
+        version = "1.0.0",
+        description = "A blog API built with Chopin"
+    ),
     paths(
         controllers::posts::list_posts,
         controllers::posts::create_post,
+        controllers::posts::get_post,
+        controllers::posts::update_post,
+        controllers::posts::delete_post,
     ),
-    components(schemas(CreatePostRequest, PostResponse)),
-    tags((name = "posts", description = "Post endpoints")),
+    components(
+        schemas(
+            PostResponse,
+            CreatePostRequest,
+            UpdatePostRequest,
+        )
+    ),
+    tags(
+        (name = "posts", description = "Blog post management")
+    ),
+    security(
+        ("bearer_auth" = [])
+    ),
+    modifiers(&SecurityAddon)
+)]</span>
+<span class="kw">pub struct</span> <span class="type">MyApiDoc</span>;</code></pre>
+
+                <h3>Step 4: Mount your docs on the App</h3>
+                <p>Pass your OpenAPI spec to <code>App::api_docs()</code>. Chopin automatically <strong>merges</strong> your endpoints with the built-in auth docs, so everything appears in one place.</p>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="attr">#[tokio::main]</span>
+<span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    tracing_subscriber::fmt::init();
+
+    <span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+        .api_docs(MyApiDoc::openapi());  <span class="comment">// ← your docs merged with built-in auth docs</span>
+
+    app.run().<span class="kw">await</span>?;
+    <span class="type">Ok</span>(())
+}</code></pre>
+                <p>Now <code>/api-docs</code> shows <strong>all</strong> endpoints: your posts CRUD + the built-in auth signup/login.</p>
+
+                <h3>Customize the docs URL</h3>
+                <p>Change where the docs are served with <code>api_docs_url()</code>:</p>
+<pre><code><span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+    .api_docs_url(<span class="str">"/docs"</span>)               <span class="comment">// Scalar UI at /docs</span>
+    .api_docs(MyApiDoc::openapi());      <span class="comment">// openapi.json at /docs/openapi.json</span></code></pre>
+
+                <h3>Complete example: full CRUD with API docs</h3>
+                <p>Here&rsquo;s a complete working example showing the full pattern from model to API docs:</p>
+<pre><code><span class="comment">// src/main.rs</span>
+<span class="kw">use</span> chopin_core::prelude::*;
+<span class="kw">use</span> chopin_core::response::ApiResponse;
+<span class="kw">use</span> chopin_core::extractors::{Json, Pagination, Path, Query, State};
+<span class="kw">use</span> chopin_core::error::ChopinError;
+
+<span class="comment">// ── Request / Response types with ToSchema ──</span>
+
+<span class="attr">#[derive(Debug, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> <span class="type">CreatePostRequest</span> {
+    <span class="doc">/// Post title (1-200 characters)</span>
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+    <span class="doc">/// Post body in markdown</span>
+    <span class="kw">pub</span> body: <span class="type">String</span>,
+}
+
+<span class="attr">#[derive(Debug, Serialize, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> <span class="type">PostResponse</span> {
+    <span class="kw">pub</span> id: <span class="type">i32</span>,
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+    <span class="kw">pub</span> body: <span class="type">String</span>,
+    <span class="kw">pub</span> published: <span class="type">bool</span>,
+}
+
+<span class="comment">// ── Handlers with #[utoipa::path] annotations ──</span>
+
+<span class="doc">/// List all posts.</span>
+<span class="attr">#[utoipa::path(
+    get,
+    path = "/api/posts",
+    tag = "posts",
+    params(Pagination),
+    responses(
+        (status = 200, description = "List of posts",
+         body = ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;)
+    )
+)]</span>
+<span class="kw">pub async fn</span> <span class="fn">list_posts</span>() -> Json&lt;ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;&gt; {
+    Json(ApiResponse::success(<span class="kw">vec!</span>[]))
+}
+
+<span class="doc">/// Create a new post (requires auth).</span>
+<span class="attr">#[utoipa::path(
+    post,
+    path = "/api/posts",
+    tag = "posts",
+    request_body = CreatePostRequest,
+    responses(
+        (status = 201, description = "Post created",
+         body = ApiResponse&lt;PostResponse&gt;),
+        (status = 401, description = "Unauthorized")
+    ),
     security(("bearer_auth" = []))
 )]</span>
-<span class="kw">pub struct</span> <span class="type">ApiDoc</span>;</code></pre>
+<span class="kw">pub async fn</span> <span class="fn">create_post</span>(
+    Json(payload): Json&lt;CreatePostRequest&gt;,
+) -> (StatusCode, Json&lt;ApiResponse&lt;PostResponse&gt;&gt;) {
+    <span class="kw">let</span> post = PostResponse {
+        id: <span class="num">1</span>,
+        title: payload.title,
+        body: payload.body,
+        published: <span class="kw">false</span>,
+    };
+    (StatusCode::CREATED, Json(ApiResponse::success(post)))
+}
+
+<span class="comment">// ── OpenAPI doc struct ──</span>
+
+<span class="attr">#[derive(OpenApi)]</span>
+<span class="attr">#[openapi(
+    info(title = "My Blog API", version = "1.0.0"),
+    paths(list_posts, create_post),
+    components(schemas(PostResponse, CreatePostRequest)),
+    tags((name = "posts", description = "Blog posts")),
+    security(("bearer_auth" = [])),
+    modifiers(&SecurityAddon)
+)]</span>
+<span class="kw">struct</span> <span class="type">MyApiDoc</span>;
+
+<span class="comment">// ── App startup ──</span>
+
+<span class="attr">#[tokio::main]</span>
+<span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    tracing_subscriber::fmt::init();
+
+    <span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+        .api_docs(MyApiDoc::openapi());
+
+    app.run().<span class="kw">await</span>?;
+    <span class="type">Ok</span>(())
+}
+
+<span class="comment">// 🎹 Chopin is running</span>
+<span class="comment">//    → Server:    http://127.0.0.1:3000</span>
+<span class="comment">//    → API docs:  http://127.0.0.1:3000/api-docs</span>
+<span class="comment">//</span>
+<span class="comment">// /api-docs now shows:</span>
+<span class="comment">//   auth   → POST /api/auth/signup, POST /api/auth/login (built-in)</span>
+<span class="comment">//   posts  → GET /api/posts, POST /api/posts (your endpoints)</span></code></pre>
+
+                <h3>Advanced: build a Router with custom API docs (Axum-style)</h3>
+                <p>If you prefer full control (like raw Axum), skip <code>App::api_docs()</code> and build your router manually. Chopin re-exports <code>Scalar</code> and <code>Servable</code> so you don&rsquo;t need extra crate dependencies.</p>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+<span class="kw">use</span> chopin_core::{Router, serve};
+
+<span class="attr">#[derive(OpenApi)]</span>
+<span class="attr">#[openapi(
+    info(title = "Custom API", version = "2.0.0"),
+    paths(list_posts, create_post, get_post, update_post, delete_post),
+    components(schemas(PostResponse, CreatePostRequest, UpdatePostRequest)),
+    tags(
+        (name = "posts", description = "Post management"),
+        (name = "admin", description = "Admin-only operations")
+    ),
+    security(("bearer_auth" = [])),
+    modifiers(&SecurityAddon)
+)]</span>
+<span class="kw">struct</span> <span class="type">MyApiDoc</span>;
+
+<span class="attr">#[tokio::main]</span>
+<span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    <span class="comment">// Build router exactly like you would in Axum</span>
+    <span class="kw">let</span> app = Router::new()
+        .merge(post_routes())
+        <span class="comment">// Mount Scalar UI at /docs</span>
+        .merge(Scalar::with_url(<span class="str">"/docs"</span>, MyApiDoc::openapi()))
+        <span class="comment">// Serve raw OpenAPI JSON spec</span>
+        .route(<span class="str">"/docs/openapi.json"</span>, get(|| <span class="kw">async</span> {
+            chopin_core::extractors::Json(MyApiDoc::openapi())
+        }));
+
+    <span class="kw">let</span> listener = tokio::net::TcpListener::bind(<span class="str">"0.0.0.0:3000"</span>).<span class="kw">await</span>?;
+    serve(listener, app).<span class="kw">await</span>?;
+    <span class="type">Ok</span>(())
+}</code></pre>
+
+                <h3>Merging multiple OpenAPI specs</h3>
+                <p>Use <code>merge_openapi()</code> to combine specs from different modules or the built-in auth docs:</p>
+<pre><code><span class="kw">use</span> chopin_core::openapi::{ApiDoc, merge_openapi};
+<span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="comment">// Your docs</span>
+<span class="attr">#[derive(OpenApi)]</span>
+<span class="attr">#[openapi(
+    paths(list_posts, create_post),
+    components(schemas(PostResponse, CreatePostRequest)),
+    tags((name = "posts", description = "Posts"))
+)]</span>
+<span class="kw">struct</span> <span class="type">PostDocs</span>;
+
+<span class="attr">#[derive(OpenApi)]</span>
+<span class="attr">#[openapi(
+    paths(list_users, get_user),
+    components(schemas(UserProfileResponse)),
+    tags((name = "users", description = "User profiles"))
+)]</span>
+<span class="kw">struct</span> <span class="type">UserDocs</span>;
+
+<span class="comment">// Merge all three: built-in auth + posts + users</span>
+<span class="kw">let</span> combined = merge_openapi(
+    merge_openapi(ApiDoc::openapi(), PostDocs::openapi()),
+    UserDocs::openapi(),
+);
+
+<span class="comment">// Use with Scalar or App</span>
+<span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+    .api_docs(combined);</code></pre>
+
+                <h3>#[utoipa::path] attribute reference</h3>
+                <p>Here&rsquo;s every option you can use in the path annotation:</p>
+                <div class="endpoint-table">
+                    <table>
+                        <thead>
+                            <tr><th>Attribute</th><th>Description</th><th>Example</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td><code>get</code> / <code>post</code> / <code>put</code> / <code>delete</code> / <code>patch</code></td><td>HTTP method</td><td><code>#[utoipa::path(get, ...)]</code></td></tr>
+                            <tr><td><code>path</code></td><td>URL path (must match your route)</td><td><code>path = "/api/posts/{id}"</code></td></tr>
+                            <tr><td><code>tag</code></td><td>Group endpoints in the UI</td><td><code>tag = "posts"</code></td></tr>
+                            <tr><td><code>request_body</code></td><td>Request body type (must derive <code>ToSchema</code>)</td><td><code>request_body = CreatePostRequest</code></td></tr>
+                            <tr><td><code>params(...)</code></td><td>Path/query parameters</td><td><code>params(("id" = i32, Path, description = "Post ID"))</code></td></tr>
+                            <tr><td><code>responses(...)</code></td><td>List of possible responses</td><td><code>(status = 200, description = "OK", body = PostResponse)</code></td></tr>
+                            <tr><td><code>security(...)</code></td><td>Auth requirements for this endpoint</td><td><code>security(("bearer_auth" = []))</code></td></tr>
+                            <tr><td><code>operation_id</code></td><td>Custom operation ID</td><td><code>operation_id = "listPosts"</code></td></tr>
+                            <tr><td><code>summary</code></td><td>Short summary (uses doc comment by default)</td><td><code>summary = "List all posts"</code></td></tr>
+                            <tr><td><code>description</code></td><td>Long description</td><td><code>description = "Returns paginated posts"</code></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3>#[derive(ToSchema)] tips</h3>
+<pre><code><span class="comment">// Rename fields in the schema</span>
+<span class="attr">#[derive(Serialize, ToSchema)]</span>
+<span class="attr">#[schema(rename_all = "camelCase")]</span>
+<span class="kw">pub struct</span> <span class="type">PostResponse</span> {
+    <span class="kw">pub</span> created_at: <span class="type">String</span>,  <span class="comment">// → "createdAt" in docs</span>
+}
+
+<span class="comment">// Add examples to fields</span>
+<span class="attr">#[derive(Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> <span class="type">CreatePostRequest</span> {
+    <span class="attr">#[schema(example = "My First Post")]</span>
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+
+    <span class="attr">#[schema(example = "Hello world! This is my first blog post.")]</span>
+    <span class="kw">pub</span> body: <span class="type">String</span>,
+
+    <span class="attr">#[schema(minimum = 0, maximum = 10)]</span>
+    <span class="kw">pub</span> priority: Option&lt;<span class="type">i32</span>&gt;,
+}
+
+<span class="comment">// Enum schemas</span>
+<span class="attr">#[derive(Serialize, Deserialize, ToSchema)]</span>
+<span class="kw">pub enum</span> <span class="type">PostStatus</span> {
+    Draft,
+    Published,
+    Archived,
+}
+
+<span class="comment">// Nested schemas — inner types must also derive ToSchema</span>
+<span class="attr">#[derive(Serialize, ToSchema)]</span>
+<span class="kw">pub struct</span> <span class="type">PostWithAuthor</span> {
+    <span class="kw">pub</span> post: PostResponse,      <span class="comment">// must derive ToSchema</span>
+    <span class="kw">pub</span> author: AuthorResponse,   <span class="comment">// must derive ToSchema</span>
+}</code></pre>
+
+                <h3>Paginated query parameters</h3>
+                <p>Chopin's <code>Pagination</code> type already implements <code>IntoParams</code> for utoipa, so you can document pagination queries automatically:</p>
+<pre><code><span class="attr">#[utoipa::path(
+    get,
+    path = "/api/posts",
+    tag = "posts",
+    params(Pagination),   <span class="comment">// ← adds page &amp; per_page query params to docs</span>
+    responses(
+        (status = 200, description = "Paginated posts",
+         body = ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;)
+    )
+)]</span>
+<span class="kw">pub async fn</span> <span class="fn">list_posts</span>(
+    Query(pagination): Query&lt;Pagination&gt;,
+) -> Json&lt;ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;&gt; {
+    <span class="comment">// Scalar UI shows: ?page=1&amp;per_page=20</span>
+}</code></pre>
+
+                <h3>Protecting endpoints in docs</h3>
+                <p>Add <code>security(("bearer_auth" = []))</code> to show a lock icon on endpoints that require authentication. Use <code>SecurityAddon</code> as a modifier to register the scheme:</p>
+<pre><code><span class="comment">// Per-endpoint security (lock icon in Scalar UI)</span>
+<span class="attr">#[utoipa::path(
+    delete,
+    path = "/api/posts/{id}",
+    tag = "posts",
+    security(("bearer_auth" = [])),  <span class="comment">// ← this endpoint requires JWT</span>
+    responses((status = 200, description = "Deleted"))
+)]</span>
+<span class="kw">pub async fn</span> <span class="fn">delete_post</span>(...) { }
+
+<span class="comment">// Global security in the OpenAPI struct</span>
+<span class="attr">#[derive(OpenApi)]</span>
+<span class="attr">#[openapi(
+    paths(delete_post, list_posts),
+    security(("bearer_auth" = [])),  <span class="comment">// ← all endpoints require JWT by default</span>
+    modifiers(&SecurityAddon)         <span class="comment">// ← registers the Bearer scheme</span>
+)]</span>
+<span class="kw">struct</span> <span class="type">ApiDoc</span>;</code></pre>
 
                 <h3>Export OpenAPI spec</h3>
 <pre><code><span class="comment"># Export to JSON file</span>
 chopin docs export --format json --output openapi.json
 
 <span class="comment"># Export as YAML</span>
-chopin docs export --format yaml --output openapi.yaml</code></pre>
+chopin docs export --format yaml --output openapi.yaml
+
+<span class="comment"># Or fetch it from a running server</span>
+curl http://localhost:3000/api-docs/openapi.json > openapi.json</code></pre>
+
+                <h3>Re-exported types cheat sheet</h3>
+                <p>Everything you need is available from <code>chopin_core</code> &mdash; no need to add <code>utoipa</code> or <code>utoipa-scalar</code> to your Cargo.toml:</p>
+                <div class="endpoint-table">
+                    <table>
+                        <thead>
+                            <tr><th>Import</th><th>What it is</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td><code>chopin_core::OpenApi</code></td><td>The <code>#[derive(OpenApi)]</code> derive macro</td></tr>
+                            <tr><td><code>chopin_core::ToSchema</code></td><td>The <code>#[derive(ToSchema)]</code> derive macro</td></tr>
+                            <tr><td><code>chopin_core::Scalar</code></td><td>Scalar UI component (for custom routers)</td></tr>
+                            <tr><td><code>chopin_core::Servable</code></td><td>Trait for mounting Scalar on a Router</td></tr>
+                            <tr><td><code>chopin_core::openapi::SecurityAddon</code></td><td>JWT Bearer modifier (use in <code>modifiers(&SecurityAddon)</code>)</td></tr>
+                            <tr><td><code>chopin_core::openapi::ApiDoc</code></td><td>Built-in auth endpoint docs</td></tr>
+                            <tr><td><code>chopin_core::openapi::merge_openapi</code></td><td>Merge two OpenAPI specs together</td></tr>
+                            <tr><td><code>chopin_core::prelude::*</code></td><td>Includes <code>OpenApi</code>, <code>ToSchema</code>, <code>Scalar</code>, <code>Servable</code>, <code>SecurityAddon</code></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="tip">
+                    <strong>Summary — API docs in 4 steps:</strong>
+                    <ol>
+                        <li><code>#[derive(ToSchema)]</code> on your request/response types</li>
+                        <li><code>#[utoipa::path(...)]</code> on your handler functions</li>
+                        <li><code>#[derive(OpenApi)]</code> struct listing paths + schemas</li>
+                        <li><code>App::new().await?.api_docs(MyApiDoc::openapi())</code></li>
+                    </ol>
+                    Your endpoints are merged with the built-in auth docs automatically.
+                </div>
             </section>
 
             <!-- 13. Caching -->

@@ -29,3 +29,7 @@ pub use crate::Method;
 
 // ── Serde (almost every handler needs these) ───────────────────
 pub use serde::{Deserialize, Serialize};
+
+// ── OpenAPI (API documentation) ────────────────────────────────
+pub use crate::openapi::SecurityAddon;
+pub use crate::{OpenApi, Scalar, Servable, ToSchema};

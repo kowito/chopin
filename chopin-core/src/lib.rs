@@ -46,6 +46,15 @@ pub use axum::http;
 pub use axum::http::{HeaderMap, Method, StatusCode};
 pub use axum::middleware;
 
+// ── OpenAPI re-exports ─────────────────────────────────────────
+// Users should never need `utoipa` in their Cargo.toml.
+pub use utoipa;
+pub use utoipa::openapi as openapi_spec;
+pub use utoipa::OpenApi;
+pub use utoipa::ToSchema;
+pub use utoipa_scalar;
+pub use utoipa_scalar::{Scalar, Servable};
+
 /// Axum extractor re-exports.
 ///
 /// ```rust,ignore

@@ -1,10 +1,7 @@
-use chopin_core::extractors::{Json, Pagination, Path, Query, State};
+use chopin_core::prelude::*;
+use chopin_core::extractors::{Json, Pagination};
 use chopin_core::response::ApiResponse;
-use chopin_core::routing::get;
-use chopin_core::{Router, StatusCode};
 use sea_orm::*;
-use serde::Deserialize;
-use utoipa::ToSchema;
 
 use crate::models::post::{self, Entity as Post, PostResponse};
 use crate::AppState;

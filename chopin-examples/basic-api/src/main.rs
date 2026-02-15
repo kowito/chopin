@@ -1,17 +1,38 @@
 //! # Chopin Basic API Example
 //!
 //! A complete CRUD API with authentication, pagination, and OpenAPI docs.
+//!
+//! Shows how to use Chopin's OpenAPI re-exports (`OpenApi`, `ToSchema`,
+//! `Scalar`, `SecurityAddon`) without adding `utoipa` to your Cargo.toml.
+//!
+//! ## Run
+//!
+//! ```bash
+//! cargo run -p chopin-basic-api
+//! ```
+//!
+//! ## Endpoints
+//!
+//! - `GET  /api/posts`      — List posts (paginated)
+//! - `POST /api/posts`      — Create a post
+//! - `GET  /api/posts/{id}` — Get post by ID
+//! - `PUT  /api/posts/{id}` — Update a post
+//! - `DELETE /api/posts/{id}` — Delete a post
+//! - `GET  /api-docs`       — Scalar OpenAPI UI
+//! - `GET  /api-docs/openapi.json` — Raw spec
 
 use std::sync::Arc;
 
-use chopin_core::{config::Config, db, serve, Extension, Router};
+use chopin_core::prelude::*;
+use chopin_core::{config::Config, db, serve, Extension};
 use sea_orm_migration::MigratorTrait;
-use utoipa::OpenApi;
-use utoipa_scalar::{Scalar, Servable};
 
 use chopin_basic_api::{controllers, migrations, models, AppState};
 
-/// OpenAPI documentation for the example API.
+// ── OpenAPI documentation ──────────────────────────────────────
+// Everything comes from chopin_core::prelude:
+//   OpenApi, ToSchema, Scalar, Servable, SecurityAddon
+
 #[derive(OpenApi)]
 #[openapi(
     info(
@@ -42,26 +63,9 @@ use chopin_basic_api::{controllers, migrations, models, AppState};
     security(
         ("bearer_auth" = [])
     ),
-    modifiers(&SecurityAddon)
+    modifiers(&SecurityAddon)  // ← from chopin_core::prelude, adds JWT Bearer scheme
 )]
 pub struct ApiDoc;
-
-struct SecurityAddon;
-
-impl utoipa::Modify for SecurityAddon {
-    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        if let Some(components) = openapi.components.as_mut() {
-            components.add_security_scheme(
-                "bearer_auth",
-                utoipa::openapi::security::SecurityScheme::Http(
-                    utoipa::openapi::security::Http::new(
-                        utoipa::openapi::security::HttpAuthScheme::Bearer,
-                    ),
-                ),
-            );
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -82,12 +86,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .merge(controllers::posts::routes())
+        // Scalar UI at /api-docs + raw JSON at /api-docs/openapi.json
         .merge(Scalar::with_url("/api-docs", ApiDoc::openapi()))
         .route(
             "/api-docs/openapi.json",
-            chopin_core::routing::get(|| async {
-                chopin_core::extractors::Json(ApiDoc::openapi())
-            }),
+            get(|| async { Json(ApiDoc::openapi()) }),
         )
         .with_state(state)
         .layer(Extension(Arc::new(config.clone())))

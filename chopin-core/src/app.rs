@@ -28,6 +28,9 @@ pub struct App {
     pub db: DatabaseConnection,
     pub cache: CacheService,
     fast_routes: Vec<FastRoute>,
+    custom_openapi: Option<utoipa::openapi::OpenApi>,
+    api_docs_path: String,
+    custom_routes: Vec<Router>,
 }
 
 impl App {
@@ -49,6 +52,9 @@ impl App {
             db,
             cache,
             fast_routes: Vec::new(),
+            custom_openapi: None,
+            api_docs_path: "/api-docs".to_string(),
+            custom_routes: Vec::new(),
         })
     }
 
@@ -69,6 +75,9 @@ impl App {
             db,
             cache,
             fast_routes: Vec::new(),
+            custom_openapi: None,
+            api_docs_path: "/api-docs".to_string(),
+            custom_routes: Vec::new(),
         })
     }
 
@@ -111,11 +120,38 @@ impl App {
         // Initialize cached Date header (updated every 500ms by background task)
         perf::init_date_cache();
 
+        // Resolve which OpenAPI spec to serve.
+        // If user provided a custom spec, merge it with built-in auth docs.
+        // Otherwise, use the built-in auth docs only.
+        let openapi_spec = match &self.custom_openapi {
+            Some(user_spec) => {
+                crate::openapi::merge_openapi(ApiDoc::openapi(), user_spec.clone())
+            }
+            None => ApiDoc::openapi(),
+        };
+        let openapi_spec_clone = openapi_spec.clone();
+        let docs_path: &'static str = Box::leak(self.api_docs_path.clone().into_boxed_str());
+        let json_path: &'static str =
+            Box::leak(format!("{}/openapi.json", docs_path).into_boxed_str());
+
         let mut router = Router::new()
             .route("/", get(welcome))
-            .merge(routing::build_routes().with_state(state))
-            .merge(Scalar::with_url("/api-docs", ApiDoc::openapi()))
-            .route("/api-docs/openapi.json", get(openapi_json))
+            .merge(routing::build_routes().with_state(state));
+
+        // Merge user-provided custom routes.
+        for custom in &self.custom_routes {
+            router = router.merge(custom.clone());
+        }
+
+        router = router
+            .merge(Scalar::with_url(docs_path, openapi_spec))
+            .route(
+                json_path,
+                get(move || {
+                    let spec = openapi_spec_clone.clone();
+                    async move { axum::Json(spec) }
+                }),
+            )
             .layer(axum::Extension(config))
             .layer(CorsLayer::permissive());
 
@@ -189,6 +225,88 @@ impl App {
         self.fast_route(FastRoute::text(path, body))
     }
 
+    // ═══ Custom Routes Builder API ═══
+
+    /// Merge a custom Axum [`Router`] into the application.
+    ///
+    /// Use this to add your own endpoints alongside Chopin's built-in
+    /// auth routes and OpenAPI docs. You can call this multiple times to
+    /// merge several routers.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use chopin_core::prelude::*;
+    ///
+    /// async fn list_items() -> Json<Vec<&'static str>> {
+    ///     Json(vec!["Notebook", "Pen"])
+    /// }
+    ///
+    /// let items_router = Router::new()
+    ///     .route("/api/items", get(list_items));
+    ///
+    /// let app = App::new().await?
+    ///     .routes(items_router)
+    ///     .api_docs(MyApiDoc::openapi());
+    /// app.run().await?;
+    /// ```
+    pub fn routes(mut self, router: Router) -> Self {
+        self.custom_routes.push(router);
+        self
+    }
+
+    // ═══ API Documentation Builder API ═══
+
+    /// Provide a custom OpenAPI spec for your API documentation.
+    ///
+    /// Your spec is **merged** with the built-in Chopin auth endpoints,
+    /// so both your endpoints and the auth endpoints appear in `/api-docs`.
+    ///
+    /// This follows the same pattern as Axum + utoipa — annotate handlers
+    /// with `#[utoipa::path(...)]`, define an `#[derive(OpenApi)]` struct,
+    /// and pass it here.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use chopin_core::prelude::*;
+    ///
+    /// #[derive(OpenApi)]
+    /// #[openapi(
+    ///     info(title = "My API", version = "1.0.0"),
+    ///     paths(list_posts, create_post),
+    ///     components(schemas(PostResponse, CreatePostRequest)),
+    ///     tags((name = "posts", description = "Post endpoints")),
+    ///     security(("bearer_auth" = [])),
+    ///     modifiers(&SecurityAddon)
+    /// )]
+    /// struct MyApiDoc;
+    ///
+    /// let app = App::new().await?
+    ///     .api_docs(MyApiDoc::openapi());
+    /// app.run().await?;
+    /// ```
+    pub fn api_docs(mut self, openapi: utoipa::openapi::OpenApi) -> Self {
+        self.custom_openapi = Some(openapi);
+        self
+    }
+
+    /// Customize the URL path where API docs are served.
+    ///
+    /// Default: `/api-docs` (Scalar UI) and `/api-docs/openapi.json` (raw spec).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let app = App::new().await?
+    ///     .api_docs_url("/docs")              // Scalar UI at /docs
+    ///     .api_docs(MyApiDoc::openapi());      // openapi.json at /docs/openapi.json
+    /// ```
+    pub fn api_docs_url(mut self, path: &str) -> Self {
+        self.api_docs_path = path.to_string();
+        self
+    }
+
     /// Run the application server.
     ///
     /// All requests flow through `ChopinService`:
@@ -206,7 +324,7 @@ impl App {
 
         println!("\n🎹 Chopin server is running!");
         println!("   → Server:  http://{}", addr);
-        println!("   → API docs: http://{}/api-docs", addr);
+        println!("   → API docs: http://{}{}", addr, self.api_docs_path);
         if reuseport {
             println!("   → SO_REUSEPORT: enabled (multi-core)");
         }
@@ -265,9 +383,4 @@ async fn welcome() -> impl IntoResponse {
     let mut buf = Vec::with_capacity(64);
     let _ = crate::json::to_writer(&mut buf, &msg);
     ([(header::CONTENT_TYPE, "application/json")], buf)
-}
-
-/// Serve the raw OpenAPI JSON spec.
-async fn openapi_json() -> axum::Json<utoipa::openapi::OpenApi> {
-    axum::Json(ApiDoc::openapi())
 }
