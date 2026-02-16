@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Chopin Tutorial - Modular Architecture: MVSR pattern, ChopinModule trait, and Django-style startapp.">
+    <title>Tutorial: Modular Architecture - Chopin Framework</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/tutorial.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="container">
+            <div class="nav-content">
+                <div class="nav-logo">
+                    <a href="index.html" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;color:inherit;">
+                        <i data-lucide="music" class="logo-icon"></i>
+                        <span class="logo-text">Chopin</span>
+                    </a>
+                </div>
+                <div class="nav-links">
+                    <a href="index.html#features">Features</a>
+                    <a href="index.html#benchmarks">Benchmarks</a>
+                    <a href="tutorial-index.html">Tutorial</a>
+                    <a href="https://docs.rs/chopin">API Docs</a>
+                    <a href="https://github.com/kowito/chopin" class="btn-primary">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="tutorial-layout">
+        <!-- Sidebar TOC -->
+        <aside class="tutorial-sidebar">
+            <div class="toc">
+                <h3 class="toc-title">Modules</h3>
+                <ol class="toc-list">
+                    <li><a href="#architecture" class="toc-link">Architecture Overview</a></li>
+                    <li><a href="#startapp" class="toc-link">Creating Modules</a></li>
+                    <li><a href="#mvsr" class="toc-link">MVSR Pattern</a></li>
+                    <li><a href="#chopin-module" class="toc-link">ChopinModule Trait</a></li>
+                    <li><a href="#mounting" class="toc-link">Mounting & Composition</a></li>
+                    <li><a href="#best-practices" class="toc-link">Best Practices</a></li>
+                </ol>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="tutorial-content">
+
+            <!-- Hero -->
+            <div class="tutorial-hero">
+                <h1>Modular Architecture</h1>
+                <p>Chopin uses a <strong>hub-and-spoke</strong> module system inspired by Django. Each feature is a self-contained module with its own routes, handlers, services, models, and DTOs — composed together in <code>main.rs</code>.</p>
+                <div class="page-indicator">Page 6 of 7</div>
+            </div>
+
+            <!-- 1. Architecture Overview -->
+            <section id="architecture" class="tutorial-section">
+                <div class="section-number">20</div>
+                <h2>Architecture Overview</h2>
+                <p>Chopin follows a <strong>hub-and-spoke</strong> architecture. The <code>main.rs</code> file is the "hub" (or "Composer") that mounts independent feature modules (the "spokes"). Each module implements the <code>ChopinModule</code> trait.</p>
+
+<pre><code><span class="comment"># Project layout</span>
+my-api/
+├── src/
+│   ├── main.rs              <span class="comment"># The "Composer" — mounts all modules</span>
+│   ├── apps/
+│   │   ├── mod.rs           <span class="comment"># Module registry</span>
+│   │   ├── blog/            <span class="comment"># Feature module (MVSR)</span>
+│   │   │   ├── mod.rs       <span class="comment"># ChopinModule implementation</span>
+│   │   │   ├── routes.rs    <span class="comment"># Route definitions</span>
+│   │   │   ├── handlers.rs  <span class="comment"># HTTP handlers (thin adapters)</span>
+│   │   │   ├── services.rs  <span class="comment"># Pure business logic</span>
+│   │   │   ├── models.rs    <span class="comment"># SeaORM entities</span>
+│   │   │   └── dto.rs       <span class="comment"># Request/response types</span>
+│   │   └── billing/         <span class="comment"># Another feature module</span>
+│   │       └── ...
+│   └── shared/              <span class="comment"># Cross-cutting types &amp; utilities</span>
+│       └── mod.rs
+├── migrations/              <span class="comment"># App-level database migrations</span>
+├── tests/                   <span class="comment"># Integration tests</span>
+├── .env
+└── Cargo.toml</code></pre>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Key principle:</strong> Modules never depend on each other — only on <code>chopin-core</code> and <code>src/shared/</code>. This makes each module independently testable, replaceable, and reusable.
+                    </div>
+                </div>
+            </section>
+
+            <!-- 2. Creating Modules -->
+            <section id="startapp" class="tutorial-section">
+                <div class="section-number">21</div>
+                <h2>Creating Modules</h2>
+                <p>Use the <code>chopin startapp</code> command (inspired by Django's <code>manage.py startapp</code>) to scaffold a complete feature module:</p>
+
+<pre><code><span class="comment"># Create a new module — generates all MVSR files</span>
+chopin startapp blog
+
+<span class="comment"># Equivalent alternative:</span>
+chopin generate module blog</code></pre>
+
+                <p>This creates the following structure:</p>
+
+<pre><code><span class="comment"># src/apps/blog/</span>
+<span class="comment">#   mod.rs        — ChopinModule trait implementation</span>
+<span class="comment">#   routes.rs     — Route definitions (nested under /api/blogs)</span>
+<span class="comment">#   handlers.rs   — HTTP handler functions</span>
+<span class="comment">#   services.rs   — Pure business logic (no HTTP types)</span>
+<span class="comment">#   models.rs     — SeaORM entity definitions</span>
+<span class="comment">#   dto.rs        — Request/response DTOs with ToSchema</span></code></pre>
+
+                <p>And automatically:</p>
+                <ul>
+                    <li>Adds <code>pub mod blog;</code> to <code>src/apps/mod.rs</code></li>
+                    <li>Adds <code>.mount_module(apps::blog::BlogModule::new())</code> to <code>src/main.rs</code></li>
+                    <li>Creates <code>tests/blog_tests.rs</code> with starter integration tests</li>
+                </ul>
+
+                <h3>Generate a model inside a module</h3>
+<pre><code><span class="comment"># Place the model entity inside an existing module</span>
+chopin generate model Post title:string body:text --module blog
+
+<span class="comment"># This updates src/apps/blog/models.rs with a SeaORM entity</span>
+<span class="comment"># and creates migrations/m2025XXXX_create_posts_table.rs</span></code></pre>
+            </section>
+
+            <!-- 3. MVSR Pattern -->
+            <section id="mvsr" class="tutorial-section">
+                <div class="section-number">22</div>
+                <h2>The MVSR Pattern</h2>
+                <p>Every module follows the <strong>MVSR pattern</strong>: Model – View/Handler – Service – Router. This separates concerns clearly and makes each layer independently testable.</p>
+
+                <table>
+                    <thead>
+                        <tr><th>Layer</th><th>File</th><th>Responsibility</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Model</strong></td>
+                            <td><code>models.rs</code></td>
+                            <td>SeaORM entities &amp; database schema</td>
+                        </tr>
+                        <tr>
+                            <td><strong>View/Handler</strong></td>
+                            <td><code>handlers.rs</code></td>
+                            <td>Thin HTTP adapters: extract request → call service → return response</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Service</strong></td>
+                            <td><code>services.rs</code></td>
+                            <td>Pure business logic. No HTTP types. Receives <code>DatabaseConnection</code>, returns domain types.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Router</strong></td>
+                            <td><code>routes.rs</code></td>
+                            <td>Maps HTTP methods + paths to handler functions</td>
+                        </tr>
+                        <tr>
+                            <td><strong>DTO</strong></td>
+                            <td><code>dto.rs</code></td>
+                            <td>Request/response types with <code>Serialize</code>, <code>Deserialize</code>, <code>ToSchema</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Why separate handlers and services?</h3>
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Handlers</strong> deal with HTTP: extracting query params, request bodies, returning JSON responses. <strong>Services</strong> are pure Rust functions that take a database connection and return domain objects. Services are 100% unit-testable without starting a server.
+                    </div>
+                </div>
+
+                <h3>Example: complete service</h3>
+<pre><code><span class="comment">// src/apps/blog/services.rs</span>
+<span class="kw">use</span> chopin_core::error::ChopinError;
+<span class="kw">use</span> sea_orm::*;
+<span class="kw">use</span> super::dto::*;
+<span class="kw">use</span> super::models::{self, Entity <span class="kw">as</span> Blog};
+
+<span class="kw">pub async fn</span> <span class="fn">list_all</span>(db: &DatabaseConnection) -> <span class="type">Result</span>&lt;Vec&lt;BlogResponse&gt;, ChopinError&gt; {
+    <span class="kw">let</span> items = Blog::find()
+        .order_by_desc(models::Column::CreatedAt)
+        .all(db).<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?;
+    <span class="type">Ok</span>(items.into_iter().map(BlogResponse::from).collect())
+}
+
+<span class="kw">pub async fn</span> <span class="fn">create_one</span>(
+    db: &DatabaseConnection,
+    payload: CreateBlogRequest,
+) -> <span class="type">Result</span>&lt;BlogResponse, ChopinError&gt; {
+    <span class="kw">let</span> new = models::ActiveModel {
+        title: Set(payload.title),
+        body: Set(payload.body),
+        ..Default::default()
+    };
+    <span class="kw">let</span> result = new.insert(db).<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?;
+    <span class="type">Ok</span>(BlogResponse::from(result))
+}
+
+<span class="kw">pub async fn</span> <span class="fn">find_by_id</span>(
+    db: &DatabaseConnection,
+    id: <span class="type">i32</span>,
+) -> <span class="type">Result</span>&lt;BlogResponse, ChopinError&gt; {
+    Blog::find_by_id(id).one(db).<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?
+        .map(BlogResponse::from)
+        .ok_or_else(|| ChopinError::NotFound(<span class="kw">format!</span>(<span class="str">"Blog {} not found"</span>, id)))
+}</code></pre>
+            </section>
+
+            <!-- 4. ChopinModule Trait -->
+            <section id="chopin-module" class="tutorial-section">
+                <div class="section-number">23</div>
+                <h2>The ChopinModule Trait</h2>
+                <p>Every module implements the <code>ChopinModule</code> trait, which defines a standard contract for module composition:</p>
+
+<pre><code><span class="kw">use</span> async_trait::async_trait;
+<span class="kw">use</span> axum::Router;
+
+<span class="attr">#[async_trait]</span>
+<span class="kw">pub trait</span> <span class="type">ChopinModule</span>: Send + Sync {
+    <span class="doc">/// Unique module name (e.g., "blog", "billing")</span>
+    <span class="kw">fn</span> <span class="fn">name</span>(&self) -> &<span class="type">str</span>;
+
+    <span class="doc">/// Return an Axum Router with all module routes</span>
+    <span class="kw">fn</span> <span class="fn">routes</span>(&self) -> Router&lt;AppState&gt;;
+
+    <span class="doc">/// Run module-specific database migrations</span>
+    <span class="kw">async fn</span> <span class="fn">migrate</span>(&self, db: &DatabaseConnection) -> <span class="type">Result</span>&lt;(), ChopinError&gt;;
+
+    <span class="doc">/// Optional: health check for this module</span>
+    <span class="kw">async fn</span> <span class="fn">health_check</span>(&self) -> <span class="type">Result</span>&lt;(), ChopinError&gt; {
+        <span class="type">Ok</span>(()) <span class="comment">// default: always healthy</span>
+    }
+
+    <span class="doc">/// Optional: provide OpenAPI spec for this module</span>
+    <span class="kw">fn</span> <span class="fn">openapi_spec</span>(&self) -> Option&lt;utoipa::openapi::OpenApi&gt; {
+        None <span class="comment">// default: no API docs</span>
+    }
+}</code></pre>
+
+                <h3>Implementing ChopinModule</h3>
+<pre><code><span class="comment">// src/apps/blog/mod.rs</span>
+<span class="kw">use</span> async_trait::async_trait;
+<span class="kw">use</span> axum::Router;
+<span class="kw">use</span> chopin_core::controllers::AppState;
+<span class="kw">use</span> chopin_core::error::ChopinError;
+<span class="kw">use</span> chopin_core::module::ChopinModule;
+<span class="kw">use</span> sea_orm::DatabaseConnection;
+
+<span class="kw">mod</span> dto;
+<span class="kw">mod</span> handlers;
+<span class="kw">mod</span> models;
+<span class="kw">mod</span> routes;
+<span class="kw">mod</span> services;
+
+<span class="kw">pub use</span> dto::*;
+<span class="kw">pub use</span> models::*;
+
+<span class="kw">pub struct</span> <span class="type">BlogModule</span>;
+
+<span class="kw">impl</span> <span class="type">BlogModule</span> {
+    <span class="kw">pub fn</span> <span class="fn">new</span>() -> <span class="type">Self</span> { <span class="type">Self</span> }
+}
+
+<span class="attr">#[async_trait]</span>
+<span class="kw">impl</span> ChopinModule <span class="kw">for</span> <span class="type">BlogModule</span> {
+    <span class="kw">fn</span> <span class="fn">name</span>(&self) -> &<span class="type">str</span> { <span class="str">"blog"</span> }
+
+    <span class="kw">fn</span> <span class="fn">routes</span>(&self) -> Router&lt;AppState&gt; {
+        routes::routes()
+    }
+
+    <span class="kw">async fn</span> <span class="fn">migrate</span>(&self, _db: &DatabaseConnection) -> <span class="type">Result</span>&lt;(), ChopinError&gt; {
+        <span class="comment">// Add module-specific migrations here</span>
+        <span class="type">Ok</span>(())
+    }
+}</code></pre>
+            </section>
+
+            <!-- 5. Mounting & Composition -->
+            <section id="mounting" class="tutorial-section">
+                <div class="section-number">24</div>
+                <h2>Mounting & Composition</h2>
+                <p>The <code>main.rs</code> file is the "Composer" that assembles all modules into one application. Use <code>mount_module()</code> to add each module:</p>
+
+<pre><code><span class="comment">// src/main.rs — The "Composer"</span>
+<span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="kw">mod</span> apps;
+
+<span class="attr">#[tokio::main]</span>
+<span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    init_logging();
+
+    <span class="kw">let</span> app = App::new().<span class="kw">await</span>?;
+    <span class="comment">// AuthModule is mounted by default.</span>
+    <span class="comment">// Mount your feature modules:</span>
+    <span class="kw">let</span> app = app.mount_module(apps::blog::BlogModule::new());
+    <span class="kw">let</span> app = app.mount_module(apps::billing::BillingModule::new());
+    <span class="kw">let</span> app = app.mount_module(apps::inventory::InventoryModule::new());
+
+    app.run().<span class="kw">await</span>?;
+    <span class="type">Ok</span>(())
+}</code></pre>
+
+                <h3>Module registry</h3>
+<pre><code><span class="comment">// src/apps/mod.rs</span>
+<span class="kw">pub mod</span> blog;
+<span class="kw">pub mod</span> billing;
+<span class="kw">pub mod</span> inventory;</code></pre>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Automatic wiring:</strong> When you run <code>chopin startapp billing</code>, the CLI automatically adds <code>pub mod billing;</code> to <code>src/apps/mod.rs</code> and the <code>mount_module()</code> call to <code>src/main.rs</code>.
+                    </div>
+                </div>
+            </section>
+
+            <!-- 6. Best Practices -->
+            <section id="best-practices" class="tutorial-section">
+                <div class="section-number">25</div>
+                <h2>Best Practices</h2>
+
+                <h3>Module dependency rules</h3>
+                <table>
+                    <thead>
+                        <tr><th>Allowed</th><th>Forbidden</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Module → <code>chopin-core</code></td>
+                            <td>Module → another Module</td>
+                        </tr>
+                        <tr>
+                            <td>Module → <code>src/shared/</code></td>
+                            <td>Module → <code>src/main.rs</code></td>
+                        </tr>
+                        <tr>
+                            <td>Handler → Service</td>
+                            <td>Service → Handler</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>When to create a new module</h3>
+                <ul>
+                    <li>A new business domain (blog, billing, notifications)</li>
+                    <li>A set of related endpoints that share the same models</li>
+                    <li>A feature that could be developed/tested independently</li>
+                </ul>
+
+                <h3>When to use <code>src/shared/</code></h3>
+                <ul>
+                    <li>Common DTOs (e.g., <code>PaginatedResponse</code>)</li>
+                    <li>Shared permission enums</li>
+                    <li>Cross-cutting middleware</li>
+                    <li>Utility functions used by multiple modules</li>
+                </ul>
+
+                <h3>Testing modules</h3>
+<pre><code><span class="comment">// tests/blog_tests.rs</span>
+<span class="kw">use</span> chopin_core::testing::TestApp;
+
+<span class="attr">#[tokio::test]</span>
+<span class="kw">async fn</span> <span class="fn">test_blog_list</span>() {
+    <span class="kw">let</span> app = TestApp::new().<span class="kw">await</span>;
+    <span class="kw">let</span> res = app.get(<span class="str">"/api/blogs"</span>).<span class="kw">await</span>;
+    assert_eq!(res.status, <span class="num">200</span>);
+}
+
+<span class="attr">#[tokio::test]</span>
+<span class="kw">async fn</span> <span class="fn">test_blog_not_found</span>() {
+    <span class="kw">let</span> app = TestApp::new().<span class="kw">await</span>;
+    <span class="kw">let</span> res = app.get(<span class="str">"/api/blogs/999"</span>).<span class="kw">await</span>;
+    assert_eq!(res.status, <span class="num">404</span>);
+}</code></pre>
+
+                <p><code>chopin startapp</code> automatically generates these test stubs for you.</p>
+            </section>
+
+            <!-- Navigation -->
+            <nav class="tutorial-nav">
+                <a href="tutorial-deployment.html" class="btn-secondary">&larr; Deployment</a>
+                <a href="tutorial-index.html" class="btn-primary">Back to Index</a>
+            </nav>
+
+        </main>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-bottom" style="border-top: none; padding-top: 0;">
+                <div class="footer-bottom-left">
+                    <p>&copy; 2026 Chopin. All rights reserved.</p>
+                </div>
+                <div class="footer-bottom-right">
+                    <p>Made with <i data-lucide="music" class="inline-icon-sm"></i> by the <a href="https://github.com/kowito">Chopin team</a></p>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+    <script>
+        lucide.createIcons();
+
+        const sections = document.querySelectorAll('.tutorial-section');
+        const tocLinks = document.querySelectorAll('.toc-link');
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    tocLinks.forEach(link => link.classList.remove('active'));
+                    const id = entry.target.getAttribute('id');
+                    const activeLink = document.querySelector(`.toc-link[href="#${id}"]`);
+                    if (activeLink) activeLink.classList.add('active');
+                }
+            });
+        }, { rootMargin: '-80px 0px -60% 0px' });
+
+        sections.forEach(section => observer.observe(section));
+    </script>
+</body>
+</html>

@@ -8,7 +8,16 @@
 
 > **High-fidelity engineering for the modern virtuoso.**
 
-**The fastest production-ready Rust web framework.** Chopin delivers **650K+ req/s** for JSON APIs with **sub-millisecond latency** — all while giving you built-in auth, database, OpenAPI, and caching out of the box.
+**Django meets Rust.** Chopin brings Django's "batteries-included" philosophy to the world of high-performance systems programming. Build **modular, type-safe APIs** at **650K+ req/s** with compile-time verification and zero circular dependencies.
+
+```rust
+// Explicit, type-safe composition
+App::new().await?
+    .mount_module(AuthModule::new())     // vendor/chopin_auth
+    .mount_module(BlogModule::new())     // apps/blog
+    .mount_module(BillingModule::new())  // apps/billing
+    .run().await?;
+```
 
 ```bash
 # Get started in 60 seconds
@@ -73,25 +82,30 @@ Average Latency @ 256 connections (lower is better)
 - ✅ **8.1x faster than NestJS** (enterprise TypeScript framework)
 - 💰 **Save $16,800/year** vs Node.js, $33,600/year vs NestJS
 
-### 🎁 Production-Ready from Day 1
+### 🎁 Django's Comfort, Rust's Safety
 
-Unlike bare-metal frameworks, Chopin ships with everything you need:
+**Modular Architecture:**
+- **ChopinModule Trait** — Every feature (Auth, Blog, Billing) is a self-contained module
+- **Hub-and-Spoke** — Thin `chopin-core` hub prevents circular dependencies
+- **MVSR Pattern** — Model-View-Service-Router separates HTTP from business logic
+- **Compile-Time Verified** — Route conflicts and missing configs caught before deployment
 
-| Feature | Chopin | Axum | Description |
-|---------|--------|------|-------------|
-| **Built-in Auth** | ✅ | ❌ | JWT + Argon2id with signup/login endpoints |
-| **Production Security** | ✅ | ❌ | 2FA/TOTP, rate limiting, account lockout, refresh tokens, CSRF, session management |
-| **Database ORM** | ✅ | ❌ | SeaORM with auto-migrations (SQLite/PostgreSQL/MySQL) |
-| **OpenAPI Docs** | ✅ | ❌ | Auto-generated Scalar UI at `/api-docs` |
-| **Role-Based Access** | ✅ | ❌ | User, Moderator, Admin with extractors |
-| **Caching** | ✅ | ❌ | In-memory or Redis support |
-| **File Uploads** | ✅ | ❌ | Local filesystem or S3-compatible (R2, MinIO) |
-| **GraphQL** | ✅ | ❌ | Optional async-graphql integration |
-| **Testing Utils** | ✅ | Partial | `TestApp` with in-memory SQLite |
-| **FastRoute** | ✅ | ❌ | Zero-alloc static responses with per-route decorators (.cors(), .cache_control(), .methods()) |
-| **Axum Compatible** | ✅ | ✅ | Use any Tower/hyper middleware |
+**Batteries Included (But Not Hard-Coded):**
 
-**Translation:** Prototype in 10 minutes. Deploy to production on day 1.
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **Auth Module** | ✅ Opt-in | JWT + Argon2id, 2FA/TOTP, rate limiting, refresh tokens (vendor/chopin_auth) |
+| **Database ORM** | ✅ Core | SeaORM with auto-migrations (SQLite/PostgreSQL/MySQL) |
+| **OpenAPI Docs** | ✅ Core | Auto-generated Scalar UI at `/api-docs` |
+| **Admin Panel** | 🔜 Opt-in | Django-style admin interface (vendor/chopin_admin) |
+| **CMS Module** | 🔜 Opt-in | Content management system (vendor/chopin_cms) |
+| **Caching** | ✅ Core | In-memory or Redis support |
+| **File Storage** | ✅ Core | Local filesystem or S3-compatible (R2, MinIO) |
+| **GraphQL** | ✅ Core | Optional async-graphql integration |
+| **Testing Utils** | ✅ Core | `TestApp` with in-memory SQLite |
+| **FastRoute** | ✅ Core | Zero-alloc static responses (~35ns/req) |
+
+**Translation:** Django's feature-first folders + Rust's compile-time safety = No `KeyError` at 3 AM.
 
 ### 💰 Real Cost Savings
 
@@ -117,9 +131,9 @@ Unlike bare-metal frameworks, Chopin ships with everything you need:
 # Install the CLI
 cargo install chopin-cli
 
-# Create a new project
-chopin new my-api
-cd my-api
+# Create a new modular project
+chopin new my-blog-api
+cd my-blog-api
 
 # Run in development mode
 cargo run
@@ -128,61 +142,101 @@ cargo run
 REUSEPORT=true cargo run --release --features perf
 ```
 
-### Your First API (90 seconds)
+### Your First Modular App (2 minutes)
 
+**Step 1: Create a Blog Module**
+
+```bash
+mkdir -p apps/blog
+```
+
+**apps/blog/mod.rs:**
 ```rust
-use chopin_core::{App, Router, ApiResponse, get, Json};
-use serde::{Deserialize, Serialize};
+use chopin_core::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize)]
-struct User {
-    id: u32,
-    name: String,
-    email: String,
+mod handlers;
+mod services;
+mod models;
+
+pub struct BlogModule;
+
+impl ChopinModule for BlogModule {
+    fn name(&self) -> &str { "blog" }
+    
+    fn routes(&self) -> Router<AppState> {
+        Router::new()
+            .route("/posts", get(handlers::list_posts).post(handlers::create_post))
+            .route("/posts/:id", get(handlers::get_post))
+    }
 }
 
-// Simple handler
-async fn hello() -> &'static str {
-    "Hello, World!"
+impl BlogModule {
+    pub fn new() -> Self { Self }
 }
+```
 
-// JSON response
-async fn get_user() -> ApiResponse<User> {
-    ApiResponse::success(User {
-        id: 1,
-        name: "Alice".to_string(),
-        email: "alice@example.com".to_string(),
-    })
-}
+**apps/blog/services.rs** (Pure business logic - 100% unit-testable):
+```rust
+use chopin_core::prelude::*;
+use super::models::Post;
 
-// JSON extraction
-async fn create_user(Json(user): Json<User>) -> ApiResponse<User> {
-    // Auto-validation, database access, etc.
-    ApiResponse::success(user)
+pub async fn get_tenant_posts(
+    db: &DatabaseConnection,
+    tenant_id: i32,
+    page: u64,
+) -> Result<Vec<Post>, ChopinError> {
+    Post::find()
+        .filter(post::Column::TenantId.eq(tenant_id))
+        .paginate(db, 20)
+        .fetch_page(page)
+        .await
+        .map_err(Into::into)
 }
+```
+
+**apps/blog/handlers.rs** (HTTP layer - thin adapter):
+```rust
+use chopin_core::prelude::*;
+use super::services;
+
+pub async fn list_posts(
+    State(state): State<AppState>,
+    Pagination { page, per_page }: Pagination,
+) -> Result<ApiResponse<Vec<PostDto>>, ChopinError> {
+    let posts = services::get_posts(&state.db, page, per_page).await?;
+    Ok(ApiResponse::success(posts))
+}
+```
+
+**Step 2: Compose Your Application**
+
+**src/main.rs:**
+```rust
+use chopin_core::prelude::*;
+mod apps;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging to see request traces
-    chopin_core::init_logging();
+    init_logging();
     
-    let app = App::new().await?
-        .route("/", get(hello))
-        .route("/users/:id", get(get_user))
-        .route("/users", post(create_user));
+    App::new().await?
+        .mount_module(apps::blog::BlogModule::new())
+        .mount_module(AuthModule::new())  // vendor/chopin_auth
+        .run().await?;
     
-    app.run().await?;
     Ok(())
 }
 ```
 
 **That's it!** You now have:
-- ✅ JSON serialization (with SIMD via sonic-rs in perf mode)
-- ✅ Auto-generated OpenAPI docs at `/api-docs`
-- ✅ Built-in auth endpoints at `/api/auth/signup` and `/api/auth/login`
-- ✅ Database connection (via `.env` configuration)
-- ✅ Graceful shutdown
-- ✅ Request logging (call `init_logging()` to enable console output)
+- ✅ **Compile-time verification** - Missing routes or modules = compiler error
+- ✅ **100% unit-testable** - Services are pure Rust functions
+- ✅ **Zero circular dependencies** - Hub-and-spoke architecture
+- ✅ **Feature-first folders** - Everything "Blog" lives in `apps/blog/`
+- ✅ **Auto-generated OpenAPI docs** at `/api-docs`
+- ✅ **Built-in auth endpoints** at `/api/auth/signup` and `/api/auth/login`
+- ✅ **Database migrations** run automatically on startup
+- ✅ **Request logging** with structured traces
 
 ### With Authentication
 

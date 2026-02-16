@@ -54,7 +54,7 @@
             <div class="tutorial-hero">
                 <h1>Database & Configuration</h1>
                 <p>Configure your server (environment, database, security), define models with SeaORM, and run migrations automatically on startup.</p>
-                <div class="page-indicator">Page 2 of 6</div>
+                <div class="page-indicator">Page 2 of 7</div>
             </div>
 
             <!-- 1. Configuration -->
@@ -150,11 +150,21 @@ app.run().<span class="kw">await</span>?;</code></pre>
 <span class="comment">// connect_timeout: 8s, idle_timeout: 8s</span></code></pre>
 
                 <h3>Defining a model</h3>
-                <p>Use the CLI to scaffold, or define manually:</p>
-<pre><code><span class="comment"># Generate model + migration + controller</span>
+                <p>Use the CLI to scaffold inside a module, or define manually:</p>
+<pre><code><span class="comment"># Generate model inside a module (recommended)</span>
+chopin generate model Post title:string body:text published:bool --module blog
+
+<span class="comment"># Or generate at the project root level</span>
 chopin generate model Post title:string body:text published:bool</code></pre>
 
-<pre><code><span class="comment">// src/models/post.rs</span>
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Tip:</strong> Use <code>--module blog</code> to place the model, migration, and handler inside the <code>src/apps/blog/</code> module folder. Don't have a module yet? Run <code>chopin startapp blog</code> first.
+                    </div>
+                </div>
+
+<pre><code><span class="comment">// src/apps/blog/models.rs (when using --module blog)</span>
 <span class="kw">use</span> chrono::NaiveDateTime;
 <span class="kw">use</span> sea_orm::entity::prelude::*;
 <span class="kw">use</span> serde::{Deserialize, Serialize};
@@ -234,7 +244,7 @@ Post::delete_by_id(<span class="num">1</span>).exec(&db).<span class="kw">await<
                 <h2>Migrations</h2>
                 <p>Migrations run <strong>automatically on startup</strong>. Chopin uses SeaORM's migration system &mdash; define them as Rust code, and they're applied when the app boots.</p>
 
-<pre><code><span class="comment">// src/migrations/m20250101_000001_create_posts_table.rs</span>
+<pre><code><span class="comment">// migrations/m20250101_000001_create_posts_table.rs</span>
 <span class="kw">use</span> sea_orm_migration::{prelude::*, schema::*};
 
 <span class="attr">#[derive(DeriveMigrationName)]</span>
@@ -272,7 +282,7 @@ Post::delete_by_id(<span class="num">1</span>).exec(&db).<span class="kw">await<
 }</code></pre>
 
                 <h3>Register migrations</h3>
-<pre><code><span class="comment">// src/migrations/mod.rs</span>
+<pre><code><span class="comment">// migrations/mod.rs</span>
 <span class="kw">pub use</span> sea_orm_migration::prelude::*;
 
 <span class="kw">mod</span> m20250101_000001_create_posts_table;

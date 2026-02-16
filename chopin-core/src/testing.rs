@@ -103,6 +103,11 @@ impl TestApp {
             .await
             .expect("Failed to create test app");
 
+        // Run module migrations (including auth tables)
+        app.run_migrations()
+            .await
+            .expect("Failed to run module migrations");
+
         let router = app.router();
         let listener = TcpListener::bind("127.0.0.1:0")
             .await

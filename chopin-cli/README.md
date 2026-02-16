@@ -9,7 +9,7 @@
 
 **Scaffolding and code generation tool for the Chopin web framework.**
 
-The Chopin CLI helps you quickly bootstrap new Chopin projects with sensible defaults, generate boilerplate code, and manage database migrations.
+Generate ChopinModules following MVSR pattern (Model-View-Service-Router), manage migrations, and bootstrap new projects with sensible defaults.
 
 ## Installation
 
@@ -19,7 +19,7 @@ cargo install chopin-cli
 
 ## Quick Start
 
-Create a new Chopin project:
+Create a new Chopin project with modular architecture:
 
 ```bash
 chopin new my-app
@@ -32,22 +32,44 @@ cargo run
 ### `new` — Create a new project
 
 ```bash
-chopin new my-project
+chopin new my-project [--template basic|api]
 ```
 
 Creates a new Chopin project with:
-- Configured `Cargo.toml` with all dependencies
-- Basic project structure (controllers, models, migrations)
-- Example auth endpoints (signup, login)
+- Modular architecture using ChopinModule trait
+- MVSR pattern (Model-View-Service-Router)
+- Configured `Cargo.toml` with dependencies
+- Example auth module (signup, login)
 - Development SQLite database
 - OpenAPI documentation setup
 
-### `generate` — Generate boilerplate code
+Templates:
+- `basic` — Minimal setup (default)
+- `api` — Full CRUD API with posts module
+
+### `generate module` — Scaffold a new module
 
 ```bash
-chopin generate controller users
-chopin generate model user
-chopin generate migration create_users_table
+chopin generate module blog
+```
+
+Generates MVSR structure:
+```
+src/modules/blog/
+├── mod.rs           # ChopinModule implementation
+├── services.rs      # Business logic (unit-testable)
+├── handlers.rs      # HTTP handlers
+├── models.rs        # SeaORM entities
+└── migrations.rs    # Database migrations
+```
+
+### `generate` — Generate specific components
+
+```bash
+chopin generate service posts      # Service layer
+chopin generate handler posts      # HTTP handler
+chopin generate model post         # SeaORM entity
+chopin generate migration create_posts_table
 ```
 
 ### `db` — Database management
@@ -59,8 +81,8 @@ chopin db reset
 
 ## Features
 
-- ⚡ Zero-configuration project setup
-- 📦 Workspace-ready structure
+- ⚡ Zero-configuration project setup with MVSR pattern
+- 📦 ChopinModule scaffolding
 - 🔐 Built-in authentication scaffolding
 - 🗄️ Database migration helpers
 - 📚 OpenAPI documentation
@@ -70,8 +92,9 @@ chopin db reset
 
 For more information, see the [main repository](https://github.com/kowito/chopin):
 
-- [Debugging & Logging Guide](https://github.com/kowito/chopin/blob/main/docs/debugging-and-logging.md) — Enable request logging (essential for development!)
-- [Example Projects](https://github.com/kowito/chopin/tree/main/chopin-examples)
+- [**Modular Architecture Guide**](https://github.com/kowito/chopin/blob/main/docs/modular-architecture.md) — ChopinModule trait, MVSR pattern
+- [Debugging & Logging](https://github.com/kowito/chopin/blob/main/docs/debugging-and-logging.md) — Enable request logging
+- [Example Projects](https://github.com/kowito/chopin/tree/main/chopin-examples) — basic-api shows MVSR pattern
 - [API Reference](https://docs.rs/chopin-core)
 
 ## License

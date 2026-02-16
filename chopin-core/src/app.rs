@@ -10,15 +10,15 @@ use serde::Serialize;
 use tower_http::cors::CorsLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
-use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::auth::rate_limit::RateLimiter;
 use crate::cache::CacheService;
 use crate::config::Config;
 use crate::controllers::AppState;
+use crate::controllers::AuthModule;
 use crate::migrations::Migrator;
-use crate::openapi::ApiDoc;
+use crate::module::ChopinModule;
 use crate::perf;
 use crate::routing;
 use crate::server::FastRoute;
@@ -32,6 +32,7 @@ pub struct App {
     custom_openapi: Option<utoipa::openapi::OpenApi>,
     api_docs_path: String,
     custom_routes: Vec<Router<AppState>>,
+    modules: Vec<Box<dyn ChopinModule>>,
 }
 
 impl App {
@@ -42,11 +43,6 @@ impl App {
 
         // Check for CLI database operations (--migrate, --rollback) and exit if present
         Self::handle_db_cli_args(&db).await?;
-
-        // Run pending migrations automatically on startup
-        tracing::info!("Running pending database migrations...");
-        Migrator::up(&db, None).await?;
-        tracing::info!("Migrations complete.");
 
         // Initialize cache (in-memory by default, Redis if configured)
         let cache = Self::init_cache(&config).await;
@@ -59,6 +55,7 @@ impl App {
             custom_openapi: None,
             api_docs_path: "/api-docs".to_string(),
             custom_routes: Vec::new(),
+            modules: vec![Box::new(AuthModule::new())],
         })
     }
 
@@ -68,11 +65,6 @@ impl App {
 
         // Check for CLI database operations (--migrate, --rollback) and exit if present
         Self::handle_db_cli_args(&db).await?;
-
-        // Run pending migrations automatically on startup
-        tracing::info!("Running pending database migrations...");
-        Migrator::up(&db, None).await?;
-        tracing::info!("Migrations complete.");
 
         // Initialize cache
         let cache = Self::init_cache(&config).await;
@@ -85,6 +77,7 @@ impl App {
             custom_openapi: None,
             api_docs_path: "/api-docs".to_string(),
             custom_routes: Vec::new(),
+            modules: vec![Box::new(AuthModule::new())],
         })
     }
 
@@ -139,6 +132,55 @@ impl App {
         Ok(())
     }
 
+    /// Mount a module into the application.
+    ///
+    /// Modules provide routes, migrations, and health checks that are
+    /// automatically wired into the application lifecycle.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use chopin_core::prelude::*;
+    ///
+    /// let app = App::new().await?
+    ///     .mount_module(MyModule::new());
+    /// ```
+    pub fn mount_module(mut self, module: impl ChopinModule + 'static) -> Self {
+        tracing::info!("Mounting module: {}", module.name());
+        self.modules.push(Box::new(module));
+        self
+    }
+
+    /// Remove all default modules (including built-in auth).
+    ///
+    /// Call this if you want a completely bare application and will
+    /// mount your own modules manually.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let app = App::new().await?
+    ///     .without_default_modules()
+    ///     .mount_module(MyCustomAuthModule::new());
+    /// ```
+    pub fn without_default_modules(mut self) -> Self {
+        self.modules.clear();
+        self
+    }
+
+    /// Run all module migrations.
+    ///
+    /// Called automatically by [`run()`](Self::run) before starting the server.
+    /// Also useful in tests when calling [`router()`](Self::router) directly.
+    pub async fn run_migrations(&self) -> Result<(), Box<dyn std::error::Error>> {
+        for module in &self.modules {
+            tracing::info!("Running migrations for module: {}", module.name());
+            module
+                .migrate(&self.db)
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        }
+        Ok(())
+    }
+
     /// Build the Axum router for API routes only.
     ///
     /// Fast routes registered via [`fast_route`](Self::fast_route) bypass this
@@ -163,12 +205,26 @@ impl App {
         perf::init_date_cache();
 
         // Resolve which OpenAPI spec to serve.
-        // If user provided a custom spec, merge it with built-in auth docs.
-        // Otherwise, use the built-in auth docs only.
-        let openapi_spec = match &self.custom_openapi {
-            Some(user_spec) => crate::openapi::merge_openapi(ApiDoc::openapi(), user_spec.clone()),
-            None => ApiDoc::openapi(),
+        // Start with an empty base spec (modules provide their own docs).
+        // If user provided a custom spec, use it as the base; otherwise start empty.
+        let mut openapi_spec = match &self.custom_openapi {
+            Some(user_spec) => user_spec.clone(),
+            None => utoipa::openapi::OpenApiBuilder::new()
+                .info(
+                    utoipa::openapi::InfoBuilder::new()
+                        .title("Chopin API")
+                        .version(env!("CARGO_PKG_VERSION"))
+                        .build(),
+                )
+                .build(),
         };
+
+        // Merge module OpenAPI specs into the documentation.
+        for module in &self.modules {
+            if let Some(module_spec) = module.openapi_spec() {
+                openapi_spec = crate::openapi::merge_openapi(openapi_spec, module_spec);
+            }
+        }
         let openapi_spec_clone = openapi_spec.clone();
         let docs_path: &'static str = Box::leak(self.api_docs_path.clone().into_boxed_str());
         let json_path: &'static str =
@@ -185,6 +241,11 @@ impl App {
         // Merge user-provided custom routes (with AppState applied).
         for custom in &self.custom_routes {
             router = router.merge(custom.clone().with_state(state.clone()));
+        }
+
+        // Merge module routes into the application router.
+        for module in &self.modules {
+            router = router.merge(module.routes().with_state(state.clone()));
         }
 
         router = router
@@ -220,13 +281,17 @@ impl App {
                                 "→ request"
                             );
                         })
-                        .on_response(|response: &axum::http::Response<_>, latency: std::time::Duration, _span: &tracing::Span| {
-                            tracing::info!(
-                                status = response.status().as_u16(),
-                                latency_ms = latency.as_millis(),
-                                "← response"
-                            );
-                        }),
+                        .on_response(
+                            |response: &axum::http::Response<_>,
+                             latency: std::time::Duration,
+                             _span: &tracing::Span| {
+                                tracing::info!(
+                                    status = response.status().as_u16(),
+                                    latency_ms = latency.as_millis(),
+                                    "← response"
+                                );
+                            },
+                        ),
                 );
         }
 
@@ -380,6 +445,9 @@ impl App {
     /// each CPU core gets its own SO_REUSEPORT listener and
     /// single-threaded tokio runtime for maximum throughput.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+        // Run all module migrations before starting the server.
+        self.run_migrations().await?;
+
         let addr = self.config.server_addr();
         let reuseport = self.config.reuseport;
         let router = self.router();

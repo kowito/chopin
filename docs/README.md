@@ -1,51 +1,71 @@
-# Chopin Website
+# Chopin Documentation
 
-This is the GitHub Pages website for the Chopin web framework.
+Comprehensive guides for the Chopin web framework.
 
-## Local Development
+## Architecture & Design
 
-To preview the site locally:
+- [**ARCHITECTURE.md**](../ARCHITECTURE.md) — Complete system design, component architecture, and design principles
+- [**Modular Architecture**](modular-architecture.md) — ChopinModule trait, MVSR pattern, hub-and-spoke design
+
+## Performance
+
+- [**JSON Performance**](json-performance.md) — SIMD JSON optimization with sonic-rs
+
+## Debugging
+
+- [**Debugging & Logging**](debugging-and-logging.md) — Complete guide to enabling request logs, error traces, and debugging
+- [**LOGGING.md**](LOGGING.md) — Quick reference for logging configuration
+
+## Tutorials (HTML)
+
+- [**Tutorial Index**](tutorial-index.html) — Interactive tutorial guide (recommended starting point)
+- [**Complete Tutorial**](tutorial.html) — All content in one page
+
+## GitHub Pages Website
+
+This directory is deployed as a GitHub Pages site. To preview locally:
 
 ```bash
 # Using Python
-cd website
+cd docs
 python3 -m http.server 8000
 
 # Using Node.js
-npx http-server website -p 8000
+npx http-server docs -p 8000
 
 # Then open http://localhost:8000
 ```
 
 ## Deployment
 
-This site is deployed via GitHub Pages. To enable:
+This site is deployed via GitHub Pages:
 
-1. Go to your repository settings
-2. Navigate to **Pages** section
-3. Under **Source**, select:
-   - **Branch**: `main`
-   - **Folder**: `/website`
-4. Click **Save**
+1. Go to repository settings → **Pages**
+2. Set **Source** to Branch: `main`, Folder: `/docs`
+3. Click **Save**
 
-Your site will be available at: `https://kowito.github.io/chopin/`
+Site URL: `https://kowito.github.io/chopin/`
 
-## Structure
+## Directory Structure
 
 ```
 docs/
-├── index.html               # Main landing page
-├── tutorial-index.html      # Tutorial guide index (recommended starting point)
-├── tutorial.html            # Complete reference tutorial (all content in one page)
-├── debugging-and-logging.md # Complete debugging guide
-├── LOGGING.md               # Quick logging reference
-├── json-performance.md      # JSON performance guide
+├── README.md                     # This file
+├── ARCHITECTURE.md               # System design (in repo root)
+├── modular-architecture.md       # Module development guide
+├── debugging-and-logging.md      # Debugging guide
+├── LOGGING.md                    # Logging quick reference
+├── json-performance.md           # JSON optimization guide
+├── index.html                    # Landing page
+├── tutorial-index.html           # Tutorial guide index
+├── tutorial.html                 # Complete tutorial
 ├── css/
-│   ├── style.css            # Main styles
-│   └── tutorial.css         # Tutorial styles
+│   ├── style.css                 # Main styles
+│   └── tutorial.css              # Tutorial styles
 ├── js/
-│   └── main.js              # JavaScript interactions
-└── README.md                # This file
+│   └── main.js                   # JavaScript interactions
+└── img/
+    └── ...                       # Images and diagrams
 ```
 
 ## Tutorial Structure

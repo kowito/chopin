@@ -14,6 +14,11 @@ pub use crate::ChopinError;
 pub use crate::Config;
 pub use crate::FastRoute;
 
+// ── Module system ──────────────────────────────────────────────
+pub use crate::AuthModule;
+pub use crate::ChopinModule;
+pub use async_trait::async_trait;
+
 // ── Logging ────────────────────────────────────────────────────
 pub use crate::logging::{
     init_logging, init_logging_json, init_logging_pretty, init_logging_with_level,

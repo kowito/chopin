@@ -54,7 +54,7 @@
             <div class="tutorial-hero">
                 <h1>Getting Started with Chopin</h1>
                 <p>Install Chopin, create your first server, and enable debugging in under 5 minutes. Everything you need to begin.</p>
-                <div class="page-indicator">Page 1 of 6</div>
+                <div class="page-indicator">Page 1 of 7</div>
             </div>
 
             <!-- 1. Installation -->
@@ -72,16 +72,32 @@ cargo install chopin-cli</code></pre>
 chopin new my-api
 <span class="kw">cd</span> my-api
 
-<span class="comment"># Your project structure:</span>
+<span class="comment"># Your project structure (MVSR architecture):</span>
 <span class="comment"># my-api/</span>
 <span class="comment">#   Cargo.toml</span>
 <span class="comment">#   .env</span>
 <span class="comment">#   src/</span>
-<span class="comment">#     main.rs</span>
-<span class="comment">#     lib.rs</span>
-<span class="comment">#     controllers/</span>
-<span class="comment">#     models/</span>
-<span class="comment">#     migrations/</span></code></pre>
+<span class="comment">#     main.rs          # The "Composer" — mounts all modules</span>
+<span class="comment">#     apps/            # Feature modules (one folder per feature)</span>
+<span class="comment">#       mod.rs</span>
+<span class="comment">#     shared/          # Cross-cutting types &amp; utilities</span>
+<span class="comment">#       mod.rs</span>
+<span class="comment">#   migrations/        # App-level database migrations</span>
+<span class="comment">#   tests/             # Integration tests</span></code></pre>
+
+                <h3>Add a feature module (Django-style)</h3>
+<pre><code><span class="comment"># Create a self-contained module with handlers, services, routes, etc.</span>
+chopin startapp blog
+
+<span class="comment"># This generates src/apps/blog/ with:</span>
+<span class="comment">#   mod.rs        — ChopinModule implementation</span>
+<span class="comment">#   handlers.rs   — HTTP handler functions</span>
+<span class="comment">#   services.rs   — Pure business logic</span>
+<span class="comment">#   routes.rs     — Route definitions</span>
+<span class="comment">#   dto.rs        — Request/response types</span>
+<span class="comment">#   models.rs     — SeaORM entities</span>
+<span class="comment">#</span>
+<span class="comment"># Also auto-registers in src/apps/mod.rs and mounts in src/main.rs!</span></code></pre>
 
                 <h3>Or add to an existing project</h3>
 <pre><code><span class="comment"># Add chopin as a dependency</span>

@@ -8,7 +8,8 @@ fn test_create_and_validate_token() {
     let secret = "test-secret-key";
     let expiry_hours = 24;
 
-    let token = create_token(&user_id.to_string(), secret, expiry_hours).expect("Failed to create token");
+    let token =
+        create_token(&user_id.to_string(), secret, expiry_hours).expect("Failed to create token");
     assert!(!token.is_empty());
 
     let claims = validate_token(&token, secret).expect("Failed to validate token");
@@ -32,7 +33,8 @@ fn test_token_with_wrong_secret_fails() {
     let correct_secret = "correct-secret";
     let wrong_secret = "wrong-secret";
 
-    let token = create_token(&user_id.to_string(), correct_secret, 1).expect("Failed to create token");
+    let token =
+        create_token(&user_id.to_string(), correct_secret, 1).expect("Failed to create token");
 
     let result = validate_token(&token, wrong_secret);
     assert!(result.is_err());
@@ -76,7 +78,8 @@ fn test_token_expiry_time() {
     let expiry_hours = 2;
 
     let before = chrono::Utc::now().timestamp() as usize;
-    let token = create_token(&user_id.to_string(), secret, expiry_hours).expect("Failed to create token");
+    let token =
+        create_token(&user_id.to_string(), secret, expiry_hours).expect("Failed to create token");
     let after = chrono::Utc::now().timestamp() as usize;
 
     let claims = validate_token(&token, secret).expect("Failed to validate");
@@ -141,7 +144,8 @@ fn test_token_with_very_long_expiry() {
     let secret = "test-secret";
     let expiry_hours = 8760; // 1 year
 
-    let token = create_token(&user_id.to_string(), secret, expiry_hours).expect("Failed to create token");
+    let token =
+        create_token(&user_id.to_string(), secret, expiry_hours).expect("Failed to create token");
     let claims = validate_token(&token, secret).expect("Failed to validate");
 
     assert_eq!(claims.sub, user_id.to_string());

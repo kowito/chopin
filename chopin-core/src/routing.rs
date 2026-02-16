@@ -1,6 +1,5 @@
 use axum::Router;
 
-use crate::controllers;
 use crate::controllers::AppState;
 
 // ── Re-exports ─────────────────────────────────────────────────
@@ -10,7 +9,10 @@ pub use axum::routing::{
     MethodRouter,
 };
 
-/// Build all application routes.
+/// Build core application routes (excluding module-provided routes).
+///
+/// Module routes (including built-in auth) are registered via
+/// `App::mount_module()` and merged separately.
 pub fn build_routes() -> Router<AppState> {
-    Router::new().nest("/api/auth", controllers::auth::routes())
+    Router::new()
 }

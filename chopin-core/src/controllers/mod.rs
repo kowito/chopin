@@ -16,3 +16,6 @@ pub struct AppState {
 }
 
 pub mod auth;
+pub mod auth_module;
+
+pub use auth_module::AuthModule;

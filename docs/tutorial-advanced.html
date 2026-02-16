@@ -55,7 +55,7 @@
             <div class="tutorial-hero">
                 <h1>Advanced Features</h1>
                 <p>Automatic API documentation with OpenAPI, high-performance caching, file uploads to S3, and optional GraphQL support.</p>
-                <div class="page-indicator">Page 4 of 6</div>
+                <div class="page-indicator">Page 4 of 7</div>
             </div>
 
             <!-- 1. OpenAPI Docs -->
@@ -137,8 +137,8 @@
         description = "A blog API built with Chopin"
     ),
     paths(
-        controllers::posts::list_posts,
-        controllers::posts::create_post,
+        apps::blog::handlers::list,
+        apps::blog::handlers::create,
     ),
     components(
         schemas(PostResponse, CreatePostRequest)

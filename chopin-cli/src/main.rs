@@ -5,7 +5,7 @@ use std::process::Command;
 
 #[derive(Parser)]
 #[command(name = "chopin")]
-#[command(about = "Chopin: High-fidelity engineering for the modern virtuoso.")]
+#[command(about = "🎹 Chopin — High-fidelity engineering for the modern virtuoso.")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -19,7 +19,8 @@ enum Commands {
         /// Project name
         name: String,
     },
-    /// Generate scaffolding
+    /// Generate scaffolding (module, model, controller)
+    #[command(alias = "g")]
     Generate {
         #[command(subcommand)]
         kind: GenerateCommands,
@@ -34,6 +35,12 @@ enum Commands {
         #[command(subcommand)]
         action: DocsCommands,
     },
+    /// Create a new app module (Django-style: chopin startapp blog)
+    #[command(alias = "startapp")]
+    Startapp {
+        /// App/module name (e.g., blog, billing, inventory)
+        name: String,
+    },
     /// Start the development server
     Run,
     /// Create a superuser account
@@ -45,14 +52,23 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum GenerateCommands {
-    /// Generate a new model with SeaORM entity, migration, and controller
-    Model {
-        /// Model name (e.g., Post)
+    /// Generate a new feature module (MVSR: model, handlers, services, routes)
+    #[command(alias = "mod")]
+    Module {
+        /// Module name (e.g., blog, billing, inventory)
         name: String,
-        /// Fields in format name:type (e.g., title:string body:text)
-        fields: Vec<String>,
     },
-    /// Generate a new controller with CRUD endpoints
+    /// Generate a new model with SeaORM entity, migration, and handler
+    Model {
+        /// Model name (e.g., Post, Product)
+        name: String,
+        /// Fields in format name:type (e.g., title:string body:text price:f64)
+        fields: Vec<String>,
+        /// Target module to generate into (default: generates in src/)
+        #[arg(short, long)]
+        module: Option<String>,
+    },
+    /// Generate a standalone controller with endpoints
     Controller {
         /// Controller name (e.g., posts)
         name: String,
@@ -96,12 +112,18 @@ async fn main() {
 
     match cli.command {
         Commands::New { name } => {
-            println!("🎹 Creating new Chopin project: {}", name);
             create_project(&name);
         }
         Commands::Generate { kind } => match kind {
-            GenerateCommands::Model { name, fields } => {
-                generate_model(&name, &fields);
+            GenerateCommands::Module { name } => {
+                generate_module(&name);
+            }
+            GenerateCommands::Model {
+                name,
+                fields,
+                module,
+            } => {
+                generate_model(&name, &fields, module.as_deref());
             }
             GenerateCommands::Controller { name } => {
                 generate_controller(&name);
@@ -130,6 +152,9 @@ async fn main() {
                 export_openapi(&format, &output);
             }
         },
+        Commands::Startapp { name } => {
+            generate_module(&name);
+        }
         Commands::Run => {
             run_dev_server();
         }
@@ -142,7 +167,9 @@ async fn main() {
     }
 }
 
-// ── Helper: map field type shorthand to Rust/SeaORM types ──
+// ══════════════════════════════════════════════════════════════
+// Helpers
+// ══════════════════════════════════════════════════════════════
 
 fn field_to_rust_type(field_type: &str) -> &str {
     match field_type {
@@ -175,10 +202,15 @@ fn field_to_sea_orm_col(field_type: &str) -> &str {
 }
 
 fn to_pascal_case(s: &str) -> String {
-    s.chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string() + &s[1..])
-        .unwrap_or_default()
+    s.split('_')
+        .map(|part| {
+            let mut c = part.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().to_string() + &c.as_str().to_lowercase(),
+            }
+        })
+        .collect()
 }
 
 fn to_snake_case(s: &str) -> String {
@@ -192,17 +224,8 @@ fn to_snake_case(s: &str) -> String {
     result
 }
 
-// ── Generate Model ──
-
-fn generate_model(name: &str, fields: &[String]) {
-    let model_name = to_pascal_case(name);
-    let snake_name = to_snake_case(name);
-    let table_name = format!("{}s", snake_name);
-
-    println!("🎹 Generating model: {}", model_name);
-
-    // Parse fields
-    let parsed_fields: Vec<(&str, &str)> = fields
+fn parse_fields(fields: &[String]) -> Vec<(&str, &str)> {
+    fields
         .iter()
         .filter_map(|f| {
             let parts: Vec<&str> = f.split(':').collect();
@@ -213,22 +236,798 @@ fn generate_model(name: &str, fields: &[String]) {
                 None
             }
         })
-        .collect();
+        .collect()
+}
 
-    // 1. Generate the model file
-    generate_model_file(&model_name, &snake_name, &table_name, &parsed_fields);
+// ══════════════════════════════════════════════════════════════
+// chopin new <name>
+// ══════════════════════════════════════════════════════════════
 
-    // 2. Generate the migration file
-    generate_migration_file(&model_name, &snake_name, &table_name, &parsed_fields);
+fn create_project(name: &str) {
+    let project_dir = Path::new(name);
 
-    // 3. Generate the controller file
-    generate_controller_for_model(&model_name, &snake_name, &parsed_fields);
+    if project_dir.exists() {
+        eprintln!("  ✗ Directory '{}' already exists.", name);
+        std::process::exit(1);
+    }
 
-    println!("  ✓ Model, migration, and controller generated.");
+    println!("🎹 Creating new Chopin project: {}", name);
     println!();
-    println!(
-        "  Next: Register the new module in your `src/models/mod.rs` and `src/controllers/mod.rs`"
+
+    // ── Directory tree ──
+    let dirs = [
+        "src",
+        "src/apps",
+        "src/shared",
+        "migrations",
+        "tests",
+        ".cargo",
+    ];
+    for dir in &dirs {
+        fs::create_dir_all(project_dir.join(dir)).expect("Failed to create directory");
+    }
+
+    // ── Cargo.toml ──
+    let cargo_toml = format!(
+        r#"[package]
+name = "{name}"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chopin-core = "0.2"
+tokio = {{ version = "1", features = ["rt-multi-thread", "macros"] }}
+serde = {{ version = "1", features = ["derive"] }}
+sea-orm = {{ version = "1", features = ["runtime-tokio-rustls", "sqlx-sqlite", "sqlx-postgres"] }}
+sea-orm-migration = "1"
+chrono = "0.4"
+async-trait = "0.1"
+tracing = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+"#
     );
+
+    // ── src/main.rs — The "Composer" ──
+    let main_rs = format!(
+        r#"//! {name} — built with Chopin 🎹
+//!
+//! Module registration happens here. Each feature is a self-contained
+//! `ChopinModule` that declares its own routes, migrations, and health checks.
+
+use chopin_core::prelude::*;
+
+// ── Import your feature modules here ──
+// mod apps;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+    init_logging();
+
+    let app = App::new().await?;
+        // AuthModule is mounted by default.
+        // Mount your own modules here:
+        // .mount_module(apps::blog::BlogModule::new())
+        // .mount_module(apps::billing::BillingModule::new())
+
+    app.run().await?;
+
+    Ok(())
+}}
+"#
+    );
+
+    // ── src/apps/mod.rs — Feature module registry ──
+    let apps_mod = r#"//! Feature modules — each sub-folder is a self-contained ChopinModule.
+//!
+//! Register new modules here:
+//!
+//! ```rust
+//! pub mod blog;
+//! pub mod billing;
+//! ```
+//!
+//! Then mount them in main.rs:
+//!
+//! ```rust
+//! .mount_module(apps::blog::BlogModule::new())
+//! ```
+"#;
+
+    // ── src/shared/mod.rs ──
+    let shared_mod = r#"//! Shared types used across feature modules.
+//!
+//! Put cross-cutting concerns here (permissions, common DTOs, etc.).
+//! Modules should depend on `chopin-core` and `shared/`, never on each other.
+"#;
+
+    // ── migrations/mod.rs ──
+    let migrations_mod = r#"//! Application-level migrations.
+//!
+//! Note: Built-in auth migrations run automatically via AuthModule.
+//! Add your own migrations here and register them in a Migrator.
+
+pub use sea_orm_migration::prelude::*;
+"#;
+
+    // ── tests/health_test.rs ──
+    let health_test = r#"//! Smoke test — verify the app boots and the welcome endpoint responds.
+
+use chopin_core::testing::TestApp;
+
+#[tokio::test]
+async fn test_app_boots() {
+    let app = TestApp::new().await;
+    let res = app.get("/").await;
+    assert_eq!(res.status, 200);
+}
+"#;
+
+    // ── .env.example ──
+    let env_example = r#"# ── Database ──────────────────────────────────
+DATABASE_URL=sqlite://app.db?mode=rwc
+
+# ── JWT ───────────────────────────────────────
+JWT_SECRET=change-me-in-production
+JWT_EXPIRY_HOURS=24
+
+# ── Server ────────────────────────────────────
+SERVER_HOST=127.0.0.1
+SERVER_PORT=3000
+ENVIRONMENT=development
+
+# ── Logging ───────────────────────────────────
+RUST_LOG=info
+
+# ── Cache (optional, in-memory by default) ────
+# REDIS_URL=redis://127.0.0.1:6379
+
+# ── File uploads ──────────────────────────────
+UPLOAD_DIR=./uploads
+MAX_UPLOAD_SIZE=10485760
+"#;
+
+    // ── .gitignore ──
+    let gitignore = r#"/target/
+*.rs.bk
+Cargo.lock
+.env
+.DS_Store
+*.db
+/uploads/
+"#;
+
+    // ── .cargo/config.toml ──
+    let cargo_config = r#"# Optimise for Apple Silicon (harmless on other architectures)
+[target.'cfg(target_arch = "aarch64")']
+rustflags = ["-C", "target-cpu=native"]
+"#;
+
+    // ── README.md ──
+    let readme = format!(
+        r#"# {name}
+
+Built with [Chopin](https://github.com/kowito/chopin) 🎹 — the high-level Rust Web Framework.
+
+## Quick Start
+
+```bash
+cp .env.example .env
+cargo run
+```
+
+- Server: `http://127.0.0.1:3000`
+- API docs: `http://127.0.0.1:3000/api-docs`
+
+## Project Structure
+
+```
+{name}/
+├── src/
+│   ├── main.rs          # The "Composer" — mounts all modules
+│   ├── apps/            # Feature modules (MVSR pattern)
+│   │   └── mod.rs
+│   └── shared/          # Cross-cutting types & utilities
+│       └── mod.rs
+├── migrations/          # App-level database migrations
+├── tests/               # Integration tests
+├── .env.example
+└── Cargo.toml
+```
+
+## Add a Feature Module
+
+```bash
+chopin generate module blog
+```
+
+This creates `src/apps/blog/` with:
+- `mod.rs`       — `ChopinModule` implementation
+- `handlers.rs`  — HTTP handler functions
+- `services.rs`  — Pure business logic
+- `models.rs`    — SeaORM entities
+- `routes.rs`    — Route definitions
+- `dto.rs`       — Request/response types
+
+Then register it in `src/main.rs`:
+
+```rust
+.mount_module(apps::blog::BlogModule::new())
+```
+
+## Generate a Model
+
+```bash
+chopin generate model Post title:string body:text --module blog
+```
+"#
+    );
+
+    // ── Write all files ──
+    let writes: Vec<(&str, &str)> = vec![
+        ("Cargo.toml", &cargo_toml),
+        ("src/main.rs", &main_rs),
+        ("src/apps/mod.rs", apps_mod),
+        ("src/shared/mod.rs", shared_mod),
+        ("migrations/mod.rs", migrations_mod),
+        ("tests/health_test.rs", health_test),
+        (".env.example", env_example),
+        (".env", env_example),
+        (".gitignore", gitignore),
+        (".cargo/config.toml", cargo_config),
+        ("README.md", &readme),
+    ];
+
+    for (rel_path, content) in &writes {
+        let path = project_dir.join(rel_path);
+        fs::write(&path, content).unwrap_or_else(|_| panic!("Failed to write {}", path.display()));
+    }
+
+    // Print summary
+    println!("  ✓ Created project structure:");
+    println!("      {}/", name);
+    println!("      ├── src/");
+    println!("      │   ├── main.rs          # Module composer");
+    println!("      │   ├── apps/            # Feature modules (MVSR)");
+    println!("      │   └── shared/          # Shared types");
+    println!("      ├── migrations/          # App-level migrations");
+    println!("      ├── tests/");
+    println!("      │   └── health_test.rs");
+    println!("      ├── .env.example");
+    println!("      ├── .cargo/config.toml");
+    println!("      └── Cargo.toml");
+    println!();
+    println!("  Next steps:");
+    println!("    cd {}", name);
+    println!("    cargo run");
+    println!();
+    println!("  Generate your first module:");
+    println!("    chopin generate module blog");
+    println!();
+    println!("  API docs: http://127.0.0.1:3000/api-docs");
+}
+
+// ══════════════════════════════════════════════════════════════
+// chopin generate module <name>
+// ══════════════════════════════════════════════════════════════
+
+fn generate_module(name: &str) {
+    let snake_name = to_snake_case(name);
+    let pascal_name = to_pascal_case(name);
+
+    let module_dir = Path::new("src/apps").join(&snake_name);
+
+    if module_dir.exists() {
+        eprintln!(
+            "  ✗ Module '{}' already exists at {}",
+            snake_name,
+            module_dir.display()
+        );
+        std::process::exit(1);
+    }
+
+    println!("🎹 Generating module: {}", pascal_name);
+    println!();
+
+    fs::create_dir_all(&module_dir).expect("Failed to create module directory");
+
+    // ── mod.rs — ChopinModule implementation ──
+    let mod_rs = format!(
+        r#"//! {pascal_name} module — implements `ChopinModule` for self-contained composition.
+
+mod dto;
+mod handlers;
+mod models;
+mod routes;
+mod services;
+
+pub use dto::*;
+pub use models::*;
+
+use async_trait::async_trait;
+use axum::Router;
+use chopin_core::controllers::AppState;
+use chopin_core::error::ChopinError;
+use chopin_core::module::ChopinModule;
+use sea_orm::DatabaseConnection;
+
+/// {pascal_name} feature module.
+///
+/// Mount in `main.rs`:
+/// ```rust,ignore
+/// .mount_module({pascal_name}Module::new())
+/// ```
+pub struct {pascal_name}Module;
+
+impl {pascal_name}Module {{
+    pub fn new() -> Self {{
+        Self
+    }}
+}}
+
+impl Default for {pascal_name}Module {{
+    fn default() -> Self {{
+        Self::new()
+    }}
+}}
+
+#[async_trait]
+impl ChopinModule for {pascal_name}Module {{
+    fn name(&self) -> &str {{
+        "{snake_name}"
+    }}
+
+    fn routes(&self) -> Router<AppState> {{
+        routes::routes()
+    }}
+
+    async fn migrate(&self, _db: &DatabaseConnection) -> Result<(), ChopinError> {{
+        // TODO: Add module-specific migrations
+        Ok(())
+    }}
+}}
+"#
+    );
+
+    // ── routes.rs ──
+    let routes_rs = format!(
+        r#"//! Route definitions for the {pascal_name} module.
+
+use axum::Router;
+use chopin_core::controllers::AppState;
+use chopin_core::routing::{{get, post, put, delete}};
+
+use super::handlers;
+
+/// All routes for the {snake_name} module, nested under `/api/{snake_name}s`.
+pub fn routes() -> Router<AppState> {{
+    Router::new().nest(
+        "/api/{snake_name}s",
+        Router::new()
+            .route("/", get(handlers::list).post(handlers::create))
+            .route("/{{id}}", get(handlers::get_by_id).put(handlers::update).delete(handlers::remove)),
+    )
+}}
+"#
+    );
+
+    // ── handlers.rs ──
+    let handlers_rs = format!(
+        r#"//! HTTP handlers for the {pascal_name} module.
+//!
+//! Handlers are thin adapters: extract request data, call a service, return a response.
+//! Business logic lives in `services.rs`.
+
+use axum::extract::{{Path, State}};
+use chopin_core::controllers::AppState;
+use chopin_core::error::ChopinError;
+use chopin_core::extractors::Json;
+use chopin_core::response::ApiResponse;
+
+use super::dto::*;
+use super::services;
+
+/// List all {snake_name}s.
+#[utoipa::path(get, path = "/api/{snake_name}s", tag = "{snake_name}s",
+    responses((status = 200, description = "List of {snake_name}s"))
+)]
+pub async fn list(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>, ChopinError> {{
+    let items = services::list_all(&state.db).await?;
+    Ok(Json(ApiResponse::success(items)))
+}}
+
+/// Create a new {snake_name}.
+#[utoipa::path(post, path = "/api/{snake_name}s", tag = "{snake_name}s",
+    request_body = Create{pascal_name}Request,
+    responses((status = 201, description = "{pascal_name} created"))
+)]
+pub async fn create(
+    State(state): State<AppState>,
+    Json(payload): Json<Create{pascal_name}Request>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ChopinError> {{
+    let item = services::create_one(&state.db, payload).await?;
+    Ok(Json(ApiResponse::success(item)))
+}}
+
+/// Get a {snake_name} by ID.
+#[utoipa::path(get, path = "/api/{snake_name}s/{{id}}", tag = "{snake_name}s",
+    params(("id" = i32, Path, description = "{pascal_name} ID")),
+    responses(
+        (status = 200, description = "{pascal_name} found"),
+        (status = 404, description = "Not found"),
+    )
+)]
+pub async fn get_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ChopinError> {{
+    let item = services::find_by_id(&state.db, id).await?;
+    Ok(Json(ApiResponse::success(item)))
+}}
+
+/// Update a {snake_name}.
+#[utoipa::path(put, path = "/api/{snake_name}s/{{id}}", tag = "{snake_name}s",
+    params(("id" = i32, Path, description = "{pascal_name} ID")),
+    responses((status = 200, description = "{pascal_name} updated"))
+)]
+pub async fn update(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    Json(payload): Json<Update{pascal_name}Request>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ChopinError> {{
+    let item = services::update_one(&state.db, id, payload).await?;
+    Ok(Json(ApiResponse::success(item)))
+}}
+
+/// Delete a {snake_name}.
+#[utoipa::path(delete, path = "/api/{snake_name}s/{{id}}", tag = "{snake_name}s",
+    params(("id" = i32, Path, description = "{pascal_name} ID")),
+    responses((status = 200, description = "{pascal_name} deleted"))
+)]
+pub async fn remove(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<ApiResponse<()>>, ChopinError> {{
+    services::delete_one(&state.db, id).await?;
+    Ok(Json(ApiResponse::success(())))
+}}
+"#
+    );
+
+    // ── services.rs ──
+    let services_rs = format!(
+        r#"//! Business logic for the {pascal_name} module.
+//!
+//! Services are pure Rust functions — no HTTP types.
+//! They receive a `DatabaseConnection` and return domain types.
+//! This makes them 100% unit-testable without a running server.
+
+use chopin_core::error::ChopinError;
+use sea_orm::DatabaseConnection;
+
+use super::dto::*;
+
+/// Fetch all {snake_name}s.
+pub async fn list_all(
+    _db: &DatabaseConnection,
+) -> Result<Vec<serde_json::Value>, ChopinError> {{
+    // TODO: Replace with actual SeaORM query
+    //   let items = {pascal_name}::find().all(db).await?;
+    Ok(vec![])
+}}
+
+/// Create a new {snake_name}.
+pub async fn create_one(
+    _db: &DatabaseConnection,
+    _payload: Create{pascal_name}Request,
+) -> Result<serde_json::Value, ChopinError> {{
+    // TODO: Implement creation logic
+    Err(ChopinError::Internal("Not implemented yet".into()))
+}}
+
+/// Find a {snake_name} by ID.
+pub async fn find_by_id(
+    _db: &DatabaseConnection,
+    id: i32,
+) -> Result<serde_json::Value, ChopinError> {{
+    // TODO: Implement lookup
+    Err(ChopinError::NotFound(format!("{pascal_name} with id {{}} not found", id)))
+}}
+
+/// Update a {snake_name}.
+pub async fn update_one(
+    _db: &DatabaseConnection,
+    id: i32,
+    _payload: Update{pascal_name}Request,
+) -> Result<serde_json::Value, ChopinError> {{
+    // TODO: Implement update
+    Err(ChopinError::NotFound(format!("{pascal_name} with id {{}} not found", id)))
+}}
+
+/// Delete a {snake_name}.
+pub async fn delete_one(
+    _db: &DatabaseConnection,
+    id: i32,
+) -> Result<(), ChopinError> {{
+    // TODO: Implement deletion
+    Err(ChopinError::NotFound(format!("{pascal_name} with id {{}} not found", id)))
+}}
+"#
+    );
+
+    // ── dto.rs ──
+    let dto_rs = format!(
+        r#"//! Request and response DTOs for the {pascal_name} module.
+
+use serde::{{Deserialize, Serialize}};
+use utoipa::ToSchema;
+
+/// Request body for creating a new {snake_name}.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct Create{pascal_name}Request {{
+    // TODO: Add fields
+    // pub title: String,
+}}
+
+/// Request body for updating a {snake_name}.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct Update{pascal_name}Request {{
+    // TODO: Add fields
+    // pub title: Option<String>,
+}}
+
+/// Public {pascal_name} response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct {pascal_name}Response {{
+    pub id: i32,
+    // TODO: Add fields
+}}
+"#
+    );
+
+    // ── models.rs ──
+    let models_rs = format!(
+        r#"//! SeaORM entities for the {pascal_name} module.
+//!
+//! Generate entities with:
+//!   chopin generate model {pascal_name} title:string body:text --module {snake_name}
+
+// TODO: Add SeaORM entity definitions here.
+// Example:
+//
+// use sea_orm::entity::prelude::*;
+// use serde::{{Deserialize, Serialize}};
+//
+// #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+// #[sea_orm(table_name = "{snake_name}s")]
+// pub struct Model {{
+//     #[sea_orm(primary_key)]
+//     pub id: i32,
+//     pub created_at: chrono::NaiveDateTime,
+//     pub updated_at: chrono::NaiveDateTime,
+// }}
+//
+// #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+// pub enum Relation {{}}
+//
+// impl ActiveModelBehavior for ActiveModel {{}}
+"#
+    );
+
+    // ── Write all files ──
+    let files: Vec<(&str, &str)> = vec![
+        ("mod.rs", &mod_rs),
+        ("routes.rs", &routes_rs),
+        ("handlers.rs", &handlers_rs),
+        ("services.rs", &services_rs),
+        ("dto.rs", &dto_rs),
+        ("models.rs", &models_rs),
+    ];
+
+    for (file, content) in &files {
+        let path = module_dir.join(file);
+        fs::write(&path, content).unwrap_or_else(|_| panic!("Failed to write {}", path.display()));
+    }
+
+    // ── Create test file ──
+    let tests_dir = Path::new("tests");
+    if !tests_dir.exists() {
+        fs::create_dir_all(tests_dir).ok();
+    }
+    let test_file = tests_dir.join(format!("{}_tests.rs", snake_name));
+    if !test_file.exists() {
+        let test_content = format!(
+            r#"//! Integration tests for the {pascal_name} module.
+
+use chopin_core::testing::TestApp;
+
+#[tokio::test]
+async fn test_{snake_name}_list() {{
+    let app = TestApp::new().await;
+    let res = app.get("/api/{snake_name}s").await;
+    assert_eq!(res.status, 200);
+}}
+
+#[tokio::test]
+async fn test_{snake_name}_not_found() {{
+    let app = TestApp::new().await;
+    let res = app.get("/api/{snake_name}s/999").await;
+    assert_eq!(res.status, 404);
+}}
+"#
+        );
+        fs::write(&test_file, test_content).ok();
+    }
+
+    // ── Auto-register in src/apps/mod.rs ──
+    let apps_mod_path = Path::new("src/apps/mod.rs");
+    let mut registered = false;
+    if apps_mod_path.exists() {
+        let content = fs::read_to_string(apps_mod_path).unwrap_or_default();
+        let decl = format!("pub mod {};", snake_name);
+        if !content.contains(&decl) {
+            let mut new_content = content.clone();
+            // Append the pub mod declaration
+            if !new_content.ends_with('\n') {
+                new_content.push('\n');
+            }
+            new_content.push_str(&format!("pub mod {};\n", snake_name));
+            fs::write(apps_mod_path, new_content).ok();
+            registered = true;
+        }
+    }
+
+    // ── Auto-mount in src/main.rs ──
+    let main_rs_path = Path::new("src/main.rs");
+    let mut mounted = false;
+    if main_rs_path.exists() {
+        let content = fs::read_to_string(main_rs_path).unwrap_or_default();
+        let mount_call = format!("{}Module::new()", pascal_name);
+
+        if !content.contains(&mount_call) {
+            let mut new_content = content.clone();
+
+            // Uncomment `mod apps;` if it's still commented out
+            if new_content.contains("// mod apps;") && !new_content.contains("\nmod apps;") {
+                new_content = new_content.replace("// mod apps;", "mod apps;");
+            }
+
+            // Insert .mount_module() after App::new().await?
+            // Look for the pattern: `App::new().await?;` or `App::new().await?`
+            if let Some(pos) = new_content.find("App::new().await?") {
+                // Find the semicolon after App::new().await?
+                if let Some(semi_offset) = new_content[pos..].find(';') {
+                    let insert_pos = pos + semi_offset + 1;
+                    let mount_line = format!(
+                        "\n    let app = app.mount_module(apps::{}::{}Module::new());",
+                        snake_name, pascal_name
+                    );
+                    // Only insert if not already present
+                    if !new_content.contains(&mount_line.trim().to_string()) {
+                        new_content.insert_str(insert_pos, &mount_line);
+                        mounted = true;
+                    }
+                }
+            }
+
+            if new_content != content {
+                fs::write(main_rs_path, new_content).ok();
+            }
+        }
+    }
+
+    // Print summary
+    println!("  ✓ Created app at src/apps/{}/", snake_name);
+    println!("      ├── mod.rs         # ChopinModule implementation");
+    println!("      ├── routes.rs      # Route definitions");
+    println!("      ├── handlers.rs    # HTTP handlers");
+    println!("      ├── services.rs    # Business logic");
+    println!("      ├── dto.rs         # Request/response types");
+    println!("      └── models.rs      # SeaORM entities");
+    println!();
+
+    if registered {
+        println!("  ✓ Registered in src/apps/mod.rs");
+    }
+    if mounted {
+        println!("  ✓ Mounted in src/main.rs");
+    }
+    if test_file.exists() {
+        println!("  ✓ Created tests/{}_tests.rs", snake_name);
+    }
+    println!();
+
+    if !registered || !mounted {
+        println!("  Manual steps (if auto-registration was skipped):");
+        if !registered {
+            println!("    1. Add to src/apps/mod.rs:  pub mod {};", snake_name);
+        }
+        if !mounted {
+            println!(
+                "    2. Add to src/main.rs:      .mount_module(apps::{}::{}Module::new())",
+                snake_name, pascal_name
+            );
+        }
+        println!();
+    }
+
+    println!("  Generate a model:");
+    println!(
+        "    chopin generate model {} title:string body:text --module {}",
+        pascal_name, snake_name
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// chopin generate model <name> [fields...] [--module <mod>]
+// ══════════════════════════════════════════════════════════════
+
+fn generate_model(name: &str, fields: &[String], module: Option<&str>) {
+    let model_name = to_pascal_case(name);
+    let snake_name = to_snake_case(name);
+    let table_name = format!("{}s", snake_name);
+
+    let parsed_fields = parse_fields(fields);
+
+    println!("🎹 Generating model: {}", model_name);
+
+    // Determine target directories based on whether --module is set
+    let (models_dir, migrations_dir, controller_dir) = if let Some(mod_name) = module {
+        let mod_snake = to_snake_case(mod_name);
+        let base = Path::new("src/apps").join(&mod_snake);
+        if !base.exists() {
+            eprintln!(
+                "  ✗ Module '{}' not found. Run `chopin generate module {}` first.",
+                mod_snake, mod_snake
+            );
+            std::process::exit(1);
+        }
+        (base.clone(), Path::new("migrations").to_path_buf(), base)
+    } else {
+        (
+            Path::new("src/models").to_path_buf(),
+            Path::new("src/migrations").to_path_buf(),
+            Path::new("src/controllers").to_path_buf(),
+        )
+    };
+
+    // 1. Generate model entity
+    generate_model_file(
+        &model_name,
+        &snake_name,
+        &table_name,
+        &parsed_fields,
+        &models_dir,
+        module.is_some(),
+    );
+
+    // 2. Generate migration
+    generate_migration_file(&table_name, &parsed_fields, &migrations_dir);
+
+    // 3. Generate controller/handler (only when not inside a module — modules already have handlers)
+    if module.is_none() {
+        generate_controller_for_model(&model_name, &snake_name, &parsed_fields, &controller_dir);
+    }
+
+    println!();
+    if let Some(mod_name) = module {
+        println!(
+            "  Next: Update src/apps/{}/models.rs to include the entity.",
+            to_snake_case(mod_name)
+        );
+        println!(
+            "  Next: Update src/apps/{}/services.rs with query logic.",
+            to_snake_case(mod_name)
+        );
+    } else {
+        println!("  Next: Register in src/models/mod.rs and src/controllers/mod.rs");
+    }
 }
 
 fn generate_model_file(
@@ -236,10 +1035,11 @@ fn generate_model_file(
     snake_name: &str,
     table_name: &str,
     fields: &[(&str, &str)],
+    target_dir: &Path,
+    inside_module: bool,
 ) {
-    let models_dir = Path::new("src/models");
-    if !models_dir.exists() {
-        fs::create_dir_all(models_dir).expect("Failed to create src/models");
+    if !target_dir.exists() {
+        fs::create_dir_all(target_dir).expect("Failed to create directory");
     }
 
     let mut model_fields = String::new();
@@ -248,7 +1048,7 @@ fn generate_model_file(
 
     for (field_name, field_type) in fields {
         let rust_type = field_to_rust_type(field_type);
-        model_fields.push_str(&format!("\n    pub {}: {},\n", field_name, rust_type));
+        model_fields.push_str(&format!("    pub {}: {},\n", field_name, rust_type));
         response_fields.push_str(&format!("    pub {}: {},\n", field_name, rust_type));
         response_from_fields.push_str(&format!(
             "            {}: model.{}.clone(),\n",
@@ -280,8 +1080,7 @@ use utoipa::ToSchema;
 pub struct Model {{
     #[sea_orm(primary_key)]
     pub id: i32,
-{model_fields}
-    pub created_at: chrono::NaiveDateTime,
+{model_fields}    pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }}
 
@@ -308,25 +1107,23 @@ impl From<Model> for {model_name}Response {{
 "#
     );
 
-    let path = models_dir.join(format!("{}.rs", snake_name));
+    let filename = if inside_module {
+        format!("{}_entity.rs", snake_name)
+    } else {
+        format!("{}.rs", snake_name)
+    };
+    let path = target_dir.join(&filename);
     fs::write(&path, content).expect("Failed to write model file");
     println!("  ✓ Created {}", path.display());
 }
 
-fn generate_migration_file(
-    _model_name: &str,
-    _snake_name: &str,
-    table_name: &str,
-    fields: &[(&str, &str)],
-) {
-    let migrations_dir = Path::new("src/migrations");
+fn generate_migration_file(table_name: &str, fields: &[(&str, &str)], migrations_dir: &Path) {
     if !migrations_dir.exists() {
-        fs::create_dir_all(migrations_dir).expect("Failed to create src/migrations");
+        fs::create_dir_all(migrations_dir).expect("Failed to create migrations dir");
     }
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let migration_name = format!("m{}_create_{}_table", timestamp, table_name);
-
     let iden_name = to_pascal_case(table_name);
 
     let mut columns = String::new();
@@ -404,10 +1201,14 @@ enum {iden_name} {{
     println!("  ✓ Created {}", path.display());
 }
 
-fn generate_controller_for_model(model_name: &str, snake_name: &str, fields: &[(&str, &str)]) {
-    let controllers_dir = Path::new("src/controllers");
+fn generate_controller_for_model(
+    model_name: &str,
+    snake_name: &str,
+    fields: &[(&str, &str)],
+    controllers_dir: &Path,
+) {
     if !controllers_dir.exists() {
-        fs::create_dir_all(controllers_dir).expect("Failed to create src/controllers");
+        fs::create_dir_all(controllers_dir).expect("Failed to create controllers dir");
     }
 
     let plural_name = format!("{}s", snake_name);
@@ -425,18 +1226,19 @@ fn generate_controller_for_model(model_name: &str, snake_name: &str, fields: &[(
     }
 
     let content = format!(
-        r#"use chopin_core::{{extract::{{Path, State}}, routing::{{get, post}}, Router}};
+        r#"use axum::extract::{{Path, State}};
+use axum::Router;
+use chopin_core::controllers::AppState;
+use chopin_core::error::ChopinError;
+use chopin_core::extractors::Json;
+use chopin_core::response::ApiResponse;
+use chopin_core::routing::{{get, post}};
 use chrono::Utc;
 use sea_orm::{{ActiveModelTrait, EntityTrait, Set}};
 use serde::{{Deserialize, Serialize}};
 use utoipa::ToSchema;
 
-use crate::error::ChopinError;
-use crate::extractors::Json;
 use crate::models::{snake_name}::{{self, Entity as {model_name}, {model_name}Response}};
-use crate::response::ApiResponse;
-
-use super::AppState;
 
 // ── Request types ──
 
@@ -455,75 +1257,56 @@ pub fn routes() -> Router<AppState> {{
 // ── Handlers ──
 
 /// List all {plural_name}.
-#[utoipa::path(
-    get,
-    path = "/api/{plural_name}",
-    responses(
-        (status = 200, description = "List of {plural_name}", body = ApiResponse<Vec<{model_name}Response>>),
-    ),
-    tag = "{plural_name}"
+#[utoipa::path(get, path = "/api/{plural_name}", tag = "{plural_name}",
+    responses((status = 200, description = "List of {plural_name}", body = ApiResponse<Vec<{model_name}Response>>))
 )]
 async fn list(
     State(state): State<AppState>,
-) -> Result<ApiResponse<Vec<{model_name}Response>>, ChopinError> {{
-    let items = {model_name}::find()
-        .all(&state.db)
-        .await?;
-
+) -> Result<Json<ApiResponse<Vec<{model_name}Response>>>, ChopinError> {{
+    let items = {model_name}::find().all(&state.db).await?;
     let response: Vec<{model_name}Response> = items.into_iter().map(|m| m.into()).collect();
-    Ok(ApiResponse::success(response))
+    Ok(Json(ApiResponse::success(response)))
 }}
 
 /// Create a new {snake_name}.
-#[utoipa::path(
-    post,
-    path = "/api/{plural_name}",
+#[utoipa::path(post, path = "/api/{plural_name}", tag = "{plural_name}",
     request_body = Create{model_name}Request,
     responses(
         (status = 201, description = "{model_name} created", body = ApiResponse<{model_name}Response>),
-        (status = 400, description = "Invalid input")
-    ),
-    tag = "{plural_name}"
+        (status = 400, description = "Invalid input"),
+    )
 )]
 async fn create(
     State(state): State<AppState>,
     Json(payload): Json<Create{model_name}Request>,
-) -> Result<ApiResponse<{model_name}Response>, ChopinError> {{
+) -> Result<Json<ApiResponse<{model_name}Response>>, ChopinError> {{
     let now = Utc::now().naive_utc();
-
     let new_item = {snake_name}::ActiveModel {{
 {create_fields_set}        created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
     }};
-
     let model = new_item.insert(&state.db).await?;
-    Ok(ApiResponse::success({model_name}Response::from(model)))
+    Ok(Json(ApiResponse::success({model_name}Response::from(model))))
 }}
 
-/// Get a single {snake_name} by ID.
-#[utoipa::path(
-    get,
-    path = "/api/{plural_name}/{{id}}",
-    params(
-        ("id" = i32, Path, description = "{model_name} ID")
-    ),
+/// Get a {snake_name} by ID.
+#[utoipa::path(get, path = "/api/{plural_name}/{{id}}", tag = "{plural_name}",
+    params(("id" = i32, Path, description = "{model_name} ID")),
     responses(
         (status = 200, description = "{model_name} found", body = ApiResponse<{model_name}Response>),
-        (status = 404, description = "{model_name} not found")
-    ),
-    tag = "{plural_name}"
+        (status = 404, description = "Not found"),
+    )
 )]
 async fn get_by_id(
     State(state): State<AppState>,
     Path(id): Path<i32>,
-) -> Result<ApiResponse<{model_name}Response>, ChopinError> {{
+) -> Result<Json<ApiResponse<{model_name}Response>>, ChopinError> {{
     let item = {model_name}::find_by_id(id)
         .one(&state.db)
         .await?
-        .ok_or_else(|| ChopinError::NotFound(format!("{model_name} with id {{}} not found", id)))?;
-
-    Ok(ApiResponse::success({model_name}Response::from(item)))
+        .ok_or_else(|| ChopinError::NotFound(format!("{model_name} {{}} not found", id)))?;
+    Ok(Json(ApiResponse::success({model_name}Response::from(item))))
 }}
 "#
     );
@@ -533,11 +1316,14 @@ async fn get_by_id(
     println!("  ✓ Created {}", path.display());
 }
 
-// ── Generate Controller (standalone) ──
+// ══════════════════════════════════════════════════════════════
+// chopin generate controller <name>
+// ══════════════════════════════════════════════════════════════
 
 fn generate_controller(name: &str) {
     let snake_name = to_snake_case(name);
     let model_name = to_pascal_case(name);
+    let plural_name = format!("{}s", snake_name);
 
     println!("🎹 Generating controller: {}", snake_name);
 
@@ -546,18 +1332,14 @@ fn generate_controller(name: &str) {
         fs::create_dir_all(controllers_dir).expect("Failed to create src/controllers");
     }
 
-    let plural_name = format!("{}s", snake_name);
-
     let content = format!(
-        r#"use chopin_core::{{extract::{{Path, State}}, routing::get, Router}};
-use serde::{{Deserialize, Serialize}};
-use utoipa::ToSchema;
-
-use crate::error::ChopinError;
-use crate::extractors::Json;
-use crate::response::ApiResponse;
-
-use super::AppState;
+        r#"use axum::extract::{{Path, State}};
+use axum::Router;
+use chopin_core::controllers::AppState;
+use chopin_core::error::ChopinError;
+use chopin_core::extractors::Json;
+use chopin_core::response::ApiResponse;
+use chopin_core::routing::get;
 
 // ── Routes ──
 
@@ -570,40 +1352,30 @@ pub fn routes() -> Router<AppState> {{
 // ── Handlers ──
 
 /// List all {plural_name}.
-#[utoipa::path(
-    get,
-    path = "/api/{plural_name}",
-    responses(
-        (status = 200, description = "List of {plural_name}"),
-    ),
-    tag = "{plural_name}"
+#[utoipa::path(get, path = "/api/{plural_name}", tag = "{plural_name}",
+    responses((status = 200, description = "List of {plural_name}"))
 )]
 async fn list(
-    State(state): State<AppState>,
-) -> Result<ApiResponse<Vec<serde_json::Value>>, ChopinError> {{
+    State(_state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>, ChopinError> {{
     // TODO: Replace with actual model query
-    Ok(ApiResponse::success(vec![]))
+    Ok(Json(ApiResponse::success(vec![])))
 }}
 
-/// Get a single {snake_name} by ID.
-#[utoipa::path(
-    get,
-    path = "/api/{plural_name}/{{id}}",
-    params(
-        ("id" = i32, Path, description = "{model_name} ID")
-    ),
+/// Get a {snake_name} by ID.
+#[utoipa::path(get, path = "/api/{plural_name}/{{id}}", tag = "{plural_name}",
+    params(("id" = i32, Path, description = "{model_name} ID")),
     responses(
         (status = 200, description = "{model_name} found"),
-        (status = 404, description = "{model_name} not found")
-    ),
-    tag = "{plural_name}"
+        (status = 404, description = "Not found"),
+    )
 )]
 async fn get_by_id(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Path(id): Path<i32>,
-) -> Result<ApiResponse<serde_json::Value>, ChopinError> {{
+) -> Result<Json<ApiResponse<serde_json::Value>>, ChopinError> {{
     // TODO: Replace with actual model query
-    Err(ChopinError::NotFound(format!("{model_name} with id {{}} not found", id)))
+    Err(ChopinError::NotFound(format!("{model_name} {{}} not found", id)))
 }}
 "#
     );
@@ -612,7 +1384,10 @@ async fn get_by_id(
     fs::write(&path, content).expect("Failed to write controller file");
     println!("  ✓ Created {}", path.display());
     println!();
-    println!("  Next: Register the controller in `src/controllers/mod.rs` and `src/routing.rs`");
+    println!(
+        "  Hint: Consider using `chopin generate module {}` for a full MVSR module.",
+        snake_name
+    );
 }
 
 // ── DB Migrate ──
@@ -955,7 +1730,21 @@ fn show_project_info() {
         println!("  Config:  No .env file");
     }
 
-    // Check for models
+    // Check for feature modules (new MVSR structure)
+    let apps_dir = Path::new("src/apps");
+    if apps_dir.exists() {
+        let module_count = fs::read_dir(apps_dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                    .count()
+            })
+            .unwrap_or(0);
+        println!("  Modules: {} feature module(s)", module_count);
+    }
+
+    // Check for models (flat legacy structure)
     let models_dir = Path::new("src/models");
     if models_dir.exists() {
         let model_count = fs::read_dir(models_dir)
@@ -969,10 +1758,12 @@ fn show_project_info() {
                     .count()
             })
             .unwrap_or(0);
-        println!("  Models:  {} model file(s)", model_count);
+        if model_count > 0 {
+            println!("  Models:  {} model file(s)", model_count);
+        }
     }
 
-    // Check for controllers
+    // Check for controllers (flat legacy structure)
     let controllers_dir = Path::new("src/controllers");
     if controllers_dir.exists() {
         let controller_count = fs::read_dir(controllers_dir)
@@ -986,24 +1777,33 @@ fn show_project_info() {
                     .count()
             })
             .unwrap_or(0);
-        println!("  Ctrls:   {} controller file(s)", controller_count);
+        if controller_count > 0 {
+            println!("  Ctrls:   {} controller file(s)", controller_count);
+        }
     }
 
-    // Check for migrations
-    let migrations_dir = Path::new("src/migrations");
-    if migrations_dir.exists() {
-        let migration_count = fs::read_dir(migrations_dir)
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .filter(|e| {
-                        let name = e.file_name().to_string_lossy().to_string();
-                        name.starts_with('m') && name.ends_with(".rs")
-                    })
-                    .count()
-            })
-            .unwrap_or(0);
-        println!("  Migrs:   {} migration(s)", migration_count);
+    // Check for migrations (both locations)
+    for migrations_path in &["migrations", "src/migrations"] {
+        let migrations_dir = Path::new(migrations_path);
+        if migrations_dir.exists() {
+            let migration_count = fs::read_dir(migrations_dir)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .filter(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            name.starts_with('m') && name.ends_with(".rs")
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+            if migration_count > 0 {
+                println!(
+                    "  Migrs:   {} migration(s) ({})",
+                    migration_count, migrations_path
+                );
+            }
+        }
     }
 
     // Check for database file
@@ -1038,144 +1838,7 @@ fn run_dev_server() {
     }
 }
 
-// ── Create Project ──
-
-fn create_project(name: &str) {
-    let project_dir = Path::new(name);
-
-    if project_dir.exists() {
-        eprintln!("Error: Directory '{}' already exists", name);
-        std::process::exit(1);
-    }
-
-    // Create directory structure
-    let dirs = ["", "src", "src/models", "src/controllers", "src/migrations"];
-
-    for dir in &dirs {
-        fs::create_dir_all(project_dir.join(dir)).expect("Failed to create directory");
-    }
-
-    // Cargo.toml
-    let cargo_toml = format!(
-        r#"[package]
-name = "{name}"
-version = "0.2.0"
-edition = "2021"
-
-[dependencies]
-chopin-core = {{ version = "0.2.0" }}
-tokio = {{ version = "1", features = ["rt-multi-thread", "macros"] }}
-serde = {{ version = "1", features = ["derive"] }}
-tracing = "0.1"
-tracing-subscriber = "0.3"
-
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-strip = true
-"#
-    );
-
-    // main.rs
-    let main_rs = r#"use tracing_subscriber;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
-
-    let app = chopin_core::App::new().await?;
-    app.run().await?;
-
-    Ok(())
-}
-"#;
-
-    // .env.example
-    let env_example = r#"# Database
-DATABASE_URL=sqlite://app.db?mode=rwc
-
-# JWT
-JWT_SECRET=your-secret-key-here
-JWT_EXPIRY_HOURS=24
-
-# Server
-SERVER_PORT=3000
-SERVER_HOST=127.0.0.1
-
-# Environment
-ENVIRONMENT=development
-
-# Logging (see: https://docs.rs/tracing-subscriber)
-# Options: trace, debug, info, warn, error
-RUST_LOG=debug
-
-# Cache (optional - uses in-memory by default)
-# REDIS_URL=redis://127.0.0.1:6379
-
-# File Uploads
-UPLOAD_DIR=./uploads
-MAX_UPLOAD_SIZE=10485760
-"#;
-
-    // .gitignore
-    let gitignore = r#"/target/
-*.rs.bk
-Cargo.lock
-.env
-.DS_Store
-*.db
-"#;
-
-    // .cargo/config.toml for M4 optimization
-    let cargo_dir = project_dir.join(".cargo");
-    fs::create_dir_all(&cargo_dir).expect("Failed to create .cargo");
-
-    let cargo_config = r#"[target.'cfg(target_arch = "aarch64")']
-rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+aes,+neon"]
-"#;
-
-    // README.md
-    let readme = format!(
-        r#"# {name}
-
-Built with [Chopin](https://github.com/yourusername/chopin) — the high-level Rust Web Framework.
-
-## Quick Start
-
-```bash
-cargo run
-```
-
-Server starts at `http://127.0.0.1:3000`
-
-API docs at `http://127.0.0.1:3000/api-docs`
-
-## Generate Models
-
-```bash
-chopin generate model Post title:string body:text
-```
-"#
-    );
-
-    fs::write(project_dir.join("Cargo.toml"), cargo_toml).expect("Failed to write Cargo.toml");
-    fs::write(project_dir.join("src/main.rs"), main_rs).expect("Failed to write main.rs");
-    fs::write(project_dir.join(".env.example"), env_example).expect("Failed to write .env.example");
-    fs::write(project_dir.join(".env"), env_example).expect("Failed to write .env");
-    fs::write(project_dir.join(".gitignore"), gitignore).expect("Failed to write .gitignore");
-    fs::write(cargo_dir.join("config.toml"), cargo_config).expect("Failed to write cargo config");
-    fs::write(project_dir.join("README.md"), readme).expect("Failed to write README.md");
-
-    println!();
-    println!("  ✓ Project '{}' created successfully!", name);
-    println!();
-    println!("  Next steps:");
-    println!("    cd {}", name);
-    println!("    cargo run");
-    println!();
-    println!("  API docs: http://127.0.0.1:3000/api-docs");
-}
+// (create_project is defined above with the MVSR module structure)
 
 fn export_openapi(format: &str, output: &str) {
     use chopin_core::openapi::ApiDoc;

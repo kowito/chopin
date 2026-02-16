@@ -2,6 +2,8 @@
 
 The simplest possible Chopin application. One file, zero config.
 
+Perfect for learning the basics before moving to [modular architecture](../../docs/modular-architecture.md).
+
 ## Run
 
 ```bash
@@ -52,5 +54,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 That's it. Two lines of actual code.
+
+## Next Steps
+
+- See [basic-api example](../basic-api/) for MVSR pattern with modules
+- Read [Modular Architecture Guide](../../docs/modular-architecture.md)
+- Check [Multi-Tenancy Guide](../../docs/multi-tenancy.md)
 
 **Note:** The `init_logging()` call enables console output for server startup, database migrations, and HTTP request traces. Without it, you won't see any logs. See the [Debugging & Logging Guide](../../docs/debugging-and-logging.md) for more details.

@@ -1,8 +1,36 @@
 # Chopin Basic API Example
 
-A complete CRUD REST API built with the Chopin framework.
+A complete CRUD REST API demonstrating **MVSR pattern** (Model-View-Service-Router) and modular architecture.
 
-Demonstrates controllers, models, migrations, pagination, OpenAPI docs, and integration tests.
+This example shows:
+- ChopinModule composition
+- Service layer (100% unit-testable business logic)
+- Handler layer (thin HTTP adapters)
+- OpenAPI documentation
+- Pagination and validation
+- Integration tests
+
+## MVSR Architecture
+
+```
+┌─────────────┐
+│   Router    │ ← Routes: /posts, /posts/:id
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│  Handlers   │ ← HTTP layer: list_posts(), create_post()
+│   (View)    │   Extracts State, validates input, calls services
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│  Services   │ ← Business logic: get_posts(db, page), create_post(db, data)
+│             │   Pure functions, no HTTP dependencies
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│   Models    │ ← Database entities: Post
+└─────────────┘
+```
 
 ## Endpoints
 
@@ -53,21 +81,36 @@ curl -X DELETE http://localhost:3000/api/posts/1
 cargo test -p chopin-basic-api
 ```
 
-## Project Structure
+## Project Structure (MVSR Pattern)
 
 ```
 basic-api/
 ├── src/
-│   ├── main.rs            # Server setup, OpenAPI config
-│   ├── controllers/
-│   │   ├── mod.rs          # Module declarations
-│   │   └── posts.rs        # CRUD handlers + request DTOs
+│   ├── main.rs              # Server setup, ChopinModule mounting
+│   ├── module.rs            # PostModule (implements ChopinModule trait)
+│   ├── services/
+│   │   └── posts.rs         # Business logic (100% unit-testable)
+│   ├── handlers/
+│   │   └── posts.rs         # HTTP handlers (thin adapters)
 │   ├── models/
-│   │   ├── mod.rs          # Module declarations
-│   │   └── post.rs         # SeaORM entity + response DTO
+│   │   └── post.rs          # SeaORM entity + DTOs
 │   └── migrations/
-│       ├── mod.rs          # Migrator
-│       └── m20250101_*.rs  # Create posts table
+│       ├── mod.rs           # Migrator
+│       └── m20250101_*.rs   # Create posts table
 └── tests/
-    └── integration_tests.rs
+    ├── services_tests.rs    # Unit tests for business logic
+    └── integration_tests.rs # Integration tests for API endpoints
 ```
+
+## Learning Path
+
+1. **Read the code** — Start with `src/main.rs` to see ChopinModule mounting
+2. **Services first** — Check `services/posts.rs` for pure business logic
+3. **Handlers next** — See `handlers/posts.rs` for HTTP adapters
+4. **Run tests** — `cargo test -p chopin-basic-api` to see unit + integration tests
+
+## References
+
+- [Modular Architecture Guide](../../docs/modular-architecture.md) — Complete MVSR pattern details
+- [ARCHITECTURE.md](../../ARCHITECTURE.md) — System design and principles
+- [Debugging & Logging](../../docs/debugging-and-logging.md) — Enable request traces

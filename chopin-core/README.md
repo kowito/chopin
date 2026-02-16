@@ -7,23 +7,32 @@
 [![Rust](https://img.shields.io/badge/rust-1.70+-blue.svg)](https://www.rust-lang.org)
 [![GitHub stars](https://img.shields.io/github/stars/kowito/chopin.svg)](https://github.com/kowito/chopin)
 
-**Chopin: High-fidelity engineering for the modern virtuoso.**
+**Django meets Rust**  
+The composable web framework that gets out of your way.
 
-A high-performance Rust web framework combining the ease of Axum with production-ready features like authentication, database integration, caching, and file uploads—all optimized for extreme throughput.
+A high-performance modular Rust web framework optimized for 650K+ req/s throughput. Built on Axum and SeaORM with zero-cost abstraction, Django-inspired modularity, and compile-time verification.
 
 ## Features
 
-- **Unified ChopinService** — FastRoute zero-alloc fast path + Axum Router for all other routes
-- **Per-route trade-offs** — `.cors()`, `.cache_control()`, `.methods()`, `.header()` decorators (all pre-computed, zero per-request cost)
-- **SO_REUSEPORT** — Multi-core accept loops with per-core tokio runtimes (enable with `REUSEPORT=true`)
-- **FastRoute API** — Zero-allocation endpoints with per-route CORS, method filtering, and custom headers
-- **Built-in Auth** — JWT + Argon2id with signup/login endpoints out of the box
-- **Role-Based Access Control** — User, Moderator, Admin, SuperAdmin with extractors and middleware
+### Modular Architecture
+- **ChopinModule trait** — Composable modules that self-register routes, services, and migrations
+- **Hub-and-spoke design** — No circular dependencies, explicit module composition
+- **MVSR Pattern** — Model-View-Service-Router separation for 100% unit-testable services
+
+### Performance
+- **FastRoute** — Zero-alloc static responses (~35ns/req) for high-traffic endpoints
+- **SO_REUSEPORT** — Per-core accept loops with single-threaded tokio runtimes
+- **SIMD JSON** — `sonic-rs` achieves 40% faster serialization vs serde_json
+- **mimalloc** — Microsoft's high-performance allocator
+- **Cached headers** — Date header updated every 500ms, lock-free
+
+### Production Ready
+- **Built-in Auth** — JWT + Argon2id, 2FA/TOTP, refresh tokens, device tracking
+- **Role-Based Access Control** — User, Moderator, Admin, SuperAdmin with extractors
 - **SeaORM Database** — SQLite, PostgreSQL, MySQL with auto-migrations
 - **OpenAPI Docs** — Auto-generated Scalar UI at `/api-docs`
 - **Caching** — In-memory or Redis support
 - **File Uploads** — Local filesystem or S3-compatible (R2, MinIO)
-- **GraphQL** — Optional async-graphql integration
 - **Testing** — `TestApp` with in-memory SQLite and HTTP client
 
 ## Installation
@@ -32,16 +41,18 @@ A high-performance Rust web framework combining the ease of Axum with production
 [dependencies]
 chopin-core = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+sea-orm = { version = "1", features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
 ```
 
 ## Quick Start
+
+### Simple App
 
 ```rust
 use chopin_core::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging to see request traces
     init_logging();
     
     let app = App::new().await?;
@@ -49,6 +60,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+### Modular App with ChopinModule
+
+```rust
+use chopin_core::prelude::*;
+
+// Define a module using MVSR pattern
+pub struct BlogModule;
+
+#[async_trait]
+impl ChopinModule for BlogModule {
+    fn name(&self) -> &'static str {
+        "blog"
+    }
+
+    async fn migrations(&self) -> Vec<Box<dyn MigrationTrait>> {
+        vec![Box::new(m20240101_create_posts::Migration)]
+    }
+
+    fn routes(&self) -> Router<AppState> {
+        Router::new()
+            .route("/posts", get(handlers::list_posts).post(handlers::create_post))
+            .route("/posts/:id", get(handlers::get_post).delete(handlers::delete_post))
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_logging();
+    
+    let app = App::new().await?
+        .mount_module(BlogModule)  // Self-registers routes & migrations
+        .build();
+    
+    app.run().await?;
+    Ok(())
+}
+```
+
+See [Modular Architecture Guide](https://github.com/kowito/chopin/blob/main/docs/modular-architecture.md) for complete details.
 
 ### With Logging and Debugging
 
@@ -105,6 +156,8 @@ This enables:
 
 See the [main repository](https://github.com/kowito/chopin) for comprehensive guides:
 
+- [**Modular Architecture**](https://github.com/kowito/chopin/blob/main/docs/modular-architecture.md) — ChopinModule trait, MVSR pattern, hub-and-spoke design
+- [**ARCHITECTURE.md**](https://github.com/kowito/chopin/blob/main/ARCHITECTURE.md) — Complete system design and component architecture
 - [Debugging & Logging](https://github.com/kowito/chopin/blob/main/docs/debugging-and-logging.md) — Enable request logging (required for debugging!)
 - [JSON Performance](https://github.com/kowito/chopin/blob/main/docs/json-performance.md) — SIMD JSON optimization guide
 - [API Reference](https://docs.rs/chopin-core) — Complete API documentation

@@ -46,7 +46,7 @@
                     <li><a href="#configuration" class="toc-link">Configuration</a></li>
                     <li><a href="#database" class="toc-link">Database & Models</a></li>
                     <li><a href="#migrations" class="toc-link">Migrations</a></li>
-                    <li><a href="#controllers" class="toc-link">Controllers & Routing</a></li>
+                    <li><a href="#modules" class="toc-link">Modules & Routing (MVSR)</a></li>
                     <li><a href="#authentication" class="toc-link">Authentication</a></li>
                     <li><a href="#security" class="toc-link">Security Features</a></li>
                     <li><a href="#roles" class="toc-link">Roles & Permissions</a></li>
@@ -94,16 +94,32 @@ cargo install chopin-cli</code></pre>
 chopin new my-api
 <span class="kw">cd</span> my-api
 
-<span class="comment"># Your project structure:</span>
+<span class="comment"># Your project structure (MVSR architecture):</span>
 <span class="comment"># my-api/</span>
 <span class="comment">#   Cargo.toml</span>
 <span class="comment">#   .env</span>
 <span class="comment">#   src/</span>
-<span class="comment">#     main.rs</span>
-<span class="comment">#     lib.rs</span>
-<span class="comment">#     controllers/</span>
-<span class="comment">#     models/</span>
-<span class="comment">#     migrations/</span></code></pre>
+<span class="comment">#     main.rs          # The "Composer" — mounts all modules</span>
+<span class="comment">#     apps/            # Feature modules (one folder per feature)</span>
+<span class="comment">#       mod.rs</span>
+<span class="comment">#     shared/          # Cross-cutting types &amp; utilities</span>
+<span class="comment">#       mod.rs</span>
+<span class="comment">#   migrations/        # App-level database migrations</span>
+<span class="comment">#   tests/             # Integration tests</span></code></pre>
+
+                <h3>Add a feature module (Django-style)</h3>
+<pre><code><span class="comment"># Create a self-contained module with handlers, services, routes, etc.</span>
+chopin startapp blog
+
+<span class="comment"># This generates src/apps/blog/ with:</span>
+<span class="comment">#   mod.rs        — ChopinModule implementation</span>
+<span class="comment">#   handlers.rs   — HTTP handler functions</span>
+<span class="comment">#   services.rs   — Pure business logic</span>
+<span class="comment">#   routes.rs     — Route definitions</span>
+<span class="comment">#   dto.rs        — Request/response types</span>
+<span class="comment">#   models.rs     — SeaORM entities</span>
+<span class="comment">#</span>
+<span class="comment"># Also auto-registers in src/apps/mod.rs and mounts in src/main.rs!</span></code></pre>
 
                 <h3>Or add to an existing project</h3>
 <pre><code><span class="comment"># Add chopin as a dependency</span>
@@ -337,11 +353,14 @@ app.run().<span class="kw">await</span>?;</code></pre>
 <span class="comment">// connect_timeout: 8s, idle_timeout: 8s</span></code></pre>
 
                 <h3>Defining a model</h3>
-                <p>Use the CLI to scaffold, or define manually:</p>
-<pre><code><span class="comment"># Generate model + migration + controller</span>
+                <p>Use the CLI to scaffold inside a module, or define manually:</p>
+<pre><code><span class="comment"># Generate model inside a module (recommended)</span>
+chopin generate model Post title:string body:text published:bool --module blog
+
+<span class="comment"># Or generate at the project root level</span>
 chopin generate model Post title:string body:text published:bool</code></pre>
 
-<pre><code><span class="comment">// src/models/post.rs</span>
+<pre><code><span class="comment">// src/apps/blog/models.rs (when using --module blog)</span>
 <span class="kw">use</span> chrono::NaiveDateTime;
 <span class="kw">use</span> sea_orm::entity::prelude::*;
 <span class="kw">use</span> serde::{Deserialize, Serialize};
@@ -421,7 +440,7 @@ Post::delete_by_id(<span class="num">1</span>).exec(&db).<span class="kw">await<
                 <h2>Migrations</h2>
                 <p>Migrations run <strong>automatically on startup</strong>. Chopin uses SeaORM's migration system &mdash; define them as Rust code, and they're applied when the app boots.</p>
 
-<pre><code><span class="comment">// src/migrations/m20250101_000001_create_posts_table.rs</span>
+<pre><code><span class="comment">// migrations/m20250101_000001_create_posts_table.rs</span>
 <span class="kw">use</span> sea_orm_migration::{prelude::*, schema::*};
 
 <span class="attr">#[derive(DeriveMigrationName)]</span>
@@ -459,7 +478,7 @@ Post::delete_by_id(<span class="num">1</span>).exec(&db).<span class="kw">await<
 }</code></pre>
 
                 <h3>Register migrations</h3>
-<pre><code><span class="comment">// src/migrations/mod.rs</span>
+<pre><code><span class="comment">// migrations/mod.rs</span>
 <span class="kw">pub use</span> sea_orm_migration::prelude::*;
 
 <span class="kw">mod</span> m20250101_000001_create_posts_table;
@@ -490,11 +509,32 @@ chopin db status
 chopin db reset</code></pre>
             </section>
 
-            <!-- 7. Controllers & Routing -->
-            <section id="controllers" class="tutorial-section">
+            <!-- 7. Modules & Routing (MVSR) -->
+            <section id="modules" class="tutorial-section">
                 <div class="section-number">07</div>
-                <h2>Controllers & Routing</h2>
-                <p>Controllers are Axum handlers grouped into modules. Chopin follows the standard Axum routing pattern with shared application state.</p>
+                <h2>Modules & Routing (MVSR)</h2>
+                <p>Chopin organises code into <strong>feature modules</strong> using the <strong>MVSR pattern</strong> (Model–View/Handler–Service–Router). Each module is a self-contained folder under <code>src/apps/</code>, inspired by Django's <code>startapp</code>.</p>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Why modules?</strong> Each feature (blog, billing, inventory) lives in its own folder with its own routes, handlers, services, models, and DTOs. Modules never depend on each other — only on <code>chopin-core</code> and <code>src/shared/</code>.
+                    </div>
+                </div>
+
+                <h3>Create a module (Django-style)</h3>
+<pre><code><span class="comment"># Create a blog module with full MVSR scaffold</span>
+chopin startapp blog
+
+<span class="comment"># This creates src/apps/blog/ with:</span>
+<span class="comment">#   mod.rs        — ChopinModule trait implementation</span>
+<span class="comment">#   handlers.rs   — HTTP handler functions (thin adapters)</span>
+<span class="comment">#   services.rs   — Pure business logic (unit-testable)</span>
+<span class="comment">#   routes.rs     — Route definitions</span>
+<span class="comment">#   dto.rs        — Request/response types</span>
+<span class="comment">#   models.rs     — SeaORM entities</span>
+<span class="comment">#</span>
+<span class="comment"># Auto-registers in src/apps/mod.rs and mounts in src/main.rs!</span></code></pre>
 
                 <h3>Application state</h3>
 <pre><code><span class="comment">// Chopin provides this built-in:</span>
@@ -505,52 +545,126 @@ chopin db reset</code></pre>
     <span class="kw">pub</span> cache: Option&lt;CacheService&gt;,
 }</code></pre>
 
-                <h3>Defining routes</h3>
-<pre><code><span class="comment">// src/controllers/posts.rs</span>
-<span class="kw">use</span> chopin_core::{extract::{Path, Query, State}, routing::get, Router};
-<span class="kw">use</span> chopin_core::response::ApiResponse;
-<span class="kw">use</span> crate::AppState;
+                <h3>Module structure</h3>
+                <p>Here's what a complete blog module looks like:</p>
+
+<h4>src/apps/blog/routes.rs</h4>
+<pre><code><span class="kw">use</span> axum::Router;
+<span class="kw">use</span> chopin_core::controllers::AppState;
+<span class="kw">use</span> chopin_core::routing::{get, post, put, delete};
+<span class="kw">use</span> super::handlers;
 
 <span class="kw">pub fn</span> <span class="fn">routes</span>() -> Router&lt;AppState&gt; {
-    Router::new()
-        .route(<span class="str">"/api/posts"</span>, get(list_posts).post(create_post))
-        .route(<span class="str">"/api/posts/{id}"</span>, get(get_post).put(update_post).delete(delete_post))
+    Router::new().nest(
+        <span class="str">"/api/blogs"</span>,
+        Router::new()
+            .route(<span class="str">"/"</span>, get(handlers::list).post(handlers::create))
+            .route(<span class="str">"/{id}"</span>, get(handlers::get_by_id).put(handlers::update).delete(handlers::remove)),
+    )
+}</code></pre>
+
+<h4>src/apps/blog/handlers.rs</h4>
+<pre><code><span class="comment">// Handlers are thin adapters: extract request → call service → return response</span>
+<span class="kw">use</span> axum::extract::{Path, State};
+<span class="kw">use</span> chopin_core::controllers::AppState;
+<span class="kw">use</span> chopin_core::error::ChopinError;
+<span class="kw">use</span> chopin_core::extractors::Json;
+<span class="kw">use</span> chopin_core::response::ApiResponse;
+<span class="kw">use</span> super::{dto::*, services};
+
+<span class="kw">pub async fn</span> <span class="fn">list</span>(
+    State(state): State&lt;AppState&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;Vec&lt;BlogResponse&gt;&gt;&gt;, ChopinError&gt; {
+    <span class="kw">let</span> items = services::list_all(&state.db).<span class="kw">await</span>?;
+    <span class="type">Ok</span>(Json(ApiResponse::success(items)))
 }
 
-<span class="kw">pub async fn</span> <span class="fn">list_posts</span>(
+<span class="kw">pub async fn</span> <span class="fn">create</span>(
     State(state): State&lt;AppState&gt;,
-    Query(pagination): Query&lt;Pagination&gt;,
-) -> <span class="type">Result</span>&lt;chopin_core::Json&lt;ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;&gt;, StatusCode&gt; {
-    <span class="kw">let</span> posts = Post::find()
-        .order_by_desc(post::Column::CreatedAt)
-        .offset(pagination.clamped().offset)
-        .limit(pagination.clamped().limit)
-        .all(&state.db).<span class="kw">await</span>
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Json(payload): Json&lt;CreateBlogRequest&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;BlogResponse&gt;&gt;, ChopinError&gt; {
+    <span class="kw">let</span> item = services::create_one(&state.db, payload).<span class="kw">await</span>?;
+    <span class="type">Ok</span>(Json(ApiResponse::success(item)))
+}</code></pre>
 
-    <span class="type">Ok</span>(chopin_core::Json(ApiResponse::success(
-        posts.into_iter().map(PostResponse::from).collect()
-    )))
+<h4>src/apps/blog/services.rs</h4>
+<pre><code><span class="comment">// Services are pure Rust functions — no HTTP types.</span>
+<span class="comment">// Receive a DatabaseConnection, return domain types.</span>
+<span class="comment">// 100% unit-testable without a running server.</span>
+<span class="kw">use</span> chopin_core::error::ChopinError;
+<span class="kw">use</span> sea_orm::*;
+<span class="kw">use</span> super::dto::*;
+<span class="kw">use</span> super::models::{self, Entity <span class="kw">as</span> Blog};
+
+<span class="kw">pub async fn</span> <span class="fn">list_all</span>(db: &DatabaseConnection) -> <span class="type">Result</span>&lt;Vec&lt;BlogResponse&gt;, ChopinError&gt; {
+    <span class="kw">let</span> items = Blog::find().all(db).<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?;
+    <span class="type">Ok</span>(items.into_iter().map(BlogResponse::from).collect())
 }
 
-<span class="kw">pub async fn</span> <span class="fn">create_post</span>(
-    State(state): State&lt;AppState&gt;,
-    chopin_core::Json(payload): chopin_core::Json&lt;CreatePostRequest&gt;,
-) -> <span class="type">Result</span>&lt;(StatusCode, chopin_core::Json&lt;ApiResponse&lt;PostResponse&gt;&gt;), StatusCode&gt; {
-    <span class="kw">let</span> new = post::ActiveModel {
+<span class="kw">pub async fn</span> <span class="fn">create_one</span>(
+    db: &DatabaseConnection,
+    payload: CreateBlogRequest,
+) -> <span class="type">Result</span>&lt;BlogResponse, ChopinError&gt; {
+    <span class="kw">let</span> new = models::ActiveModel {
         title: Set(payload.title),
         body: Set(payload.body),
         ..Default::default()
     };
-    <span class="kw">let</span> result = new.insert(&state.db).<span class="kw">await</span>
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    <span class="type">Ok</span>((StatusCode::CREATED, chopin_core::Json(ApiResponse::success(PostResponse::from(result)))))
+    <span class="kw">let</span> result = new.insert(db).<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?;
+    <span class="type">Ok</span>(BlogResponse::from(result))
 }</code></pre>
 
-                <h3>Generate a controller</h3>
-<pre><code><span class="comment"># Scaffold CRUD controller</span>
-chopin generate controller posts</code></pre>
+<h4>src/apps/blog/mod.rs — ChopinModule</h4>
+<pre><code><span class="kw">use</span> async_trait::async_trait;
+<span class="kw">use</span> axum::Router;
+<span class="kw">use</span> chopin_core::controllers::AppState;
+<span class="kw">use</span> chopin_core::error::ChopinError;
+<span class="kw">use</span> chopin_core::module::ChopinModule;
+<span class="kw">use</span> sea_orm::DatabaseConnection;
+
+<span class="kw">mod</span> dto;
+<span class="kw">mod</span> handlers;
+<span class="kw">mod</span> models;
+<span class="kw">mod</span> routes;
+<span class="kw">mod</span> services;
+
+<span class="kw">pub struct</span> <span class="type">BlogModule</span>;
+
+<span class="kw">impl</span> <span class="type">BlogModule</span> {
+    <span class="kw">pub fn</span> <span class="fn">new</span>() -> <span class="type">Self</span> { <span class="type">Self</span> }
+}
+
+<span class="attr">#[async_trait]</span>
+<span class="kw">impl</span> ChopinModule <span class="kw">for</span> <span class="type">BlogModule</span> {
+    <span class="kw">fn</span> <span class="fn">name</span>(&self) -> &<span class="type">str</span> { <span class="str">"blog"</span> }
+    <span class="kw">fn</span> <span class="fn">routes</span>(&self) -> Router&lt;AppState&gt; { routes::routes() }
+    <span class="kw">async fn</span> <span class="fn">migrate</span>(&self, _db: &DatabaseConnection) -> <span class="type">Result</span>&lt;(), ChopinError&gt; { <span class="type">Ok</span>(()) }
+}</code></pre>
+
+                <h3>Mount modules in main.rs</h3>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+<span class="kw">mod</span> apps;
+
+<span class="attr">#[tokio::main]</span>
+<span class="kw">async fn</span> <span class="fn">main</span>() -> <span class="type">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    init_logging();
+
+    <span class="kw">let</span> app = App::new().<span class="kw">await</span>?;
+    <span class="kw">let</span> app = app.mount_module(apps::blog::BlogModule::new());
+    <span class="comment">// .mount_module(apps::billing::BillingModule::new())</span>
+
+    app.run().<span class="kw">await</span>?;
+    <span class="type">Ok</span>(())
+}</code></pre>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Tip:</strong> <code>chopin startapp</code> auto-registers the module in <code>src/apps/mod.rs</code> and auto-mounts it in <code>src/main.rs</code> — no manual wiring needed!
+                    </div>
+                </div>
             </section>
 
             <!-- 8. Authentication -->
@@ -1127,11 +1241,11 @@ ChopinError::Internal(<span class="str">"Something broke"</span>.into())        
         description = "A blog API built with Chopin"
     ),
     paths(
-        controllers::posts::list_posts,
-        controllers::posts::create_post,
-        controllers::posts::get_post,
-        controllers::posts::update_post,
-        controllers::posts::delete_post,
+        apps::blog::handlers::list,
+        apps::blog::handlers::create,
+        apps::blog::handlers::get_by_id,
+        apps::blog::handlers::update,
+        apps::blog::handlers::remove,
     ),
     components(
         schemas(
