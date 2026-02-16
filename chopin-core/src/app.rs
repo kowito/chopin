@@ -202,9 +202,6 @@ impl App {
         // Only add expensive tracing/request-id middleware in development mode.
         if is_dev {
             use tower_http::trace::DefaultMakeSpan;
-            use tower_http::trace::DefaultOnRequest;
-            use tower_http::trace::DefaultOnResponse;
-            use tower_http::LatencyUnit;
 
             let x_request_id = axum::http::HeaderName::from_static("x-request-id");
             router = router
@@ -216,12 +213,20 @@ impl App {
                 .layer(
                     TraceLayer::new_for_http()
                         .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
-                        .on_request(DefaultOnRequest::new().level(tracing::Level::INFO))
-                        .on_response(
-                            DefaultOnResponse::new()
-                                .level(tracing::Level::INFO)
-                                .latency_unit(LatencyUnit::Millis),
-                        ),
+                        .on_request(|request: &axum::http::Request<_>, _span: &tracing::Span| {
+                            tracing::info!(
+                                method = %request.method(),
+                                uri = %request.uri(),
+                                "→ request"
+                            );
+                        })
+                        .on_response(|response: &axum::http::Response<_>, latency: std::time::Duration, _span: &tracing::Span| {
+                            tracing::info!(
+                                status = response.status().as_u16(),
+                                latency_ms = latency.as_millis(),
+                                "← response"
+                            );
+                        }),
                 );
         }
 
