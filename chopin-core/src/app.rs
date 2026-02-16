@@ -41,9 +41,6 @@ impl App {
         let config = Config::from_env()?;
         let db = crate::db::connect(&config).await?;
 
-        // Check for CLI database operations (--migrate, --rollback) and exit if present
-        Self::handle_db_cli_args(&db).await?;
-
         // Initialize cache (in-memory by default, Redis if configured)
         let cache = Self::init_cache(&config).await;
 
@@ -62,9 +59,6 @@ impl App {
     /// Create a new Chopin application with a given config.
     pub async fn with_config(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
         let db = crate::db::connect(&config).await?;
-
-        // Check for CLI database operations (--migrate, --rollback) and exit if present
-        Self::handle_db_cli_args(&db).await?;
 
         // Initialize cache
         let cache = Self::init_cache(&config).await;
@@ -101,35 +95,6 @@ impl App {
         let _ = config; // suppress unused warning when redis feature is off
         tracing::info!("Using in-memory cache");
         CacheService::in_memory()
-    }
-
-    /// Handle CLI database operations passed as command-line arguments.
-    /// If --migrate or --rollback is detected, perform the operation and exit the process.
-    async fn handle_db_cli_args(db: &DatabaseConnection) -> Result<(), Box<dyn std::error::Error>> {
-        let args: Vec<String> = std::env::args().collect();
-
-        // Check for --migrate flag
-        if args.contains(&"--migrate".to_string()) {
-            tracing::info!("Running pending database migrations...");
-            Migrator::up(db, None).await?;
-            tracing::info!("Migrations complete.");
-            std::process::exit(0);
-        }
-
-        // Check for --rollback flag
-        if let Some(pos) = args.iter().position(|arg| arg == "--rollback") {
-            let steps = if pos + 1 < args.len() {
-                args[pos + 1].parse::<u32>().unwrap_or(1)
-            } else {
-                1
-            };
-            tracing::info!("Rolling back {} migration(s)...", steps);
-            Migrator::down(db, Some(steps)).await?;
-            tracing::info!("Rollback complete.");
-            std::process::exit(0);
-        }
-
-        Ok(())
     }
 
     /// Mount a module into the application.
@@ -446,7 +411,28 @@ impl App {
     /// single-threaded tokio runtime for maximum throughput.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         // Run all module migrations before starting the server.
+        // (AuthModule runs core migrations; user modules run their own.)
         self.run_migrations().await?;
+
+        // Handle CLI flags: --migrate (run & exit) or --rollback N (undo & exit)
+        let args: Vec<String> = std::env::args().collect();
+
+        if args.contains(&"--migrate".to_string()) {
+            println!("  ✓ All migrations applied successfully.");
+            std::process::exit(0);
+        }
+
+        if let Some(pos) = args.iter().position(|arg| arg == "--rollback") {
+            let steps = if pos + 1 < args.len() {
+                args[pos + 1].parse::<u32>().unwrap_or(1)
+            } else {
+                1
+            };
+            tracing::info!("Rolling back {} migration(s)...", steps);
+            Migrator::down(&self.db, Some(steps)).await?;
+            println!("  ✓ Rolled back {} migration(s).", steps);
+            std::process::exit(0);
+        }
 
         let addr = self.config.server_addr();
         let reuseport = self.config.reuseport;

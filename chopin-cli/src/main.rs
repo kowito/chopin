@@ -35,6 +35,19 @@ enum Commands {
         #[command(subcommand)]
         action: DocsCommands,
     },
+    /// Create a new database migration (Django-style: chopin makemigrations create_posts title:string body:text)
+    #[command(name = "makemigrations", alias = "mm")]
+    Makemigrations {
+        /// Migration name (e.g., create_posts, add_slug_to_posts, custom_fix)
+        name: String,
+        /// Fields in format name:type (e.g., title:string body:text published:bool)
+        fields: Vec<String>,
+        /// Create an empty migration template
+        #[arg(long)]
+        empty: bool,
+    },
+    /// Run pending database migrations (Django-style: chopin migrate)
+    Migrate,
     /// Create a new app module (Django-style: chopin startapp blog)
     #[command(alias = "startapp")]
     Startapp {
@@ -91,6 +104,17 @@ enum DbCommands {
     Reset,
     /// Seed the database with sample data
     Seed,
+    /// Create a new migration (alias: chopin makemigrations)
+    #[command(name = "makemigrations")]
+    Makemigrations {
+        /// Migration name (e.g., create_posts, add_slug_to_posts)
+        name: String,
+        /// Fields in format name:type (e.g., title:string body:text)
+        fields: Vec<String>,
+        /// Create an empty migration template
+        #[arg(long)]
+        empty: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -145,6 +169,13 @@ async fn main() {
             DbCommands::Seed => {
                 seed_database();
             }
+            DbCommands::Makemigrations {
+                name,
+                fields,
+                empty,
+            } => {
+                make_migrations(&name, &fields, empty);
+            }
         },
         Commands::Docs { action } => match action {
             DocsCommands::Export { format, output } => {
@@ -154,6 +185,16 @@ async fn main() {
         },
         Commands::Startapp { name } => {
             generate_module(&name);
+        }
+        Commands::Makemigrations {
+            name,
+            fields,
+            empty,
+        } => {
+            make_migrations(&name, &fields, empty);
+        }
+        Commands::Migrate => {
+            run_migrations();
         }
         Commands::Run => {
             run_dev_server();
@@ -1199,6 +1240,9 @@ enum {iden_name} {{
     let path = migrations_dir.join(format!("{}.rs", migration_name));
     fs::write(&path, content).expect("Failed to write migration file");
     println!("  ✓ Created {}", path.display());
+
+    // Auto-register in migrations/mod.rs
+    update_migrations_mod_rs();
 }
 
 fn generate_controller_for_model(
@@ -1390,28 +1434,344 @@ async fn get_by_id(
     );
 }
 
+// ══════════════════════════════════════════════════════════════
+// chopin makemigrations <name> [fields...] [--empty]
+// ══════════════════════════════════════════════════════════════
+
+fn make_migrations(name: &str, fields: &[String], empty: bool) {
+    let snake_name = to_snake_case(name);
+
+    println!("🎹 Creating migration: {}", snake_name);
+    println!();
+
+    // Generate timestamp
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let migration_name = format!("m{}_{}", timestamp, snake_name);
+
+    // Ensure migrations/ directory exists
+    let migrations_dir = Path::new("migrations");
+    fs::create_dir_all(migrations_dir).expect("Failed to create migrations directory");
+
+    let parsed_fields = parse_fields(fields);
+
+    // Determine migration type from name convention:
+    //   "create_posts"       → CREATE TABLE posts
+    //   "add_slug_to_posts"  → ALTER TABLE posts ADD COLUMN slug
+    //   (anything else)      → empty or create table from fields
+    let content = if empty || (parsed_fields.is_empty() && fields.is_empty()) {
+        generate_empty_migration_content()
+    } else if let Some(table) = snake_name.strip_prefix("create_") {
+        generate_create_table_content(table, &parsed_fields)
+    } else if snake_name.starts_with("add_") {
+        if let Some(pos) = snake_name.rfind("_to_") {
+            let table = &snake_name[pos + 4..];
+            generate_alter_table_content(table, &parsed_fields)
+        } else {
+            generate_create_table_content(&snake_name, &parsed_fields)
+        }
+    } else if !parsed_fields.is_empty() {
+        // Has fields but no recognized prefix → create table
+        generate_create_table_content(&format!("{}s", snake_name), &parsed_fields)
+    } else {
+        generate_empty_migration_content()
+    };
+
+    // Write migration file
+    let file_path = migrations_dir.join(format!("{}.rs", migration_name));
+    fs::write(&file_path, &content).expect("Failed to write migration file");
+    println!("  ✓ Created {}", file_path.display());
+
+    // Update migrations/mod.rs (auto-register)
+    update_migrations_mod_rs();
+    println!("  ✓ Registered in migrations/mod.rs");
+
+    println!();
+    println!("  Next steps:");
+    println!("    1. Review: {}", file_path.display());
+    println!("    2. Run:    chopin migrate");
+    println!();
+    println!("  Make sure your main.rs runs project migrations:");
+    println!("    mod migrations;");
+    println!("    use sea_orm_migration::MigratorTrait;");
+    println!("    migrations::ProjectMigrator::up(&app.db, None).await?;");
+}
+
+/// Rebuild `migrations/mod.rs` by scanning all migration files.
+fn update_migrations_mod_rs() {
+    let migrations_dir = Path::new("migrations");
+    let mod_path = migrations_dir.join("mod.rs");
+
+    // Collect all migration module names (sorted)
+    let mut migration_names: Vec<String> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(migrations_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('m') && name.ends_with(".rs") && name != "mod.rs" {
+                let module_name = name.strip_suffix(".rs").unwrap().to_string();
+                migration_names.push(module_name);
+            }
+        }
+    }
+
+    migration_names.sort();
+
+    if migration_names.is_empty() {
+        return;
+    }
+
+    // Generate mod.rs content
+    let mod_declarations: String = migration_names
+        .iter()
+        .map(|n| format!("mod {};", n))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let box_entries: String = migration_names
+        .iter()
+        .map(|n| format!("            Box::new({}::Migration),", n))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let content = format!(
+        r#"pub use sea_orm_migration::prelude::*;
+
+{mod_declarations}
+
+pub struct ProjectMigrator;
+
+#[async_trait::async_trait]
+impl MigratorTrait for ProjectMigrator {{
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {{
+        vec![
+{box_entries}
+        ]
+    }}
+}}
+"#
+    );
+
+    fs::write(&mod_path, content).expect("Failed to write migrations/mod.rs");
+}
+
+/// Generate an empty migration template.
+fn generate_empty_migration_content() -> String {
+    r#"use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // TODO: Add your migration logic here
+        //
+        // Example — create a table:
+        //   manager.create_table(
+        //       Table::create()
+        //           .table(Alias::new("my_table"))
+        //           .col(ColumnDef::new(Alias::new("id")).integer().not_null().auto_increment().primary_key())
+        //           .col(ColumnDef::new(Alias::new("name")).string().not_null())
+        //           .to_owned(),
+        //   ).await?;
+        //
+        // Example — add a column:
+        //   manager.alter_table(
+        //       Table::alter()
+        //           .table(Alias::new("my_table"))
+        //           .add_column(ColumnDef::new(Alias::new("email")).string().not_null())
+        //           .to_owned(),
+        //   ).await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // TODO: Reverse the migration
+        Ok(())
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate a CREATE TABLE migration.
+fn generate_create_table_content(table_name: &str, fields: &[(&str, &str)]) -> String {
+    let iden_name = to_pascal_case(table_name);
+
+    let mut columns = String::new();
+    let mut iden_variants = String::new();
+
+    for (field_name, field_type) in fields {
+        let col_method = field_to_sea_orm_col(field_type);
+        let variant = to_pascal_case(field_name);
+        columns.push_str(&format!(
+            r#"                    .col(
+                        ColumnDef::new({iden_name}::{variant})
+                            .{col_method}
+                            .not_null(),
+                    )
+"#
+        ));
+        iden_variants.push_str(&format!("    {},\n", variant));
+    }
+
+    format!(
+        r#"use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {{
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {{
+        manager
+            .create_table(
+                Table::create()
+                    .table({iden_name}::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new({iden_name}::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+{columns}                    .col(
+                        ColumnDef::new({iden_name}::CreatedAt)
+                            .timestamp()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new({iden_name}::UpdatedAt)
+                            .timestamp()
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await
+    }}
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {{
+        manager
+            .drop_table(Table::drop().table({iden_name}::Table).to_owned())
+            .await
+    }}
+}}
+
+#[derive(Iden)]
+enum {iden_name} {{
+    Table,
+    Id,
+{iden_variants}    CreatedAt,
+    UpdatedAt,
+}}
+"#
+    )
+}
+
+/// Generate an ALTER TABLE (add columns) migration.
+fn generate_alter_table_content(table_name: &str, fields: &[(&str, &str)]) -> String {
+    let iden_name = to_pascal_case(table_name);
+
+    let mut alter_stmts = String::new();
+    let mut drop_stmts = String::new();
+    let mut iden_variants = String::new();
+
+    for (field_name, field_type) in fields {
+        let col_method = field_to_sea_orm_col(field_type);
+        let variant = to_pascal_case(field_name);
+        iden_variants.push_str(&format!("    {},\n", variant));
+
+        alter_stmts.push_str(&format!(
+            r#"        manager
+            .alter_table(
+                Table::alter()
+                    .table({iden_name}::Table)
+                    .add_column(
+                        ColumnDef::new({iden_name}::{variant})
+                            .{col_method}
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+"#
+        ));
+
+        drop_stmts.push_str(&format!(
+            r#"        manager
+            .alter_table(
+                Table::alter()
+                    .table({iden_name}::Table)
+                    .drop_column({iden_name}::{variant})
+                    .to_owned(),
+            )
+            .await?;
+"#
+        ));
+    }
+
+    format!(
+        r#"use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {{
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {{
+{alter_stmts}
+        Ok(())
+    }}
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {{
+{drop_stmts}
+        Ok(())
+    }}
+}}
+
+#[derive(Iden)]
+enum {iden_name} {{
+    Table,
+{iden_variants}}}
+"#
+    )
+}
+
+// ══════════════════════════════════════════════════════════════
+// chopin migrate / chopin db migrate
+// ══════════════════════════════════════════════════════════════
+
 // ── DB Migrate ──
 
 fn run_migrations() {
-    println!("🎹 Running pending database migrations...");
+    println!("🎹 Running database migrations...");
+    println!();
 
-    // Use cargo run to invoke a small migration runner
+    // Compile and run the user's app with --migrate flag.
+    // App::run() handles: core migrations + module migrations + exit.
     let status = Command::new("cargo")
-        .args(["run", "--quiet", "--", "--migrate"])
+        .args(["run", "--", "--migrate"])
         .status();
 
     match status {
-        Ok(s) if s.success() => {
-            println!("  ✓ Migrations applied successfully.");
-        }
+        Ok(s) if s.success() => {}
         Ok(s) => {
-            eprintln!("  ✗ Migration failed with exit code: {}", s);
-            eprintln!("  Hint: Migrations run automatically on server startup.");
-            eprintln!("  Try `cargo run` to start the server and apply migrations.");
+            eprintln!("  ✗ Migration failed (exit code: {})", s);
+            eprintln!();
+            eprintln!("  Check:");
+            eprintln!("    1. DATABASE_URL is set in .env");
+            eprintln!("    2. Database server is running");
+            eprintln!("    3. Migration files compile correctly");
+            eprintln!();
+            eprintln!("  If you have project-level migrations, make sure main.rs includes:");
+            eprintln!("    mod migrations;");
+            eprintln!("    use sea_orm_migration::MigratorTrait;");
+            eprintln!("    migrations::ProjectMigrator::up(&app.db, None).await?;");
         }
-        Err(_) => {
-            println!("  Note: Chopin runs migrations automatically on startup.");
-            println!("  Start your server with `cargo run` to apply pending migrations.");
+        Err(e) => {
+            eprintln!("  ✗ Failed to run: {}", e);
+            eprintln!("  Make sure you're in a Chopin project directory with Cargo.toml.");
         }
     }
 }
@@ -1422,28 +1782,19 @@ fn rollback_migrations(steps: u32) {
     println!("🎹 Rolling back {} migration(s)...", steps);
 
     let status = Command::new("cargo")
-        .args(["run", "--quiet", "--", "--rollback", &steps.to_string()])
+        .args(["run", "--", "--rollback", &steps.to_string()])
         .status();
 
     match status {
-        Ok(s) if s.success() => {
-            println!("  ✓ Rolled back {} migration(s) successfully.", steps);
-        }
+        Ok(s) if s.success() => {}
         Ok(s) => {
-            eprintln!("  ✗ Rollback failed with exit code: {}", s);
+            eprintln!("  ✗ Rollback failed (exit code: {})", s);
             eprintln!();
-            eprintln!("  Hint: Make sure your migration files have `down()` implemented.");
-            eprintln!("  You can also manually rollback by editing the migration table.");
+            eprintln!("  Make sure your migration files have `down()` implemented.");
         }
-        Err(_) => {
-            println!("  Note: To rollback, ensure your app binary supports the --rollback flag.");
-            println!();
-            println!("  Add this to your main.rs:");
-            println!("    let args: Vec<String> = std::env::args().collect();");
-            println!("    if args.contains(&\"--rollback\".to_string()) {{");
-            println!("        use sea_orm_migration::MigratorTrait;");
-            println!("        Migrator::down(&db, Some(1)).await?;");
-            println!("    }}");
+        Err(e) => {
+            eprintln!("  ✗ Failed to run: {}", e);
+            eprintln!("  Make sure you're in a Chopin project directory.");
         }
     }
 }
@@ -1454,37 +1805,51 @@ fn migration_status() {
     println!("🎹 Migration status:");
     println!();
 
-    // Check for migration files
-    let migrations_dir = Path::new("src/migrations");
-    if !migrations_dir.exists() {
-        println!("  No migrations directory found.");
-        return;
-    }
+    let mut total = 0;
 
-    let mut migration_files: Vec<String> = Vec::new();
-    if let Ok(entries) = fs::read_dir(migrations_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('m') && name.ends_with(".rs") && name != "mod.rs" {
-                migration_files.push(name);
+    // Scan both migration directories
+    for dir_path in &["migrations", "src/migrations"] {
+        let migrations_dir = Path::new(dir_path);
+        if !migrations_dir.exists() {
+            continue;
+        }
+
+        let mut migration_files: Vec<String> = Vec::new();
+        if let Ok(entries) = fs::read_dir(migrations_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('m') && name.ends_with(".rs") && name != "mod.rs" {
+                    migration_files.push(name);
+                }
             }
         }
+
+        migration_files.sort();
+
+        if !migration_files.is_empty() {
+            println!("  {}/", dir_path);
+            for file in &migration_files {
+                println!("    ✓ {}", file);
+            }
+            total += migration_files.len();
+        }
     }
 
-    migration_files.sort();
-
-    if migration_files.is_empty() {
+    if total == 0 {
         println!("  No migration files found.");
+        println!();
+        println!("  Create one with:");
+        println!("    chopin makemigrations create_posts title:string body:text");
     } else {
-        println!("  Found {} migration(s):", migration_files.len());
-        for file in &migration_files {
-            println!("    📄 {}", file);
-        }
+        println!();
+        println!("  {} migration(s) total", total);
     }
 
     println!();
-    println!("  Hint: Run `chopin db migrate` to apply pending migrations.");
-    println!("  Hint: Run `chopin db rollback` to rollback the last migration.");
+    println!("  Commands:");
+    println!("    chopin makemigrations <name> [fields...]  — create a migration");
+    println!("    chopin migrate                           — apply pending migrations");
+    println!("    chopin db rollback                       — rollback last migration");
 }
 
 // ── DB Reset ──
