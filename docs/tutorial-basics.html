@@ -100,8 +100,8 @@ chopin startapp blog
 <span class="comment"># Also auto-registers in src/apps/mod.rs and mounts in src/main.rs!</span></code></pre>
 
                 <h3>Or add to an existing project</h3>
-<pre><code><span class="comment"># Add chopin as a dependency</span>
-cargo add chopin
+<pre><code><span class="comment"># Add chopin-core as a dependency</span>
+cargo add chopin-core
 
 <span class="comment"># With optional features</span>
 cargo add chopin-core --features redis,s3,graphql,perf</code></pre>
@@ -112,7 +112,7 @@ cargo add chopin-core --features redis,s3,graphql,perf</code></pre>
                         <strong>Feature flags:</strong>
                         <code>redis</code> &mdash; Redis caching backend,
                         <code>s3</code> &mdash; S3/R2/MinIO file storage,
-                        <code>graphql</code> &mdash; GraphQL support,
+                        <code>graphql</code> &mdash; GraphQL support (async-graphql),
                         <code>perf</code> &mdash; mimalloc + sonic-rs SIMD JSON
                     </div>
                 </div>

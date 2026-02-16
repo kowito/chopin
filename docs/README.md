@@ -18,8 +18,7 @@ Comprehensive guides for the Chopin web framework.
 
 ## Tutorials (HTML)
 
-- [**Tutorial Index**](tutorial-index.html) — Interactive tutorial guide (recommended starting point)
-- [**Complete Tutorial**](tutorial.html) — All content in one page
+- [**Tutorial Index**](tutorial-index.html) — Interactive tutorial guide with organized topics
 
 ## GitHub Pages Website
 
@@ -58,7 +57,12 @@ docs/
 ├── json-performance.md           # JSON optimization guide
 ├── index.html                    # Landing page
 ├── tutorial-index.html           # Tutorial guide index
-├── tutorial.html                 # Complete tutorial
+├── tutorial-basics.html          # Tutorial: Getting started
+├── tutorial-database.html        # Tutorial: Database & models
+├── tutorial-api.html             # Tutorial: Building APIs
+├── tutorial-modules.html         # Tutorial: Modular architecture
+├── tutorial-advanced.html        # Tutorial: Advanced features
+├── tutorial-deployment.html      # Tutorial: Testing & deployment
 ├── css/
 │   ├── style.css                 # Main styles
 │   └── tutorial.css              # Tutorial styles
@@ -70,19 +74,17 @@ docs/
 
 ## Tutorial Structure
 
-The tutorial is available in two formats:
+The tutorial is organized into focused, topic-specific pages:
 
-1. **Organized Navigation** - `tutorial-index.html` 
-   - Friendly landing page with organized topics
-   - Quick access to specific sections
-   - Recommended for new users
-   - Better mobile experience
+- **tutorial-index.html** — Landing page with guide overview
+- **tutorial-basics.html** — Installation, Hello World, Debugging
+- **tutorial-database.html** — Configuration, Models, Migrations
+- **tutorial-api.html** — Modules, Routing, Authentication, Security
+- **tutorial-modules.html** — MVSR Pattern, ChopinModule, Composition
+- **tutorial-advanced.html** — OpenAPI, Caching, File Uploads, GraphQL
+- **tutorial-deployment.html** — Testing, Performance, Production Deployment
 
-2. **Complete Reference** - `tutorial.html`
-   - All content in one comprehensive page
-   - Full table of contents sidebar
-   - Easy to search and reference
-   - Better for advanced users who want everything at once
+Each guide is self-contained and can be read independently or in sequence.
 
 ## Features
 
