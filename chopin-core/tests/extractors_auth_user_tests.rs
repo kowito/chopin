@@ -33,7 +33,7 @@ fn test_config() -> Config {
 async fn test_valid_bearer_token_extracts_user_id() {
     let config = Arc::new(test_config());
     let user_id = 42;
-    let token = auth::create_token(user_id, &config.jwt_secret, 1).expect("Failed to create token");
+    let token = auth::create_token(&user_id.to_string(), &config.jwt_secret, 1).expect("Failed to create token");
 
     let mut req = Request::builder()
         .header("Authorization", format!("Bearer {}", token))
@@ -48,7 +48,7 @@ async fn test_valid_bearer_token_extracts_user_id() {
 
     assert!(result.is_ok());
     let AuthUser(extracted_id) = result.unwrap();
-    assert_eq!(extracted_id, user_id);
+    assert_eq!(extracted_id, user_id.to_string());
 }
 
 #[tokio::test]
@@ -142,7 +142,7 @@ async fn test_token_with_wrong_secret_fails() {
     let user_id = 42;
 
     // Create token with different secret
-    let token = auth::create_token(user_id, "wrong-secret", 1).expect("Failed to create token");
+    let token = auth::create_token(&user_id.to_string(), "wrong-secret", 1).expect("Failed to create token");
 
     let mut req = Request::builder()
         .header("Authorization", format!("Bearer {}", token))
@@ -161,7 +161,7 @@ async fn test_token_with_wrong_secret_fails() {
 #[tokio::test]
 async fn test_missing_config_in_extensions_fails() {
     let user_id = 42;
-    let token = auth::create_token(user_id, "test-secret", 1).expect("Failed to create token");
+    let token = auth::create_token(&user_id.to_string(), "test-secret", 1).expect("Failed to create token");
 
     let req = Request::builder()
         .header("Authorization", format!("Bearer {}", token))
@@ -191,7 +191,7 @@ async fn test_different_user_ids_extract_correctly() {
 
     for user_id in user_ids {
         let token =
-            auth::create_token(user_id, &config.jwt_secret, 1).expect("Failed to create token");
+            auth::create_token(&user_id.to_string(), &config.jwt_secret, 1).expect("Failed to create token");
 
         let mut req = Request::builder()
             .header("Authorization", format!("Bearer {}", token))
@@ -206,13 +206,13 @@ async fn test_different_user_ids_extract_correctly() {
 
         assert!(result.is_ok());
         let AuthUser(extracted_id) = result.unwrap();
-        assert_eq!(extracted_id, user_id);
+        assert_eq!(extracted_id, user_id.to_string());
     }
 }
 
 #[tokio::test]
 async fn test_auth_user_is_clone_and_debug() {
-    let auth_user = AuthUser(42);
+    let auth_user = AuthUser("42".to_string());
     let cloned = auth_user.clone();
 
     assert_eq!(auth_user.0, cloned.0);
@@ -226,7 +226,7 @@ async fn test_auth_user_is_clone_and_debug() {
 async fn test_case_sensitive_bearer_prefix() {
     let config = Arc::new(test_config());
     let user_id = 42;
-    let token = auth::create_token(user_id, &config.jwt_secret, 1).expect("Failed to create token");
+    let token = auth::create_token(&user_id.to_string(), &config.jwt_secret, 1).expect("Failed to create token");
 
     // Try with lowercase "bearer"
     let mut req = Request::builder()
@@ -287,7 +287,7 @@ async fn test_expired_token_fails() {
 async fn test_authorization_header_with_extra_spaces() {
     let config = Arc::new(test_config());
     let user_id = 42;
-    let token = auth::create_token(user_id, &config.jwt_secret, 1).expect("Failed to create token");
+    let token = auth::create_token(&user_id.to_string(), &config.jwt_secret, 1).expect("Failed to create token");
 
     // Extra spaces in the header value
     let mut req = Request::builder()

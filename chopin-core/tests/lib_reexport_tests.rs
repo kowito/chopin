@@ -78,7 +78,7 @@ fn test_header_map_reexport() {
 #[test]
 fn test_auth_module_accessible() {
     // Should be able to reference auth submodules
-    let _token = chopin_core::auth::create_token(1, "test-secret", 24);
+    let _token = chopin_core::auth::create_token("1", "test-secret", 24);
 }
 
 #[test]

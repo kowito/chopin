@@ -8,7 +8,7 @@ fn test_create_and_validate_token() {
     let secret = "test-secret-key";
     let expiry_hours = 24;
 
-    let token = create_token(user_id, secret, expiry_hours).expect("Failed to create token");
+    let token = create_token(&user_id.to_string(), secret, expiry_hours).expect("Failed to create token");
     assert!(!token.is_empty());
 
     let claims = validate_token(&token, secret).expect("Failed to validate token");
@@ -20,7 +20,7 @@ fn test_token_with_different_user_ids() {
     let secret = "test-secret";
 
     for user_id in [1, 100, 999, 12345] {
-        let token = create_token(user_id, secret, 1).expect("Failed to create token");
+        let token = create_token(&user_id.to_string(), secret, 1).expect("Failed to create token");
         let claims = validate_token(&token, secret).expect("Failed to validate token");
         assert_eq!(claims.sub, user_id.to_string());
     }
@@ -32,7 +32,7 @@ fn test_token_with_wrong_secret_fails() {
     let correct_secret = "correct-secret";
     let wrong_secret = "wrong-secret";
 
-    let token = create_token(user_id, correct_secret, 1).expect("Failed to create token");
+    let token = create_token(&user_id.to_string(), correct_secret, 1).expect("Failed to create token");
 
     let result = validate_token(&token, wrong_secret);
     assert!(result.is_err());
@@ -60,7 +60,7 @@ fn test_claims_structure() {
     let user_id = 100;
     let secret = "test-secret";
 
-    let token = create_token(user_id, secret, 24).expect("Failed to create token");
+    let token = create_token(&user_id.to_string(), secret, 24).expect("Failed to create token");
     let claims = validate_token(&token, secret).expect("Failed to validate");
 
     assert_eq!(claims.sub, "100");
@@ -76,7 +76,7 @@ fn test_token_expiry_time() {
     let expiry_hours = 2;
 
     let before = chrono::Utc::now().timestamp() as usize;
-    let token = create_token(user_id, secret, expiry_hours).expect("Failed to create token");
+    let token = create_token(&user_id.to_string(), secret, expiry_hours).expect("Failed to create token");
     let after = chrono::Utc::now().timestamp() as usize;
 
     let claims = validate_token(&token, secret).expect("Failed to validate");
@@ -105,7 +105,7 @@ fn test_expired_token_still_validates() {
     let secret = "test-secret";
 
     // Create token that "expires" immediately (0 hours)
-    let token = create_token(user_id, secret, 0).expect("Failed to create token");
+    let token = create_token(&user_id.to_string(), secret, 0).expect("Failed to create token");
 
     // Sleep a bit to ensure time has passed
     thread::sleep(Duration::from_millis(100));
@@ -120,9 +120,9 @@ fn test_multiple_tokens_same_user() {
     let user_id = 42;
     let secret = "test-secret";
 
-    let token1 = create_token(user_id, secret, 1).expect("Failed to create token 1");
+    let token1 = create_token(&user_id.to_string(), secret, 1).expect("Failed to create token 1");
     thread::sleep(Duration::from_secs(2)); // Sleep 2 seconds to ensure different iat timestamp
-    let token2 = create_token(user_id, secret, 1).expect("Failed to create token 2");
+    let token2 = create_token(&user_id.to_string(), secret, 1).expect("Failed to create token 2");
 
     // Tokens should be different (different iat)
     assert_ne!(token1, token2);
@@ -141,7 +141,7 @@ fn test_token_with_very_long_expiry() {
     let secret = "test-secret";
     let expiry_hours = 8760; // 1 year
 
-    let token = create_token(user_id, secret, expiry_hours).expect("Failed to create token");
+    let token = create_token(&user_id.to_string(), secret, expiry_hours).expect("Failed to create token");
     let claims = validate_token(&token, secret).expect("Failed to validate");
 
     assert_eq!(claims.sub, user_id.to_string());
@@ -185,7 +185,7 @@ fn test_token_with_special_characters_in_secret() {
     ];
 
     for secret in secrets {
-        let token = create_token(user_id, secret, 1).expect("Failed to create token");
+        let token = create_token(&user_id.to_string(), secret, 1).expect("Failed to create token");
         let claims = validate_token(&token, secret).expect("Failed to validate");
         assert_eq!(claims.sub, user_id.to_string());
     }

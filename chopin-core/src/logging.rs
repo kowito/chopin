@@ -73,8 +73,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 /// This function will panic if called multiple times. Only call it once
 /// at application startup.
 pub fn init_logging() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::registry()
         .with(filter)
@@ -116,8 +115,7 @@ pub fn init_logging() {
 /// This function will panic if called multiple times. Only call it once
 /// at application startup.
 pub fn init_logging_with_level(level: &str) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
     tracing_subscriber::registry()
         .with(filter)
@@ -150,8 +148,7 @@ pub fn init_logging_with_level(level: &str) {
 /// This function will panic if called multiple times. Only call it once
 /// at application startup.
 pub fn init_logging_pretty() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::registry()
         .with(filter)
@@ -190,8 +187,7 @@ pub fn init_logging_pretty() {
 /// This function will panic if called multiple times. Only call it once
 /// at application startup.
 pub fn init_logging_json() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::registry()
         .with(filter)

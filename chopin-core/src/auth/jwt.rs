@@ -16,8 +16,8 @@ pub struct Claims {
     pub iat: usize,
 }
 
-/// Create a JWT token for a given user ID.
-pub fn create_token(user_id: i32, secret: &str, expiry_hours: u64) -> Result<String, ChopinError> {
+/// Create a JWT token for a given user ID (string or numeric).
+pub fn create_token(user_id: &str, secret: &str, expiry_hours: u64) -> Result<String, ChopinError> {
     let now = Utc::now();
     let expires = now + Duration::hours(expiry_hours as i64);
 

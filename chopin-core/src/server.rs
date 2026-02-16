@@ -200,6 +200,11 @@ impl FastRoute {
         Self::new(path, body, "text/html; charset=utf-8")
     }
 
+    /// Get the path of this FastRoute.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
     // ═══ Decorators (all pre-computed at registration, zero per-request cost) ═══
 
     /// Add permissive CORS headers (`Access-Control-Allow-Origin: *`).

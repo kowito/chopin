@@ -15,7 +15,7 @@ use crate::error::ChopinError;
 /// }
 /// ```
 #[derive(Debug, Clone)]
-pub struct AuthUser(pub i32);
+pub struct AuthUser(pub String);
 
 impl<S> FromRequestParts<S> for AuthUser
 where
@@ -44,11 +44,6 @@ where
 
         let claims = auth::validate_token(token, &config.jwt_secret)?;
 
-        let user_id: i32 = claims
-            .sub
-            .parse()
-            .map_err(|_| ChopinError::Unauthorized("Invalid user ID in token".to_string()))?;
-
-        Ok(AuthUser(user_id))
+        Ok(AuthUser(claims.sub))
     }
 }

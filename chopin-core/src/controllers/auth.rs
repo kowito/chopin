@@ -247,7 +247,7 @@ async fn signup(
 
     // Generate JWT
     let token = create_token(
-        user_model.id,
+        &user_model.id.to_string(),
         &state.config.jwt_secret,
         state.config.jwt_expiry_hours,
     )?;
@@ -455,7 +455,7 @@ async fn login(
 
     // Generate JWT
     let token = create_token(
-        user_model.id,
+        &user_model.id.to_string(),
         &state.config.jwt_secret,
         state.config.jwt_expiry_hours,
     )?;
@@ -541,14 +541,17 @@ async fn logout(
     Json(payload): Json<LogoutRequest>,
 ) -> Result<ApiResponse<MessageResponse>, ChopinError> {
     let security = &state.config.security;
+    let user_id_i32 = user_id
+        .parse::<i32>()
+        .map_err(|_| ChopinError::Unauthorized("Invalid user ID".to_string()))?;
 
     if payload.all_sessions.unwrap_or(false) {
         // Revoke all sessions and refresh tokens
         if security.enable_session_management {
-            crate::auth::session::revoke_all_user_sessions(&state.db, user_id).await?;
+            crate::auth::session::revoke_all_user_sessions(&state.db, user_id_i32).await?;
         }
         if security.enable_refresh_tokens {
-            crate::auth::refresh::revoke_all_user_tokens(&state.db, user_id).await?;
+            crate::auth::refresh::revoke_all_user_tokens(&state.db, user_id_i32).await?;
         }
         Ok(ApiResponse::success(MessageResponse {
             message: "All sessions revoked successfully".to_string(),
@@ -600,7 +603,7 @@ async fn refresh_token(
 
     // Generate a new access token
     let new_access_token = create_token(
-        user_id,
+        &user_id.to_string(),
         &state.config.jwt_secret,
         state.config.jwt_expiry_hours,
     )?;
@@ -654,8 +657,12 @@ async fn totp_setup(
         return Err(ChopinError::BadRequest("2FA is not enabled".to_string()));
     }
 
+    let user_id_i32 = user_id
+        .parse::<i32>()
+        .map_err(|_| ChopinError::Unauthorized("Invalid user ID".to_string()))?;
+
     // Find user
-    let user_model = User::find_by_id(user_id)
+    let user_model = User::find_by_id(user_id_i32)
         .one(&state.db)
         .await?
         .ok_or_else(|| ChopinError::NotFound("User not found".to_string()))?;
@@ -699,7 +706,11 @@ async fn totp_enable(
         return Err(ChopinError::BadRequest("2FA is not enabled".to_string()));
     }
 
-    let user_model = User::find_by_id(user_id)
+    let user_id_i32 = user_id
+        .parse::<i32>()
+        .map_err(|_| ChopinError::Unauthorized("Invalid user ID".to_string()))?;
+
+    let user_model = User::find_by_id(user_id_i32)
         .one(&state.db)
         .await?
         .ok_or_else(|| ChopinError::NotFound("User not found".to_string()))?;
@@ -742,7 +753,11 @@ async fn totp_disable(
     AuthUser(user_id): AuthUser,
     Json(payload): Json<TotpDisableRequest>,
 ) -> Result<ApiResponse<MessageResponse>, ChopinError> {
-    let user_model = User::find_by_id(user_id)
+    let user_id_i32 = user_id
+        .parse::<i32>()
+        .map_err(|_| ChopinError::Unauthorized("Invalid user ID".to_string()))?;
+
+    let user_model = User::find_by_id(user_id_i32)
         .one(&state.db)
         .await?
         .ok_or_else(|| ChopinError::NotFound("User not found".to_string()))?;

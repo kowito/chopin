@@ -31,7 +31,7 @@ pub struct App {
     fast_routes: Vec<FastRoute>,
     custom_openapi: Option<utoipa::openapi::OpenApi>,
     api_docs_path: String,
-    custom_routes: Vec<Router>,
+    custom_routes: Vec<Router<AppState>>,
 }
 
 impl App {
@@ -174,13 +174,17 @@ impl App {
         let json_path: &'static str =
             Box::leak(format!("{}/openapi.json", docs_path).into_boxed_str());
 
-        let mut router = Router::new()
-            .route("/", get(welcome))
-            .merge(routing::build_routes().with_state(state));
+        // Only add the default welcome route if no FastRoute is registered for "/"
+        let has_root_fast_route = self.fast_routes.iter().any(|fr| fr.path() == "/");
+        let mut router = Router::new();
+        if !has_root_fast_route {
+            router = router.route("/", get(welcome));
+        }
+        router = router.merge(routing::build_routes().with_state(state.clone()));
 
-        // Merge user-provided custom routes.
+        // Merge user-provided custom routes (with AppState applied).
         for custom in &self.custom_routes {
-            router = router.merge(custom.clone());
+            router = router.merge(custom.clone().with_state(state.clone()));
         }
 
         router = router
@@ -197,6 +201,11 @@ impl App {
 
         // Only add expensive tracing/request-id middleware in development mode.
         if is_dev {
+            use tower_http::trace::DefaultMakeSpan;
+            use tower_http::trace::DefaultOnRequest;
+            use tower_http::trace::DefaultOnResponse;
+            use tower_http::LatencyUnit;
+
             let x_request_id = axum::http::HeaderName::from_static("x-request-id");
             router = router
                 .layer(SetRequestIdLayer::new(
@@ -204,7 +213,16 @@ impl App {
                     MakeRequestUuid,
                 ))
                 .layer(PropagateRequestIdLayer::new(x_request_id))
-                .layer(TraceLayer::new_for_http());
+                .layer(
+                    TraceLayer::new_for_http()
+                        .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
+                        .on_request(DefaultOnRequest::new().level(tracing::Level::INFO))
+                        .on_response(
+                            DefaultOnResponse::new()
+                                .level(tracing::Level::INFO)
+                                .latency_unit(LatencyUnit::Millis),
+                        ),
+                );
         }
 
         router
@@ -290,7 +308,7 @@ impl App {
     ///     .api_docs(MyApiDoc::openapi());
     /// app.run().await?;
     /// ```
-    pub fn routes(mut self, router: Router) -> Self {
+    pub fn routes(mut self, router: Router<AppState>) -> Self {
         self.custom_routes.push(router);
         self
     }

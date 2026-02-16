@@ -25,7 +25,7 @@ use sea_orm::EntityTrait;
 /// }
 /// ```
 #[derive(Debug, Clone)]
-pub struct AuthUserWithRole(pub i32, pub Role);
+pub struct AuthUserWithRole(pub String, pub Role);
 
 impl<S> FromRequestParts<S> for AuthUserWithRole
 where
@@ -53,11 +53,6 @@ where
 
         let claims = auth::validate_token(token, &config.jwt_secret)?;
 
-        let user_id: i32 = claims
-            .sub
-            .parse()
-            .map_err(|_| ChopinError::Unauthorized("Invalid user ID in token".to_string()))?;
-
         // Get role from extensions (set by role middleware if used), default to user
         let role = parts
             .extensions
@@ -65,7 +60,7 @@ where
             .cloned()
             .unwrap_or(Role::User);
 
-        Ok(AuthUserWithRole(user_id, role))
+        Ok(AuthUserWithRole(claims.sub, role))
     }
 }
 
@@ -113,13 +108,13 @@ pub fn require_role(
 
             let claims = auth::validate_token(token, &state.config.jwt_secret)?;
 
-            let user_id: i32 = claims
+            let user_id_i32 = claims
                 .sub
-                .parse()
-                .map_err(|_| ChopinError::Unauthorized("Invalid user ID in token".to_string()))?;
+                .parse::<i32>()
+                .map_err(|_| ChopinError::Unauthorized("Invalid user ID".to_string()))?;
 
             // Look up user's role from database
-            let user = User::find_by_id(user_id)
+            let user = User::find_by_id(user_id_i32)
                 .one(&state.db)
                 .await
                 .map_err(|e| ChopinError::Internal(e.to_string()))?
