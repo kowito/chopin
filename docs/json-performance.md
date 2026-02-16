@@ -287,7 +287,7 @@ Uses standard `serde_json` and system malloc. Still benefits from thread-local b
    chopin-core = "0.2"
 
    # ✅ Production: enable perf
-   chopin-core = { version = "0.2", features = ["perf"] }
+   chopin-core = { version = "0.3", features = ["perf"] }
    ```
 
 3. **Don't use `Vec::with_capacity()` for small responses**
