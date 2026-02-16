@@ -218,6 +218,249 @@ chopin generate model Post title:string body:text --module blog
         .map(BlogResponse::from)
         .ok_or_else(|| ChopinError::NotFound(<span class="kw">format!</span>(<span class="str">"Blog {} not found"</span>, id)))
 }</code></pre>
+
+                <h3>The M in MVSR: Models</h3>
+                <p>Models are <strong>SeaORM entities</strong> that define your database schema. They're auto-generated or written by hand:</p>
+<pre><code><span class="comment">// src/apps/blog/models.rs</span>
+<span class="kw">use</span> chrono::Utc;
+<span class="kw">use</span> sea_orm::prelude::*;
+<span class="kw">use</span> serde::{Deserialize, Serialize};
+
+<span class="attr">#[derive(Clone, Debug, DeriveEntityModel, Serialize, Deserialize)]</span>
+<span class="attr">#[sea_orm(table_name = "blog")]</span>
+<span class="kw">pub struct</span> Model {
+    <span class="attr">#[sea_orm(primary_key)]</span>
+    <span class="kw">pub</span> id: <span class="type">i32</span>,
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+    <span class="kw">pub</span> body: <span class="type">String</span>,
+    <span class="kw">pub</span> author_id: <span class="type">i32</span>,
+    <span class="kw">pub</span> created_at: DateTime,
+    <span class="kw">pub</span> updated_at: DateTime,
+}
+
+<span class="attr">#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]</span>
+<span class="kw">pub enum</span> Relation {}
+
+<span class="kw">impl</span> ActiveModelBehavior <span class="kw">for</span> ActiveModel {}</code></pre>
+
+                <h3>The D in MVSR: Data Transfer Objects (DTOs)</h3>
+                <p>DTOs define request/response contracts with validation and OpenAPI documentation:</p>
+<pre><code><span class="comment">// src/apps/blog/dto.rs</span>
+<span class="kw">use</span> serde::{Deserialize, Serialize};
+<span class="kw">use</span> utoipa::ToSchema;
+
+<span class="attr">#[derive(Debug, Serialize, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> CreateBlogRequest {
+    <span class="attr">#[schema(example = "My First Post")]</span>
+    <span class="kw">pub</span> title: String,
+
+    <span class="attr">#[schema(example = "This is the content...")]</span>
+    <span class="kw">pub</span> body: String,
+}
+
+<span class="attr">#[derive(Debug, Serialize, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> BlogResponse {
+    <span class="kw">pub</span> id: <span class="type">i32</span>,
+    <span class="kw">pub</span> title: String,
+    <span class="kw">pub</span> body: String,
+    <span class="kw">pub</span> author_id: <span class="type">i32</span>,
+}
+
+<span class="comment">// Conversions</span>
+<span class="kw">impl</span> From&lt;super::models::Model&gt; <span class="kw">for</span> BlogResponse {
+    <span class="kw">fn</span> from(m: super::models::Model) -> <span class="type">Self</span> {
+        <span class="type">Self</span> {
+            id: m.id,
+            title: m.title,
+            body: m.body,
+            author_id: m.author_id,
+        }
+    }
+}</code></pre>
+
+                <h3>The V in MVSR: Handlers (View/HTTP Layer)</h3>
+                <p>Handlers extract HTTP data, call services, and return responses. They're thin HTTP adapters:</p>
+<pre><code><span class="comment">// src/apps/blog/handlers.rs</span>
+<span class="kw">use</span> axum::{extract::*, http::StatusCode, response::IntoResponse};
+<span class="kw">use</span> chopin_core::extractors::JsonBody;
+<span class="kw">use</span> chopin_core::controllers::AppState;
+<span class="kw">use</span> serde_json::json;
+<span class="kw">use</span> super::{dto::*, services};
+
+<span class="comment">/// GET /api/blogs — list all blog posts</span>
+<span class="kw">pub async fn</span> <span class="fn">list_blogs</span>(
+    State(state): State&lt;AppState&gt;,
+) -> <span class="type">Result</span>&lt;impl IntoResponse, StatusCode&gt; {
+    <span class="kw">let</span> blogs = services::list_all(&state.db).<span class="kw">await</span>
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    <span class="type">Ok</span>(Json(blogs))
+}
+
+<span class="comment">/// POST /api/blogs — create a new blog post</span>
+<span class="kw">pub async fn</span> <span class="fn">create_blog</span>(
+    State(state): State&lt;AppState&gt;,
+    JsonBody(payload): JsonBody&lt;CreateBlogRequest&gt;,
+    user_id: <span class="type">i32</span>,
+) -> <span class="type">Result</span>&lt;(StatusCode, Json&lt;BlogResponse&gt;), StatusCode&gt; {
+    <span class="comment">// Inject user_id from auth context</span>
+    <span class="kw">let</span> blog = services::create_one(&state.db, payload).<span class="kw">await</span>
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    <span class="type">Ok</span>((StatusCode::CREATED, Json(blog)))
+}
+
+<span class="comment">/// GET /api/blogs/:id — get a specific blog post</span>
+<span class="kw">pub async fn</span> <span class="fn">get_blog</span>(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;<span class="type">i32</span>&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;BlogResponse&gt;, StatusCode&gt; {
+    services::find_by_id(&state.db, id).<span class="kw">await</span>
+        .map(Json)
+        .map_err(|_| StatusCode::NOT_FOUND)
+}</code></pre>
+
+                <h3>The R in MVSR: Routes</h3>
+                <p>Routes map HTTP methods and paths to handler functions:</p>
+<pre><code><span class="comment">// src/apps/blog/routes.rs</span>
+<span class="kw">use</span> axum::{routing::*, Router};
+<span class="kw">use</span> chopin_core::controllers::AppState;
+<span class="kw">use</span> super::handlers;
+
+<span class="kw">pub fn</span> <span class="fn">routes</span>() -> Router&lt;AppState&gt; {
+    Router::new()
+        .route(<span class="str">"/api/blogs"</span>, <span class="fn">get</span>(handlers::list_blogs).<span class="fn">post</span>(handlers::create_blog))
+        .route(<span class="str">"/api/blogs/:id"</span>, <span class="fn">get</span>(handlers::get_blog))
+}</code></pre>
+
+                <h3>Request Flow Through MVSR</h3>
+                <div class="callout">
+                    <i data-lucide="arrow-right" class="inline-icon"></i>
+                    <div>
+                        <strong>Incoming HTTP Request</strong> → 
+                        <strong>Handler</strong> (validates via DTO) → 
+                        <strong>Service</strong> (business logic) → 
+                        <strong>Model</strong> (database ops) → 
+                        <strong>DTO Response</strong> (serialize) → 
+                        <strong>HTTP Response</strong>
+                    </div>
+                </div>
+
+                <h3>Testing: Unit Testing Services</h3>
+                <p>Services are functions without HTTP — test them with a database connection only:</p>
+<pre><code><span class="comment">// tests/blog_service_tests.rs</span>
+<span class="attr">#[cfg(test)]</span>
+<span class="kw">mod</span> tests {
+    <span class="kw">use</span> chopin_core::testing::setup_test_db;
+    <span class="kw">use</span> my_app::apps::blog::{services, dto::CreateBlogRequest};
+
+    <span class="attr">#[tokio::test]</span>
+    <span class="kw">async fn</span> <span class="fn">test_create_blog</span>() {
+        <span class="kw">let</span> db = setup_test_db().<span class="kw">await</span>;
+        <span class="kw">let</span> req = CreateBlogRequest {
+            title: <span class="str">"Test"</span>.to_string(),
+            body: <span class="str">"Content"</span>.to_string(),
+        };
+        <span class="kw">let</span> result = services::create_one(&db, req).<span class="kw">await</span>;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().title, <span class="str">"Test"</span>);
+    }
+
+    <span class="attr">#[tokio::test]</span>
+    <span class="kw">async fn</span> <span class="fn">test_find_nonexistent</span>() {
+        <span class="kw">let</span> db = setup_test_db().<span class="kw">await</span>;
+        <span class="kw">let</span> result = services::find_by_id(&db, <span class="num">999</span>).<span class="kw">await</span>;
+        assert!(result.is_err());
+    }
+}</code></pre>
+
+                <h3>Testing: Integration Tests</h3>
+                <p>Integration tests start a full server and test endpoints:</p>
+<pre><code><span class="comment">// tests/blog_integration_tests.rs</span>
+<span class="attr">#[tokio::test]</span>
+<span class="kw">async fn</span> <span class="fn">test_list_blogs_endpoint</span>() {
+    <span class="kw">let</span> app = TestApp::new().<span class="kw">await</span>;
+    <span class="kw">let</span> res = app.get(<span class="str">"/api/blogs"</span>).<span class="kw">await</span>;
+    assert_eq!(res.status, <span class="num">200</span>);
+    <span class="kw">let</span> body: Vec&lt;BlogResponse&gt; = res.json().<span class="kw">await</span>.unwrap();
+    assert!(body.is_empty());
+}
+
+<span class="attr">#[tokio::test]</span>
+<span class="kw">async fn</span> <span class="fn">test_create_and_get_blog</span>() {
+    <span class="kw">let</span> app = TestApp::new().<span class="kw">await</span>;
+    <span class="kw">let</span> req = CreateBlogRequest {
+        title: <span class="str">"Hello"</span>.to_string(),
+        body: <span class="str">"World"</span>.to_string(),
+    };
+    <span class="kw">let</span> res = app.post(<span class="str">"/api/blogs"</span>, &req).<span class="kw">await</span>;
+    assert_eq!(res.status, <span class="num">201</span>);
+    <span class="kw">let</span> blog: BlogResponse = res.json().<span class="kw">await</span>.unwrap();
+    <span class="kw">let</span> get_res = app.get(&<span class="kw">format!</span>(<span class="str">"/api/blogs/{}"</span>, blog.id)).<span class="kw">await</span>;
+    assert_eq!(get_res.status, <span class="num">200</span>);
+}</code></pre>
+
+                <h3>Common Patterns: Authorization</h3>
+                <p>Inject user ID from auth middleware into handlers:</p>
+<pre><code><span class="comment">// Extract authenticated user from request</span>
+<span class="kw">pub async fn</span> <span class="fn">create_as_user</span>(
+    State(state): State&lt;AppState&gt;,
+    user: AuthUser,  <span class="comment">// Extracted from JWT</span>
+    JsonBody(payload): JsonBody&lt;CreateBlogRequest&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;BlogResponse&gt;, StatusCode&gt; {
+    <span class="kw">let</span> blog = services::create_one_for_user(
+        &state.db,
+        user.id,
+        payload
+    ).<span class="kw">await</span>
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    <span class="type">Ok</span>(Json(blog))
+}</code></pre>
+
+                <h3>Common Patterns: Validation & Error Handling</h3>
+                <p>Use Chopin's <code>ChopinError</code> enum for consistent error responses:</p>
+<pre><code><span class="comment">// Validation in service layer</span>
+<span class="kw">pub async fn</span> <span class="fn">create_validated</span>(
+    db: &DatabaseConnection,
+    payload: CreateBlogRequest,
+) -> <span class="type">Result</span>&lt;BlogResponse, ChopinError&gt; {
+    <span class="comment">// Validate</span>
+    <span class="kw">if</span> payload.title.is_empty() {
+        <span class="kw">return</span> Err(ChopinError::Validation(
+            <span class="str">"Title cannot be empty"</span>.to_string()
+        ));
+    }
+    <span class="comment">// Then create...</span>
+    <span class="type">Ok</span>(BlogResponse::default())
+}</code></pre>
+
+                <h3>Database Operations: Transactions</h3>
+                <p>Use transactions for operations that span multiple tables:</p>
+<pre><code><span class="kw">pub async fn</span> <span class="fn">create_with_tags</span>(
+    db: &DatabaseConnection,
+    blog_req: CreateBlogRequest,
+    tag_ids: Vec&lt;<span class="type">i32</span>&gt;,
+) -> <span class="type">Result</span>&lt;BlogResponse, ChopinError&gt; {
+    <span class="kw">let</span> txn = db.begin().<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?;
+
+    <span class="comment">// Create blog</span>
+    <span class="kw">let</span> blog = models::ActiveModel {
+        title: Set(blog_req.title),
+        body: Set(blog_req.body),
+        ..Default::default()
+    }.insert(&txn).<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?;
+
+    <span class="comment">// Associate tags</span>
+    <span class="kw">for</span> tag_id <span class="kw">in</span> tag_ids {
+        <span class="comment">// Create association...</span>
+    }
+
+    txn.commit().<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?;
+
+    <span class="type">Ok</span>(BlogResponse::from(blog))
+}</code></pre>
+
             </section>
 
             <!-- 4. ChopinModule Trait -->
