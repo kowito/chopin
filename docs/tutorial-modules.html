@@ -42,7 +42,14 @@
                 <ol class="toc-list">
                     <li><a href="#architecture" class="toc-link">Architecture Overview</a></li>
                     <li><a href="#startapp" class="toc-link">Creating Modules</a></li>
-                    <li><a href="#mvsr" class="toc-link">MVSR Pattern</a></li>
+                    <li><a href="#mvsr" class="toc-link">MVSR Pattern Overview</a></li>
+                    <li><a href="#models" class="toc-link">Models (M)</a></li>
+                    <li><a href="#dtos" class="toc-link">DTOs (D)</a></li>
+                    <li><a href="#services" class="toc-link">Services (S)</a></li>
+                    <li><a href="#handlers" class="toc-link">Handlers (V)</a></li>
+                    <li><a href="#routes" class="toc-link">Routes (R)</a></li>
+                    <li><a href="#request-flow" class="toc-link">Request Flow</a></li>
+                    <li><a href="#testing" class="toc-link">Testing Strategies</a></li>
                     <li><a href="#chopin-module" class="toc-link">ChopinModule Trait</a></li>
                     <li><a href="#mounting" class="toc-link">Mounting & Composition</a></li>
                     <li><a href="#best-practices" class="toc-link">Best Practices</a></li>
@@ -134,9 +141,10 @@ chopin generate model Post title:string body:text --module blog
             </section>
 
             <!-- 3. MVSR Pattern -->
+            <!-- 3. MVSR Pattern Overview -->
             <section id="mvsr" class="tutorial-section">
                 <div class="section-number">22</div>
-                <h2>The MVSR Pattern</h2>
+                <h2>MVSR Pattern Overview</h2>
                 <p>Every module follows the <strong>MVSR pattern</strong>: Model – View/Handler – Service – Router. This separates concerns clearly and makes each layer independently testable.</p>
 
                 <table>
@@ -150,9 +158,9 @@ chopin generate model Post title:string body:text --module blog
                             <td>SeaORM entities &amp; database schema</td>
                         </tr>
                         <tr>
-                            <td><strong>View/Handler</strong></td>
-                            <td><code>handlers.rs</code></td>
-                            <td>Thin HTTP adapters: extract request → call service → return response</td>
+                            <td><strong>DTO</strong></td>
+                            <td><code>dto.rs</code></td>
+                            <td>Request/response types with <code>Serialize</code>, <code>Deserialize</code>, <code>ToSchema</code></td>
                         </tr>
                         <tr>
                             <td><strong>Service</strong></td>
@@ -160,27 +168,118 @@ chopin generate model Post title:string body:text --module blog
                             <td>Pure business logic. No HTTP types. Receives <code>DatabaseConnection</code>, returns domain types.</td>
                         </tr>
                         <tr>
+                            <td><strong>View/Handler</strong></td>
+                            <td><code>handlers.rs</code></td>
+                            <td>Thin HTTP adapters: extract request → call service → return response</td>
+                        </tr>
+                        <tr>
                             <td><strong>Router</strong></td>
                             <td><code>routes.rs</code></td>
                             <td>Maps HTTP methods + paths to handler functions</td>
                         </tr>
-                        <tr>
-                            <td><strong>DTO</strong></td>
-                            <td><code>dto.rs</code></td>
-                            <td>Request/response types with <code>Serialize</code>, <code>Deserialize</code>, <code>ToSchema</code></td>
-                        </tr>
                     </tbody>
                 </table>
 
-                <h3>Why separate handlers and services?</h3>
                 <div class="callout">
                     <i data-lucide="info" class="inline-icon"></i>
                     <div>
-                        <strong>Handlers</strong> deal with HTTP: extracting query params, request bodies, returning JSON responses. <strong>Services</strong> are pure Rust functions that take a database connection and return domain objects. Services are 100% unit-testable without starting a server.
+                        <strong>Why this separation?</strong> Each layer has a single responsibility. Models handle data persistence, DTOs define contracts, Services contain business logic, Handlers adapt HTTP to domain logic, and Routes wire everything together. This makes each layer independently testable.
                     </div>
                 </div>
+            </section>
 
-                <h3>Example: complete service</h3>
+            <!-- 4. Models (M) -->
+            <section id="models" class="tutorial-section">
+                <div class="section-number">23</div>
+                <h2>Models (M) — Database Layer</h2>
+                <p>Models are <strong>SeaORM entities</strong> that define your database schema. They represent tables and handle persistence.</p>
+
+                <h3>Defining a Model</h3>
+<pre><code><span class="comment">// src/apps/blog/models.rs</span>
+<span class="kw">use</span> chrono::Utc;
+<span class="kw">use</span> sea_orm::prelude::*;
+<span class="kw">use</span> serde::{Deserialize, Serialize};
+
+<span class="attr">#[derive(Clone, Debug, DeriveEntityModel, Serialize, Deserialize)]</span>
+<span class="attr">#[sea_orm(table_name = "blog")]</span>
+<span class="kw">pub struct</span> Model {
+    <span class="attr">#[sea_orm(primary_key)]</span>
+    <span class="kw">pub</span> id: <span class="type">i32</span>,
+    <span class="kw">pub</span> title: <span class="type">String</span>,
+    <span class="kw">pub</span> body: <span class="type">String</span>,
+    <span class="kw">pub</span> author_id: <span class="type">i32</span>,
+    <span class="kw">pub</span> created_at: DateTime,
+    <span class="kw">pub</span> updated_at: DateTime,
+}
+
+<span class="attr">#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]</span>
+<span class="kw">pub enum</span> Relation {}
+
+<span class="kw">impl</span> ActiveModelBehavior <span class="kw">for</span> ActiveModel {}</code></pre>
+
+                <div class="callout">
+                    <i data-lucide="lightbulb" class="inline-icon"></i>
+                    <div>
+                        <strong>Key Points:</strong> Models are pure data structures. They never contain business logic. Use <code>DeriveEntityModel</code> for SeaORM integration. Add <code>Serialize</code>/<code>Deserialize</code> if you need JSON conversion.
+                    </div>
+                </div>
+            </section>
+
+            <!-- 5. DTOs (D) -->
+            <section id="dtos" class="tutorial-section">
+                <div class="section-number">24</div>
+                <h2>DTOs (D) — Data Transfer Objects</h2>
+                <p>DTOs define request/response contracts with validation and OpenAPI documentation. They're separate from models to decouple API contracts from database schema.</p>
+
+                <h3>Request DTOs</h3>
+<pre><code><span class="comment">// src/apps/blog/dto.rs</span>
+<span class="kw">use</span> serde::{Deserialize, Serialize};
+<span class="kw">use</span> utoipa::ToSchema;
+
+<span class="attr">#[derive(Debug, Serialize, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> CreateBlogRequest {
+    <span class="attr">#[schema(example = "My First Post")]</span>
+    <span class="kw">pub</span> title: String,
+
+    <span class="attr">#[schema(example = "This is the content...")]</span>
+    <span class="kw">pub</span> body: String,
+}
+
+<span class="attr">#[derive(Debug, Serialize, Deserialize, ToSchema)]</span>
+<span class="kw">pub struct</span> BlogResponse {
+    <span class="kw">pub</span> id: <span class="type">i32</span>,
+    <span class="kw">pub</span> title: String,
+    <span class="kw">pub</span> body: String,
+    <span class="kw">pub</span> author_id: <span class="type">i32</span>,
+}
+
+<span class="comment">// Conversions from Model to DTO</span>
+<span class="kw">impl</span> From&lt;super::models::Model&gt; <span class="kw">for</span> BlogResponse {
+    <span class="kw">fn</span> from(m: super::models::Model) -> <span class="type">Self</span> {
+        <span class="type">Self</span> {
+            id: m.id,
+            title: m.title,
+            body: m.body,
+            author_id: m.author_id,
+        }
+    }
+}</code></pre>
+
+                <div class="callout">
+                    <i data-lucide="shield" class="inline-icon"></i>
+                    <div>
+                        <strong>Why DTOs?</strong> DTOs let you expose only the fields you want in your API while keeping internal database fields private. Change your database schema without breaking API contracts.
+                    </div>
+                </div>
+            </section>
+
+            <!-- 6. Services (S) -->
+            <section id="services" class="tutorial-section">
+                <div class="section-number">25</div>
+                <h2>Services (S) — Business Logic</h2>
+                <p>Services contain pure business logic. They're <strong>HTTP-free</strong> — no request/response types, just database connections and domain objects. This makes them 100% unit-testable.</p>
+
+                <h3>Service Layer Example</h3>
 <pre><code><span class="comment">// src/apps/blog/services.rs</span>
 <span class="kw">use</span> chopin_core::error::ChopinError;
 <span class="kw">use</span> sea_orm::*;
@@ -219,90 +318,81 @@ chopin generate model Post title:string body:text --module blog
         .ok_or_else(|| ChopinError::NotFound(<span class="kw">format!</span>(<span class="str">"Blog {} not found"</span>, id)))
 }</code></pre>
 
-                <h3>The M in MVSR: Models</h3>
-                <p>Models are <strong>SeaORM entities</strong> that define your database schema. They're auto-generated or written by hand:</p>
-<pre><code><span class="comment">// src/apps/blog/models.rs</span>
-<span class="kw">use</span> chrono::Utc;
-<span class="kw">use</span> sea_orm::prelude::*;
-<span class="kw">use</span> serde::{Deserialize, Serialize};
-
-<span class="attr">#[derive(Clone, Debug, DeriveEntityModel, Serialize, Deserialize)]</span>
-<span class="attr">#[sea_orm(table_name = "blog")]</span>
-<span class="kw">pub struct</span> Model {
-    <span class="attr">#[sea_orm(primary_key)]</span>
-    <span class="kw">pub</span> id: <span class="type">i32</span>,
-    <span class="kw">pub</span> title: <span class="type">String</span>,
-    <span class="kw">pub</span> body: <span class="type">String</span>,
-    <span class="kw">pub</span> author_id: <span class="type">i32</span>,
-    <span class="kw">pub</span> created_at: DateTime,
-    <span class="kw">pub</span> updated_at: DateTime,
-}
-
-<span class="attr">#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]</span>
-<span class="kw">pub enum</span> Relation {}
-
-<span class="kw">impl</span> ActiveModelBehavior <span class="kw">for</span> ActiveModel {}</code></pre>
-
-                <h3>The D in MVSR: Data Transfer Objects (DTOs)</h3>
-                <p>DTOs define request/response contracts with validation and OpenAPI documentation:</p>
-<pre><code><span class="comment">// src/apps/blog/dto.rs</span>
-<span class="kw">use</span> serde::{Deserialize, Serialize};
-<span class="kw">use</span> utoipa::ToSchema;
-
-<span class="attr">#[derive(Debug, Serialize, Deserialize, ToSchema)]</span>
-<span class="kw">pub struct</span> CreateBlogRequest {
-    <span class="attr">#[schema(example = "My First Post")]</span>
-    <span class="kw">pub</span> title: String,
-
-    <span class="attr">#[schema(example = "This is the content...")]</span>
-    <span class="kw">pub</span> body: String,
-}
-
-<span class="attr">#[derive(Debug, Serialize, Deserialize, ToSchema)]</span>
-<span class="kw">pub struct</span> BlogResponse {
-    <span class="kw">pub</span> id: <span class="type">i32</span>,
-    <span class="kw">pub</span> title: String,
-    <span class="kw">pub</span> body: String,
-    <span class="kw">pub</span> author_id: <span class="type">i32</span>,
-}
-
-<span class="comment">// Conversions</span>
-<span class="kw">impl</span> From&lt;super::models::Model&gt; <span class="kw">for</span> BlogResponse {
-    <span class="kw">fn</span> from(m: super::models::Model) -> <span class="type">Self</span> {
-        <span class="type">Self</span> {
-            id: m.id,
-            title: m.title,
-            body: m.body,
-            author_id: m.author_id,
-        }
+                <h3>Validation in Services</h3>
+<pre><code><span class="kw">pub async fn</span> <span class="fn">create_validated</span>(
+    db: &DatabaseConnection,
+    payload: CreateBlogRequest,
+) -> <span class="type">Result</span>&lt;BlogResponse, ChopinError&gt; {
+    <span class="comment">// Validate</span>
+    <span class="kw">if</span> payload.title.is_empty() {
+        <span class="kw">return</span> Err(ChopinError::Validation(
+            <span class="str">"Title cannot be empty"</span>.to_string()
+        ));
     }
+    <span class="comment">// Then create...</span>
+    create_one(db, payload).<span class="kw">await</span>
 }</code></pre>
 
-                <h3>The V in MVSR: Handlers (View/HTTP Layer)</h3>
-                <p>Handlers extract HTTP data, call services, and return responses. They're thin HTTP adapters:</p>
+                <h3>Database Transactions</h3>
+<pre><code><span class="kw">pub async fn</span> <span class="fn">create_with_tags</span>(
+    db: &DatabaseConnection,
+    blog_req: CreateBlogRequest,
+    tag_ids: Vec&lt;<span class="type">i32</span>&gt;,
+) -> <span class="type">Result</span>&lt;BlogResponse, ChopinError&gt; {
+    <span class="kw">let</span> txn = db.begin().<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?;
+
+    <span class="comment">// Create blog</span>
+    <span class="kw">let</span> blog = models::ActiveModel {
+        title: Set(blog_req.title),
+        body: Set(blog_req.body),
+        ..Default::default()
+    }.insert(&txn).<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?;
+
+    <span class="comment">// Associate tags...</span>
+
+    txn.commit().<span class="kw">await</span>
+        .map_err(|e| ChopinError::Database(e.to_string()))?;
+
+    <span class="type">Ok</span>(BlogResponse::from(blog))
+}</code></pre>
+
+                <div class="callout">
+                    <i data-lucide="check-circle" class="inline-icon"></i>
+                    <div>
+                        <strong>Key Principle:</strong> Services never import HTTP types. They're pure Rust functions that take domain inputs and return domain outputs. This keeps them testable and reusable.
+                    </div>
+                </div>
+            </section>
+
+            <!-- 7. Handlers (V) -->
+            <section id="handlers" class="tutorial-section">
+                <div class="section-number">26</div>
+                <h2>Handlers (V) — HTTP Adapters</h2>
+                <p>Handlers are thin HTTP adapters. They extract data from requests, call services, and format responses. Keep them minimal — all business logic belongs in services.</p>
+
+                <h3>Basic Handlers</h3>
 <pre><code><span class="comment">// src/apps/blog/handlers.rs</span>
 <span class="kw">use</span> axum::{extract::*, http::StatusCode, response::IntoResponse};
 <span class="kw">use</span> chopin_core::extractors::JsonBody;
 <span class="kw">use</span> chopin_core::controllers::AppState;
-<span class="kw">use</span> serde_json::json;
 <span class="kw">use</span> super::{dto::*, services};
 
 <span class="comment">/// GET /api/blogs — list all blog posts</span>
 <span class="kw">pub async fn</span> <span class="fn">list_blogs</span>(
     State(state): State&lt;AppState&gt;,
-) -> <span class="type">Result</span>&lt;impl IntoResponse, StatusCode&gt; {
-    <span class="kw">let</span> blogs = services::list_all(&state.db).<span class="kw">await</span>
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    <span class="type">Ok</span>(Json(blogs))
+) -> <span class="type">Result</span>&lt;Json&lt;Vec&lt;BlogResponse&gt;&gt;, StatusCode&gt; {
+    services::list_all(&state.db).<span class="kw">await</span>
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 <span class="comment">/// POST /api/blogs — create a new blog post</span>
 <span class="kw">pub async fn</span> <span class="fn">create_blog</span>(
     State(state): State&lt;AppState&gt;,
     JsonBody(payload): JsonBody&lt;CreateBlogRequest&gt;,
-    user_id: <span class="type">i32</span>,
 ) -> <span class="type">Result</span>&lt;(StatusCode, Json&lt;BlogResponse&gt;), StatusCode&gt; {
-    <span class="comment">// Inject user_id from auth context</span>
     <span class="kw">let</span> blog = services::create_one(&state.db, payload).<span class="kw">await</span>
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     <span class="type">Ok</span>((StatusCode::CREATED, Json(blog)))
@@ -318,10 +408,34 @@ chopin generate model Post title:string body:text --module blog
         .map_err(|_| StatusCode::NOT_FOUND)
 }</code></pre>
 
-                <h3>The R in MVSR: Routes</h3>
-                <p>Routes map HTTP methods and paths to handler functions. They bind the entire request flow together: method + path → handler function.</p>
+                <h3>Auth-Protected Handlers</h3>
+<pre><code><span class="kw">use</span> chopin_core::extractors::AuthUser;
 
-                <h4>Basic Route Definition</h4>
+<span class="kw">pub async fn</span> <span class="fn">create_as_user</span>(
+    State(state): State&lt;AppState&gt;,
+    user: AuthUser,  <span class="comment">// Extracted from JWT</span>
+    JsonBody(payload): JsonBody&lt;CreateBlogRequest&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;BlogResponse&gt;, StatusCode&gt; {
+    services::create_one_for_user(&state.db, user.id, payload).<span class="kw">await</span>
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}</code></pre>
+
+                <div class="callout">
+                    <i data-lucide="zap" class="inline-icon"></i>
+                    <div>
+                        <strong>Handler Rule:</strong> Handlers should be 3-5 lines max. Extract → Call Service → Return. No business logic here.
+                    </div>
+                </div>
+            </section>
+
+            <!-- 8. Routes (R) -->
+            <section id="routes" class="tutorial-section">
+                <div class="section-number">27</div>
+                <h2>Routes (R) — URL Mapping</h2>
+                <p>Routes map HTTP methods and paths to handler functions. They wire the entire request flow together.</p>
+
+                <h3>Basic Route Definition</h3>
 <pre><code><span class="comment">// src/apps/blog/routes.rs</span>
 <span class="kw">use</span> axum::{routing::*, Router};
 <span class="kw">use</span> chopin_core::controllers::AppState;
@@ -329,211 +443,87 @@ chopin generate model Post title:string body:text --module blog
 
 <span class="kw">pub fn</span> <span class="fn">routes</span>() -> Router&lt;AppState&gt; {
     Router::new()
-        .route(<span class="str">"/api/blogs"</span>, <span class="fn">get</span>(handlers::list_blogs).<span class="fn">post</span>(handlers::create_blog))
-        .route(<span class="str">"/api/blogs/:id"</span>, <span class="fn">get</span>(handlers::get_blog))
+        .route(
+            <span class="str">"/api/blogs"</span>,
+            <span class="fn">get</span>(handlers::list_blogs).<span class="fn">post</span>(handlers::create_blog)
+        )
+        .route(
+            <span class="str">"/api/blogs/:id"</span>,
+            <span class="fn">get</span>(handlers::get_blog)
+                .<span class="fn">put</span>(handlers::update_blog)
+                .<span class="fn">delete</span>(handlers::delete_blog)
+        )
 }</code></pre>
 
-                <h4>HTTP Methods</h4>
-                <p>Bind one or more HTTP methods to a handler:</p>
-<pre><code><span class="comment">// Single method</span>
-.route(<span class="str">"/path"</span>, <span class="fn">get</span>(handler))
+                <h3>HTTP Methods</h3>
+<pre><code><span class="comment">// CRUD endpoints</span>
+.route(<span class="str">"/items"</span>, <span class="fn">get</span>(list).<span class="fn">post</span>(create))
+.route(<span class="str">"/items/:id"</span>, <span class="fn">get</span>(get_one).<span class="fn">put</span>(update).<span class="fn">patch</span>(partial_update).<span class="fn">delete</span>(remove))</code></pre>
 
-<span class="comment">// Multiple methods on same path</span>
-.route(<span class="str">"/path"</span>, <span class="fn">get</span>(get_handler).<span class="fn">post</span>(create_handler).<span class="fn">put</span>(update_handler))
-
-<span class="comment">// All CRUD methods</span>
-.route(
-    <span class="str">"/items"</span>,
-    <span class="fn">get</span>(list_items)
-        .<span class="fn">post</span>(create_item)
-)
-.route(
-    <span class="str">"/items/:id"</span>,
-    <span class="fn">get</span>(get_item)
-        .<span class="fn">put</span>(update_item)
-        .<span class="fn">patch</span>(patch_item)
-        .<span class="fn">delete</span>(delete_item)
-)
-
-<span class="comment">// Fallback for unmatched methods</span>
-.fallback(not_found_handler)</code></pre>
-
-                <h4>Path Parameters</h4>
-                <p>Capture dynamic segments from the URL:</p>
+                <h3>Path Parameters</h3>
 <pre><code><span class="comment">// Single parameter</span>
 .route(<span class="str">"/blogs/:id"</span>, <span class="fn">get</span>(get_blog))
 
 <span class="comment">// Multiple parameters</span>
-.route(<span class="str">"/users/:user_id/posts/:post_id"</span>, <span class="fn">get</span>(get_user_post))
+.route(<span class="str">"/users/:user_id/posts/:post_id"</span>, <span class="fn">get</span>(get_user_post))</code></pre>
 
-<span class="comment">// In handler, extract with Path</span>
-<span class="kw">pub async fn</span> <span class="fn">get_user_post</span>(
-    Path((user_id, post_id)): Path&lt;(<span class="type">i32</span>, <span class="type">i32</span>)&gt;,
-) {
-    <span class="comment">// Use user_id and post_id...</span>
-}</code></pre>
-
-                <h4>Nesting Routes</h4>
-                <p>Organize related routes under a common path prefix using <code>nest()</code>:</p>
+                <h3>Nesting Routes</h3>
 <pre><code><span class="kw">pub fn</span> <span class="fn">routes</span>() -> Router&lt;AppState&gt; {
     Router::new()
         .nest(
             <span class="str">"/api/blogs"</span>,
             Router::new()
-                .route(<span class="str">""</span>, <span class="fn">get</span>(list_blogs).<span class="fn">post</span>(create_blog))
-                .route(<span class="str">":id"</span>, <span class="fn">get</span>(get_blog).<span class="fn">put</span>(update_blog).<span class="fn">delete</span>(delete_blog))
-                .route(<span class="str">":id/comments"</span>, <span class="fn">get</span>(list_comments).<span class="fn">post</span>(create_comment))
-        )
-        .nest(
-            <span class="str">"/api/users"</span>,
-            Router::new()
-                .route(<span class="str">""</span>, <span class="fn">get</span>(list_users))
-                .route(<span class="str">":id"</span>, <span class="fn">get</span>(get_user))
+                .route(<span class="str">""</span>, <span class="fn">get</span>(list).<span class="fn">post</span>(create))
+                .route(<span class="str">":id"</span>, <span class="fn">get</span>(get_one).<span class="fn">put</span>(update).<span class="fn">delete</span>(remove))
+                .route(<span class="str">":id/comments"</span>, <span class="fn">get</span>(list_comments))
         )
 }</code></pre>
 
-                <h4>Query Parameters</h4>
-                <p>Handle query strings like <code>/api/blogs?skip=10&take=20&search=rust</code>:</p>
+                <h3>Query Parameters</h3>
 <pre><code><span class="kw">use</span> axum::extract::Query;
 <span class="kw">use</span> serde::Deserialize;
 
 <span class="attr">#[derive(Deserialize)]</span>
-<span class="kw">pub struct</span> ListQuery {
+<span class="kw">struct</span> ListQuery {
     skip: Option&lt;<span class="type">i32</span>&gt;,
     take: Option&lt;<span class="type">i32</span>&gt;,
-    search: Option&lt;String&gt;,
 }
 
-<span class="kw">pub async fn</span> <span class="fn">list_blogs</span>(
-    Query(q): Query&lt;ListQuery&gt;,
-) -> Json&lt;Vec&lt;BlogResponse&gt;&gt; {
-    <span class="kw">let</span> skip = q.skip.unwrap_or(<span class="num">0</span>);
-    <span class="kw">let</span> take = q.take.unwrap_or(<span class="num">20</span>);
-    <span class="comment">// Filter and paginate...</span>
+<span class="kw">pub async fn</span> <span class="fn">list_blogs</span>(Query(q): Query&lt;ListQuery&gt;) {
+    <span class="comment">// Use q.skip and q.take...</span>
 }</code></pre>
 
-                <h4>Route Composition</h4>
-                <p>Combine multiple sub-routers into a single router:</p>
-<pre><code><span class="kw">pub fn</span> <span class="fn">routes</span>() -> Router&lt;AppState&gt; {
-    let public_routes = Router::new()
-        .route(<span class="str">"/login"</span>, <span class="fn">post</span>(login))
-        .route(<span class="str">"/register"</span>, <span class="fn">post</span>(register));
-
-    let protected_routes = Router::new()
-        .route(<span class="str">"/profile"</span>, <span class="fn">get</span>(get_profile))
-        .layer(middleware::from_fn(auth_middleware));
-
-    let admin_routes = Router::new()
-        .route(<span class="str">"/users"</span>, <span class="fn">get</span>(list_users))
-        .route(<span class="str">"/users/:id"</span>, <span class="fn">delete</span>(delete_user))
-        .layer(middleware::from_fn(admin_middleware));
-
-    Router::new()
-        .nest(<span class="str">"/api/auth"</span>, public_routes)
-        .nest(<span class="str">"/api/user"</span>, protected_routes)
-        .nest(<span class="str">"/api/admin"</span>, admin_routes)
-}</code></pre>
-
-                <h4>Route Guards & Middleware</h4>
-                <p>Apply middleware to specific route groups:</p>
+                <h3>Route Middleware</h3>
 <pre><code><span class="kw">use</span> axum::middleware;
 
-<span class="kw">pub fn</span> <span class="fn">routes</span>() -> Router&lt;AppState&gt; {
-    Router::new()
-        <span class="comment">// Public routes (no middleware)</span>
-        .route(<span class="str">"/public"</span>, <span class="fn">get</span>(public_handler))
+Router::new()
+    <span class="comment">// Public routes</span>
+    .route(<span class="str">"/login"</span>, <span class="fn">post</span>(login))
+    
+    <span class="comment">// Protected routes</span>
+    .route(<span class="str">"/profile"</span>, <span class="fn">get</span>(profile))
+    .layer(middleware::from_fn(require_auth))
+    
+    <span class="comment">// Admin routes</span>
+    .route(<span class="str">"/admin/users"</span>, <span class="fn">get</span>(list_users))
+    .layer(middleware::from_fn(require_admin))</code></pre>
 
-        <span class="comment">// Authenticated routes</span>
-        .route(<span class="str">"/profile"</span>, <span class="fn">get</span>(profile_handler))
-        .route(<span class="str">"/settings"</span>, <span class="fn">post</span>(update_settings))
-        .layer(middleware::from_fn(require_auth))
+                <h3>RESTful Conventions</h3>
+<pre><code>GET    <span class="str">/api/posts</span>              <span class="comment">→ list_posts</span>
+POST   <span class="str">/api/posts</span>              <span class="comment">→ create_post</span>
+GET    <span class="str">/api/posts/:id</span>          <span class="comment">→ get_post</span>
+PUT    <span class="str">/api/posts/:id</span>          <span class="comment">→ replace_post</span>
+PATCH  <span class="str">/api/posts/:id</span>          <span class="comment">→ update_post</span>
+DELETE <span class="str">/api/posts/:id</span>          <span class="comment">→ delete_post</span>
+GET    <span class="str">/api/posts/:id/comments</span> <span class="comment">→ list_comments</span></code></pre>
+            </section>
 
-        <span class="comment">// Admin-only routes</span>
-        .route(<span class="str">"/admin/users"</span>, <span class="fn">get</span>(list_all_users))
-        .route(<span class="str">"/admin/users/:id"</span>, <span class="fn">delete</span>(delete_user))
-        .layer(middleware::from_fn(require_admin))
-}</code></pre>
+            <!-- 9. Request Flow -->
+            <section id="request-flow" class="tutorial-section">
+                <div class="section-number">28</div>
+                <h2>Request Flow Through MVSR</h2>
+                <p>Here's how a request flows through all MVSR layers:</p>
 
-                <h4>RESTful Route Organization</h4>
-                <p>Standard REST patterns for resources:</p>
-<pre><code><span class="comment">// Collection of resources</span>
-GET    <span class="str">/api/posts</span>          <span class="comment">→ list_posts</span>
-POST   <span class="str">/api/posts</span>          <span class="comment">→ create_post</span>
-
-<span class="comment">// Single resource</span>
-GET    <span class="str">/api/posts/:id</span>      <span class="comment">→ get_post</span>
-PUT    <span class="str">/api/posts/:id</span>      <span class="comment">→ replace_post (full update)</span>
-PATCH  <span class="str">/api/posts/:id</span>      <span class="comment">→ update_post (partial update)</span>
-DELETE <span class="str">/api/posts/:id</span>      <span class="comment">→ delete_post</span>
-
-<span class="comment">// Sub-resources</span>
-GET    <span class="str">/api/posts/:id/comments</span>    <span class="comment">→ list_post_comments</span>
-POST   <span class="str">/api/posts/:id/comments</span>    <span class="comment">→ create_post_comment</span>
-
-<span class="comment">// Implementation</span>
-<span class="kw">pub fn</span> <span class="fn">routes</span>() -> Router&lt;AppState&gt; {
-    Router::new()
-        .route(
-            <span class="str">"/api/posts"</span>,
-            <span class="fn">get</span>(list_posts).<span class="fn">post</span>(create_post),
-        )
-        .route(
-            <span class="str">"/api/posts/:id"</span>,
-            <span class="fn">get</span>(get_post)
-                .<span class="fn">put</span>(replace_post)
-                .<span class="fn">patch</span>(update_post)
-                .<span class="fn">delete</span>(delete_post),
-        )
-        .route(
-            <span class="str">"/api/posts/:id/comments"</span>,
-            <span class="fn">get</span>(list_post_comments).<span class="fn">post</span>(create_post_comment),
-        )
-}</code></pre>
-
-                <h4>Response Types in Routes</h4>
-                <p>Different handlers can return different response types:</p>
-<pre><code><span class="comment">// Plain JSON</span>
-<span class="kw">pub async fn</span> <span class="fn">handler1</span>() -> Json&lt;Data&gt; { }
-
-<span class="comment">// JSON with status code</span>
-<span class="kw">pub async fn</span> <span class="fn">handler2</span>() -> (StatusCode, Json&lt;Data&gt;) {
-    (StatusCode::CREATED, Json(data))
-}
-
-<span class="comment">// Result (error handling)</span>
-<span class="kw">pub async fn</span> <span class="fn">handler3</span>() -> <span class="type">Result</span>&lt;Json&lt;Data&gt;, StatusCode&gt; {
-    <span class="type">Ok</span>(Json(data))
-}
-
-<span class="comment">// Response with headers</span>
-<span class="kw">pub async fn</span> <span class="fn">handler4</span>() -> (StatusCode, HeaderMap, Json&lt;Data&gt;) { }
-
-<span class="comment">// String/HTML response</span>
-<span class="kw">pub async fn</span> <span class="fn">handler5</span>() -> <span class="type">Html</span>&lt;String&gt; {
-    <span class="type">Html</span>(<span class="str">"&lt;h1&gt;Hello&lt;/h1&gt;"</span>.to_string())
-}</code></pre>
-
-                <h4>Provider State to Handlers</h4>
-                <p>Share application state (database, cache, config) with handlers:</p>
-<pre><code><span class="kw">use</span> axum::extract::State;
-
-<span class="kw">pub async fn</span> <span class="fn">get_blog</span>(
-    State(state): State&lt;AppState&gt;,  <span class="comment">// Contains db, redis, config</span>
-    Path(id): Path&lt;<span class="type">i32</span>&gt;,
-) -> Result&lt;Json&lt;BlogResponse&gt;, StatusCode&gt; {
-    <span class="kw">let</span> blog = services::find_by_id(&state.db, id).<span class="kw">await</span>?;
-    <span class="type">Ok</span>(Json(blog))
-}</code></pre>
-
-                <h4>Advanced: Route Wildcards</h4>
-                <p>Match any path segment or catch-all routes:</p>
-<pre><code><span class="comment">// Catch specific patterns</span>
-.route(<span class="str">/files/:filename</span>, <span class="fn">get</span>(get_file))
-
-<span class="comment">// Catch-all route (matches anything)</span>
-.fallback(not_found_handler)</code></pre>
-
-                <h4>Request Flow Through MVSR</h4>
                 <div class="callout">
                     <i data-lucide="arrow-right" class="inline-icon"></i>
                     <div>
@@ -547,52 +537,46 @@ POST   <span class="str">/api/posts/:id/comments</span>    <span class="comment"
                     </div>
                 </div>
 
-                <h4>Testing Routes</h4>
-                <p>Test entire route paths including handlers and middleware:</p>
-<pre><code><span class="attr">#[tokio::test]</span>
-<span class="kw">async fn</span> <span class="fn">test_blog_routes</span>() {
-    <span class="kw">let</span> app = TestApp::new().<span class="kw">await</span>;
+                <h3>Example: Complete Request</h3>
+<pre><code><span class="comment">// 1. Incoming Request</span>
+POST /api/blogs
+{ "title": "Hello", "body": "World" }
 
-    <span class="comment">// Test list endpoint</span>
-    <span class="kw">let</span> res = app.get(<span class="str">"/api/blogs"</span>).<span class="kw">await</span>;
-    assert_eq!(res.status, <span class="num">200</span>);
+<span class="comment">// 2. Router matches path → calls handler</span>
+.route(<span class="str">"/api/blogs"</span>, <span class="fn">post</span>(handlers::create_blog))
 
-    <span class="comment">// Test create endpoint</span>
-    <span class="kw">let</span> req = CreateBlogRequest { title: <span class="str">"Test"</span>.to_string(), body: <span class="str">"Content"</span>.to_string() };
-    <span class="kw">let</span> res = app.post(<span class="str">"/api/blogs"</span>, &req).<span class="kw">await</span>;
-    assert_eq!(res.status, <span class="num">201</span>);
+<span class="comment">// 3. Handler extracts DTO</span>
+<span class="kw">pub async fn</span> <span class="fn">create_blog</span>(
+    State(state): State&lt;AppState&gt;,
+    JsonBody(payload): JsonBody&lt;CreateBlogRequest&gt;,  <span class="comment">// ← DTO extracted</span>
+) {
+    <span class="comment">// 4. Handler calls service</span>
+    <span class="kw">let</span> blog = services::create_one(&state.db, payload).<span class="kw">await</span>?;
+    
+    <span class="comment">// 7. Return response</span>
+    <span class="type">Ok</span>((StatusCode::CREATED, Json(blog)))
+}
 
-    <span class="comment">// Test get with path parameter</span>
-    <span class="kw">let</span> blog: BlogResponse = res.json().<span class="kw">await</span>.unwrap();
-    <span class="kw">let</span> get_res = app.get(&<span class="kw">format!</span>(<span class="str">"/api/blogs/{}"</span>, blog.id)).<span class="kw">await</span>;
-    assert_eq!(get_res.status, <span class="num">200</span>);
-
-    <span class="comment">// Test update</span>
-    <span class="kw">let</span> updated = CreateBlogRequest { title: <span class="str">"Updated"</span>.to_string(), body: <span class="str">"New"</span>.to_string() };
-    <span class="kw">let</span> patch_res = app.patch(<span class="str">"/api/blogs/1"</span>, &updated).<span class="kw">await</span>;
-    assert_eq!(patch_res.status, <span class="num">200</span>);
-
-    <span class="comment">// Test delete</span>
-    <span class="kw">let</span> del_res = app.delete(<span class="str">"/api/blogs/1"</span>).<span class="kw">await</span>;
-    assert_eq!(del_res.status, <span class="num">200</span>);
+<span class="comment">// 5. Service performs business logic</span>
+<span class="kw">pub async fn</span> <span class="fn">create_one</span>(db: &DatabaseConnection, payload: CreateBlogRequest) {
+    <span class="comment">// 6. Service uses Model to persist</span>
+    <span class="kw">let</span> new = models::ActiveModel {
+        title: Set(payload.title),
+        body: Set(payload.body),
+        ..Default::default()
+    };
+    new.insert(db).<span class="kw">await</span>?
 }</code></pre>
+            </section>
 
+            <!-- 10. Testing Strategies -->
+            <section id="testing" class="tutorial-section">
+                <div class="section-number">29</div>
+                <h2>Testing Strategies</h2>
+                <p>The MVSR pattern makes testing easy. Test each layer independently.</p>
 
-                <h3>Request Flow Through MVSR</h3>
-                <div class="callout">
-                    <i data-lucide="arrow-right" class="inline-icon"></i>
-                    <div>
-                        <strong>Incoming HTTP Request</strong> → 
-                        <strong>Handler</strong> (validates via DTO) → 
-                        <strong>Service</strong> (business logic) → 
-                        <strong>Model</strong> (database ops) → 
-                        <strong>DTO Response</strong> (serialize) → 
-                        <strong>HTTP Response</strong>
-                    </div>
-                </div>
-
-                <h3>Testing: Unit Testing Services</h3>
-                <p>Services are functions without HTTP — test them with a database connection only:</p>
+                <h3>Unit Testing Services</h3>
+                <p>Services are pure functions — test them with just a database connection:</p>
 <pre><code><span class="comment">// tests/blog_service_tests.rs</span>
 <span class="attr">#[cfg(test)]</span>
 <span class="kw">mod</span> tests {
@@ -619,100 +603,48 @@ POST   <span class="str">/api/posts/:id/comments</span>    <span class="comment"
     }
 }</code></pre>
 
-                <h3>Testing: Integration Tests</h3>
-                <p>Integration tests start a full server and test endpoints:</p>
+                <h3>Integration Testing</h3>
+                <p>Test full request/response cycles with TestApp:</p>
 <pre><code><span class="comment">// tests/blog_integration_tests.rs</span>
-<span class="attr">#[tokio::test]</span>
-<span class="kw">async fn</span> <span class="fn">test_list_blogs_endpoint</span>() {
-    <span class="kw">let</span> app = TestApp::new().<span class="kw">await</span>;
-    <span class="kw">let</span> res = app.get(<span class="str">"/api/blogs"</span>).<span class="kw">await</span>;
-    assert_eq!(res.status, <span class="num">200</span>);
-    <span class="kw">let</span> body: Vec&lt;BlogResponse&gt; = res.json().<span class="kw">await</span>.unwrap();
-    assert!(body.is_empty());
-}
+<span class="kw">use</span> chopin_core::testing::TestApp;
 
 <span class="attr">#[tokio::test]</span>
 <span class="kw">async fn</span> <span class="fn">test_create_and_get_blog</span>() {
     <span class="kw">let</span> app = TestApp::new().<span class="kw">await</span>;
+    
+    <span class="comment">// Create</span>
     <span class="kw">let</span> req = CreateBlogRequest {
         title: <span class="str">"Hello"</span>.to_string(),
         body: <span class="str">"World"</span>.to_string(),
     };
     <span class="kw">let</span> res = app.post(<span class="str">"/api/blogs"</span>, &req).<span class="kw">await</span>;
     assert_eq!(res.status, <span class="num">201</span>);
+    
+    <span class="comment">// Get</span>
     <span class="kw">let</span> blog: BlogResponse = res.json().<span class="kw">await</span>.unwrap();
     <span class="kw">let</span> get_res = app.get(&<span class="kw">format!</span>(<span class="str">"/api/blogs/{}"</span>, blog.id)).<span class="kw">await</span>;
     assert_eq!(get_res.status, <span class="num">200</span>);
+    
+    <span class="comment">// Update</span>
+    <span class="kw">let</span> patch_res = app.patch(<span class="str">"/api/blogs/1"</span>, &req).<span class="kw">await</span>;
+    assert_eq!(patch_res.status, <span class="num">200</span>);
+    
+    <span class="comment">// Delete</span>
+    <span class="kw">let</span> del_res = app.delete(<span class="str">"/api/blogs/1"</span>).<span class="kw">await</span>;
+    assert_eq!(del_res.status, <span class="num">200</span>);
 }</code></pre>
 
-                <h3>Common Patterns: Authorization</h3>
-                <p>Inject user ID from auth middleware into handlers:</p>
-<pre><code><span class="comment">// Extract authenticated user from request</span>
-<span class="kw">pub async fn</span> <span class="fn">create_as_user</span>(
-    State(state): State&lt;AppState&gt;,
-    user: AuthUser,  <span class="comment">// Extracted from JWT</span>
-    JsonBody(payload): JsonBody&lt;CreateBlogRequest&gt;,
-) -> <span class="type">Result</span>&lt;Json&lt;BlogResponse&gt;, StatusCode&gt; {
-    <span class="kw">let</span> blog = services::create_one_for_user(
-        &state.db,
-        user.id,
-        payload
-    ).<span class="kw">await</span>
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-    <span class="type">Ok</span>(Json(blog))
-}</code></pre>
-
-                <h3>Common Patterns: Validation & Error Handling</h3>
-                <p>Use Chopin's <code>ChopinError</code> enum for consistent error responses:</p>
-<pre><code><span class="comment">// Validation in service layer</span>
-<span class="kw">pub async fn</span> <span class="fn">create_validated</span>(
-    db: &DatabaseConnection,
-    payload: CreateBlogRequest,
-) -> <span class="type">Result</span>&lt;BlogResponse, ChopinError&gt; {
-    <span class="comment">// Validate</span>
-    <span class="kw">if</span> payload.title.is_empty() {
-        <span class="kw">return</span> Err(ChopinError::Validation(
-            <span class="str">"Title cannot be empty"</span>.to_string()
-        ));
-    }
-    <span class="comment">// Then create...</span>
-    <span class="type">Ok</span>(BlogResponse::default())
-}</code></pre>
-
-                <h3>Database Operations: Transactions</h3>
-                <p>Use transactions for operations that span multiple tables:</p>
-<pre><code><span class="kw">pub async fn</span> <span class="fn">create_with_tags</span>(
-    db: &DatabaseConnection,
-    blog_req: CreateBlogRequest,
-    tag_ids: Vec&lt;<span class="type">i32</span>&gt;,
-) -> <span class="type">Result</span>&lt;BlogResponse, ChopinError&gt; {
-    <span class="kw">let</span> txn = db.begin().<span class="kw">await</span>
-        .map_err(|e| ChopinError::Database(e.to_string()))?;
-
-    <span class="comment">// Create blog</span>
-    <span class="kw">let</span> blog = models::ActiveModel {
-        title: Set(blog_req.title),
-        body: Set(blog_req.body),
-        ..Default::default()
-    }.insert(&txn).<span class="kw">await</span>
-        .map_err(|e| ChopinError::Database(e.to_string()))?;
-
-    <span class="comment">// Associate tags</span>
-    <span class="kw">for</span> tag_id <span class="kw">in</span> tag_ids {
-        <span class="comment">// Create association...</span>
-    }
-
-    txn.commit().<span class="kw">await</span>
-        .map_err(|e| ChopinError::Database(e.to_string()))?;
-
-    <span class="type">Ok</span>(BlogResponse::from(blog))
-}</code></pre>
-
+                <div class="callout">
+                    <i data-lucide="check-square" class="inline-icon"></i>
+                    <div>
+                        <strong>Testing Strategy:</strong> Write unit tests for services (fast, no HTTP). Write integration tests for critical user flows (slower, full stack).
+                    </div>
+                </div>
             </section>
 
-            <!-- 4. ChopinModule Trait -->
+            <!-- 11. ChopinModule Trait -->
             <section id="chopin-module" class="tutorial-section">
-                <div class="section-number">23</div>
+                <div class="section-number">30</div>
                 <h2>The ChopinModule Trait</h2>
                 <p>Every module implements the <code>ChopinModule</code> trait, which defines a standard contract for module composition:</p>
 
@@ -780,9 +712,9 @@ POST   <span class="str">/api/posts/:id/comments</span>    <span class="comment"
 }</code></pre>
             </section>
 
-            <!-- 5. Mounting & Composition -->
+            <!-- 12. Mounting & Composition -->
             <section id="mounting" class="tutorial-section">
-                <div class="section-number">24</div>
+                <div class="section-number">31</div>
                 <h2>Mounting & Composition</h2>
                 <p>The <code>main.rs</code> file is the "Composer" that assembles all modules into one application. Use <code>mount_module()</code> to add each module:</p>
 
@@ -820,9 +752,9 @@ POST   <span class="str">/api/posts/:id/comments</span>    <span class="comment"
                 </div>
             </section>
 
-            <!-- 6. Best Practices -->
+            <!-- 13. Best Practices -->
             <section id="best-practices" class="tutorial-section">
-                <div class="section-number">25</div>
+                <div class="section-number">32</div>
                 <h2>Best Practices</h2>
 
                 <h3>Module dependency rules</h3>
