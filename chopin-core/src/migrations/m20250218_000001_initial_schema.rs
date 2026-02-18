@@ -297,22 +297,47 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(Table::drop().table(RolePermissions::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(RolePermissions::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
-            .drop_table(Table::drop().table(Permissions::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(Permissions::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
-            .drop_table(Table::drop().table(LoginEvents::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(LoginEvents::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
-            .drop_table(Table::drop().table(SecurityTokens::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(SecurityTokens::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
             .drop_table(Table::drop().table(Sessions::Table).if_exists().to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(RefreshTokens::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(RefreshTokens::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
             .drop_table(Table::drop().table(Users::Table).if_exists().to_owned())
