@@ -94,7 +94,9 @@ Average Latency @ 256 connections (lower is better)
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| **Auth Module** | ✅ Opt-in | JWT + Argon2id, 2FA/TOTP, rate limiting, refresh tokens (vendor/chopin_auth) || **RBAC Permissions** | ✅ Core | Database-configurable role-based access control with caching || **Database ORM** | ✅ Core | SeaORM with auto-migrations (SQLite/PostgreSQL/MySQL) |
+| **Auth Module** | ✅ Opt-in | JWT + Argon2id, 2FA/TOTP, rate limiting, refresh tokens (vendor/chopin_auth) |
+| **RBAC Permissions** | ✅ Core | Database-configurable role-based access control with caching |
+| **Database ORM** | ✅ Core | SeaORM with auto-migrations (SQLite/PostgreSQL/MySQL) |
 | **OpenAPI Docs** | ✅ Core | Auto-generated Scalar UI at `/api-docs` |
 | **Admin Panel** | 🔜 Opt-in | Django-style admin interface (vendor/chopin_admin) |
 | **CMS Module** | 🔜 Opt-in | Content management system (vendor/chopin_cms) |
