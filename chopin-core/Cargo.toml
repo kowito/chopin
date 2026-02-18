@@ -90,7 +90,7 @@ async-graphql = { version = "7", features = ["chrono", "uuid"], optional = true 
 async-graphql-axum = { version = "7", optional = true }
 
 # Chopin proc macros (login_required, permission_required)
-chopin-macros = { path = "../chopin-macros" }
+chopin-macros = { version = "0.3", path = "../chopin-macros" }
 
 # Optional: S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, etc.)
 aws-sdk-s3 = { version = "1", optional = true }
