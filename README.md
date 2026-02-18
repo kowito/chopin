@@ -94,8 +94,7 @@ Average Latency @ 256 connections (lower is better)
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| **Auth Module** | ✅ Opt-in | JWT + Argon2id, 2FA/TOTP, rate limiting, refresh tokens (vendor/chopin_auth) |
-| **Database ORM** | ✅ Core | SeaORM with auto-migrations (SQLite/PostgreSQL/MySQL) |
+| **Auth Module** | ✅ Opt-in | JWT + Argon2id, 2FA/TOTP, rate limiting, refresh tokens (vendor/chopin_auth) || **RBAC Permissions** | ✅ Core | Database-configurable role-based access control with caching || **Database ORM** | ✅ Core | SeaORM with auto-migrations (SQLite/PostgreSQL/MySQL) |
 | **OpenAPI Docs** | ✅ Core | Auto-generated Scalar UI at `/api-docs` |
 | **Admin Panel** | 🔜 Opt-in | Django-style admin interface (vendor/chopin_admin) |
 | **CMS Module** | 🔜 Opt-in | Content management system (vendor/chopin_cms) |
@@ -238,32 +237,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - ✅ **Database migrations** run automatically on startup
 - ✅ **Request logging** with structured traces
 
-### With Authentication
+### With Authentication & RBAC
 
 ```rust
-use chopin_core::{App, ApiResponse, get, middleware::RequireAuth, extractors::AuthUser};
+use chopin_core::prelude::*;
 
-async fn protected_route(user: AuthUser) -> ApiResponse<String> {
-    ApiResponse::success(format!("Hello, {}! Your user ID is {}", user.username, user.id))
+// Simple login required
+#[login_required]
+async fn get_profile() -> Result<Json<ApiResponse<UserProfile>>, ChopinError> {
+    // __chopin_auth is auto-injected
+    Ok(Json(ApiResponse::success(UserProfile {
+        id: __chopin_auth.user_id.clone(),
+        email: __chopin_auth.email.clone(),
+    })))
 }
 
-async fn admin_only(user: AuthUser) -> ApiResponse<&'static str> {
-    // Automatically enforced by RequireAuth middleware with Role::Admin
-    ApiResponse::success("Welcome, admin!")
+// Permission-based access control
+#[permission_required("can_publish_post")]
+async fn publish_post(
+    State(state): State<AppState>,
+    Path(post_id): Path<i64>,
+) -> Result<Json<ApiResponse<PostResponse>>, ChopinError> {
+    // Only users with "can_publish_post" permission can access
+    let post = services::publish(&state.db, post_id, &__chopin_auth.user_id).await?;
+    Ok(Json(ApiResponse::success(post)))
+}
+
+// Fine-grained permission checks
+#[login_required]
+async fn get_report(
+    guard: PermissionGuard,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<ReportData>>, ChopinError> {
+    guard.require("can_view_reports")?;
+    
+    let mut report = services::build_report(&state.db).await?;
+    
+    // Include sensitive data only if user has the permission
+    if guard.has_permission("can_view_financials") {
+        report.financial_data = Some(services::get_financials(&state.db).await?);
+    }
+    
+    Ok(Json(ApiResponse::success(report)))
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     chopin_core::init_logging();
     
-    let app = App::new().await?
-        .route("/protected", get(protected_route).layer(RequireAuth::any()))
-        .route("/admin", get(admin_only).layer(RequireAuth::admin()));
+    let app = App::new().await?  // AuthModule + RBAC included
+        .route("/profile", get(get_profile))
+        .route("/posts/:id/publish", put(publish_post))
+        .route("/reports", get(get_report));
     
     app.run().await?;
     Ok(())
 }
 ```
+
+**RBAC Features:**
+- ✅ `#[login_required]` — Enforces JWT validation
+- ✅ `#[permission_required("codename")]` — Enforces permission checks
+- ✅ `PermissionGuard` extractor — Fine-grained conditional permission checks
+- ✅ Database-configurable — Create/assign permissions at runtime without redeploying
+- ✅ In-memory cache (5-min TTL) — Zero DB overhead for repeated checks
+- ✅ Superuser bypass — `role = "superuser"` always passes all checks
 
 **Built-in endpoints** (no code required):
 ```bash
@@ -278,6 +316,20 @@ curl -X POST http://localhost:3000/api/auth/login \
   -d '{"username":"alice","password":"secret123"}'
 
 # Returns: {"access_token":"eyJ0eXAi...", "refresh_token":"abc123...", "csrf_token":"def456..."}
+
+# Access protected endpoint
+curl -X GET http://localhost:3000/api/profile \
+  -H "Authorization: Bearer eyJ0eXAi..."
+
+# Access permission-protected endpoint (with permission)
+curl -X PUT http://localhost:3000/api/posts/42/publish \
+  -H "Authorization: Bearer eyJ0eXAi..."
+# Returns: {"data":{"id":42,"published":true},"success":true}
+
+# Access permission-protected endpoint (without permission)
+curl -X PUT http://localhost:3000/api/posts/42/publish \
+  -H "Authorization: Bearer eyJ0eXAi..."
+# Returns: {"data":null,"error":"Permission denied: can_publish_post","success":false}
 ```
 
 ### Production Security (Enabled by Default)

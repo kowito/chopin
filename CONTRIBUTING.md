@@ -5,7 +5,7 @@ Thank you for contributing to Chopin! This guide will help you understand the pr
 ## Getting Started
 
 ```bash
-git clone https://github.com/your-org/chopin.git
+git clone https://github.com/kowito/chopin.git
 cd chopin
 cargo build
 cargo test
