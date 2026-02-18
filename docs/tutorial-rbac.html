@@ -125,14 +125,18 @@
                 <h2>Database Setup</h2>
                 <p>RBAC requires two tables. The migration ships with Chopin — just run it once.</p>
 
-                <h3>Register the migration</h3>
-<pre><code><span class="comment">// src/main.rs (or wherever you configure your App)</span>
+                <h3>Migration is automatic</h3>
+                <div class="callout">
+                    <i data-lucide="check-circle" class="inline-icon"></i>
+                    <div>
+                        <strong>No manual registration needed.</strong> The RBAC tables are included in Chopin's built-in <code>AuthModule</code>, which runs automatically when you call <code>App::new()</code>. The tables are created on first startup.
+                    </div>
+                </div>
+<pre><code><span class="comment">// src/main.rs — nothing extra needed, AuthModule runs the migration</span>
 <span class="kw">use</span> chopin_core::prelude::*;
-<span class="kw">use</span> chopin_core::migrations::m20250218_000001_add_rbac_tables::Migration <span class="kw">as</span> RbacMigration;
 
-App::new()
-    .migration(RbacMigration) <span class="comment">// adds permissions + role_permissions tables</span>
-    …</code></pre>
+<span class="kw">let</span> app = App::new().await?;
+<span class="comment">// permissions + role_permissions tables are already created</span></code></pre>
 
                 <h3>What gets created</h3>
 <pre><code><span class="comment">-- permissions</span>
@@ -509,12 +513,10 @@ rbac.invalidate_all().<span class="kw">await</span>;</code></pre>
 
 <pre><code><span class="comment">// src/main.rs — seed permissions on startup</span>
 <span class="kw">use</span> chopin_core::prelude::*;
-<span class="kw">use</span> chopin_core::migrations::m20250218_000001_add_rbac_tables::Migration <span class="kw">as</span> RbacMigration;
 
 #[tokio::main]
 <span class="kw">async fn</span> <span class="fn">main</span>() {
-    <span class="kw">let</span> app = App::new()
-        .migration(RbacMigration)
+    <span class="kw">let</span> app = App::new()  <span class="comment">// AuthModule (and its migrations) run automatically</span>
         .module(BlogModule)
         .build()
         .<span class="kw">await</span>;

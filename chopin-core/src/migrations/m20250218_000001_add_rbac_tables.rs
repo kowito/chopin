@@ -89,10 +89,10 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(Table::drop().table(RolePermissions::Table).to_owned())
+            .drop_table(Table::drop().table(RolePermissions::Table).if_exists().to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(Permissions::Table).to_owned())
+            .drop_table(Table::drop().table(Permissions::Table).if_exists().to_owned())
             .await?;
         Ok(())
     }
