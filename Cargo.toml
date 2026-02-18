@@ -2,6 +2,7 @@
 members = [
     "chopin-core",
     "chopin-cli",
+    "chopin-macros",
     "chopin-examples/basic-api",
     "chopin-examples/hello-world",
     "chopin-examples/benchmark",

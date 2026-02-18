@@ -3,6 +3,7 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::auth::rate_limit::RateLimiter;
+use crate::auth::rbac::RbacService;
 use crate::cache::CacheService;
 use crate::config::Config;
 
@@ -13,6 +14,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub cache: CacheService,
     pub rate_limiter: Arc<RateLimiter>,
+    pub rbac: RbacService,
 }
 
 pub mod auth;

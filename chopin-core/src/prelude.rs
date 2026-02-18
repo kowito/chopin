@@ -30,7 +30,12 @@ pub use crate::Router;
 
 // ── Extractors ─────────────────────────────────────────────────
 pub use crate::extract::{Extension, Path, Query, State};
-pub use crate::extractors::{AuthUser, Json, Pagination};
+pub use crate::extractors::{AuthUser, Json, Pagination, PermissionGuard};
+
+// ── RBAC & Auth Macros ─────────────────────────────────────────
+pub use crate::auth::middleware::{login_required_layer, permission_required_layer};
+pub use crate::auth::rbac::RbacService;
+pub use chopin_macros::{login_required, permission_required};
 
 // ── HTTP types ─────────────────────────────────────────────────
 pub use crate::http::{HeaderMap, StatusCode};

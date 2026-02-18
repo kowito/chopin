@@ -13,6 +13,7 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::auth::rate_limit::RateLimiter;
+use crate::auth::rbac::RbacService;
 use crate::cache::CacheService;
 use crate::config::Config;
 use crate::controllers::AppState;
@@ -28,6 +29,7 @@ pub struct App {
     pub config: Config,
     pub db: DatabaseConnection,
     pub cache: CacheService,
+    pub rbac: RbacService,
     fast_routes: Vec<FastRoute>,
     custom_openapi: Option<utoipa::openapi::OpenApi>,
     api_docs_path: String,
@@ -48,6 +50,7 @@ impl App {
             config,
             db,
             cache,
+            rbac: RbacService::new(),
             fast_routes: Vec::new(),
             custom_openapi: None,
             api_docs_path: "/api-docs".to_string(),
@@ -67,6 +70,7 @@ impl App {
             config,
             db,
             cache,
+            rbac: RbacService::new(),
             fast_routes: Vec::new(),
             custom_openapi: None,
             api_docs_path: "/api-docs".to_string(),
@@ -164,6 +168,7 @@ impl App {
             config: config.clone(),
             cache: self.cache.clone(),
             rate_limiter,
+            rbac: self.rbac.clone(),
         };
 
         // Initialize cached Date header (updated every 500ms by background task)
@@ -223,6 +228,8 @@ impl App {
                 }),
             )
             .layer(axum::Extension(config))
+            .layer(axum::Extension(self.db.clone()))
+            .layer(axum::Extension(Arc::new(self.rbac.clone())))
             .layer(CorsLayer::permissive());
 
         // Only add expensive tracing/request-id middleware in development mode.

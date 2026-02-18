@@ -41,6 +41,13 @@ pub use response::ApiResponse;
 pub use server::FastRoute;
 pub use testing::{TestApp, TestClient, TestResponse};
 
+// ── RBAC re-exports ────────────────────────────────────────────
+pub use auth::rbac::RbacService;
+pub use extractors::PermissionGuard;
+
+// ── Proc macro re-exports ──────────────────────────────────────
+pub use chopin_macros::{login_required, permission_required};
+
 // ── Axum re-exports ────────────────────────────────────────────
 // Users should never need `axum` in their Cargo.toml.
 pub use axum::{serve, Extension, Router};

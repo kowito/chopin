@@ -1,0 +1,15 @@
+[package]
+name = "chopin-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Procedural macros for Chopin framework (login_required, permission_required)"
+repository = "https://github.com/kowito/chopin"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "parsing"] }
+quote = "1"
+proc-macro2 = "1"
