@@ -2,14 +2,20 @@
 
 Comprehensive guides for the Chopin web framework.
 
+## Getting Started
+
+- [**QUICK_START.md**](QUICK_START.md) — Installation, your first app (5 min), authentication examples
+- [**FEATURES.md**](FEATURES.md) — Complete feature matrix, security options, what's included
+
 ## Architecture & Design
 
 - [**ARCHITECTURE.md**](../ARCHITECTURE.md) — Complete system design, component architecture, and design principles
-- [**Modular Architecture**](modular-architecture.md) — ChopinModule trait, MVSR pattern, hub-and-spoke design
+- [**modular-architecture.md**](modular-architecture.md) — ChopinModule trait, MVSR pattern, hub-and-spoke design, module development guide
 
 ## Performance
 
-- [**JSON Performance**](json-performance.md) — SIMD JSON optimization with sonic-rs
+- [**BENCHMARKS.md**](BENCHMARKS.md) — Performance comparisons with 7 frameworks, cost analysis, optimization tips
+- [**json-performance.md**](json-performance.md) — SIMD JSON optimization with sonic-rs
 
 ## Debugging
 
@@ -50,24 +56,27 @@ Site URL: `https://kowito.github.io/chopin/`
 ```
 docs/
 ├── README.md                     # This file
-├── ARCHITECTURE.md               # System design (in repo root)
-├── modular-architecture.md       # Module development guide
-├── debugging-and-logging.md      # Debugging guide
-├── LOGGING.md                    # Logging quick reference
-├── json-performance.md           # JSON optimization guide
-├── index.html                    # Landing page
-├── tutorial-index.html           # Tutorial guide index
-├── tutorial-basics.html          # Tutorial: Getting started
-├── tutorial-database.html        # Tutorial: Database & models
-├── tutorial-api.html             # Tutorial: Building APIs
-├── tutorial-modules.html         # Tutorial: Modular architecture
-├── tutorial-advanced.html        # Tutorial: Advanced features
-├── tutorial-deployment.html      # Tutorial: Testing & deployment
+├── QUICK_START.md               # Get started in 5 minutes
+├── FEATURES.md                  # Feature matrix & capabilities
+├── BENCHMARKS.md                # Performance comparisons
+├── ARCHITECTURE.md              # System design (in repo root)
+├── modular-architecture.md      # Module development guide
+├── debugging-and-logging.md     # Debugging guide
+├── LOGGING.md                   # Logging quick reference
+├── json-performance.md          # JSON optimization guide
+├── index.html                   # Landing page
+├── tutorial-index.html          # Tutorial guide index
+├── tutorial-basics.html         # Tutorial: Getting started
+├── tutorial-database.html       # Tutorial: Database & models
+├── tutorial-api.html            # Tutorial: Building APIs
+├── tutorial-modules.html        # Tutorial: Modular architecture
+├── tutorial-advanced.html       # Tutorial: Advanced features
+├── tutorial-deployment.html     # Tutorial: Testing & deployment
 ├── css/
-│   ├── style.css                 # Main styles
-│   └── tutorial.css              # Tutorial styles
+│   ├── style.css                # Main styles
+│   └── tutorial.css             # Tutorial styles
 ├── js/
-│   └── main.js                   # JavaScript interactions
+│   └── main.js                  # JavaScript interactions
 └── img/
     └── ...                       # Images and diagrams
 ```
