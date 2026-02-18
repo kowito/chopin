@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Chopin Tutorial - RBAC Permissions: login_required, permission_required macros, PermissionGuard, and middleware-based access control.">
+    <title>Tutorial: RBAC &amp; Permissions - Chopin Framework</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/tutorial.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="container">
+            <div class="nav-content">
+                <div class="nav-logo">
+                    <a href="index.html" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;color:inherit;">
+                        <i data-lucide="music" class="logo-icon"></i>
+                        <span class="logo-text">Chopin</span>
+                    </a>
+                </div>
+                <div class="nav-links">
+                    <a href="index.html#features">Features</a>
+                    <a href="index.html#benchmarks">Benchmarks</a>
+                    <a href="tutorial-index.html">Tutorial</a>
+                    <a href="https://docs.rs/chopin">API Docs</a>
+                    <a href="https://github.com/kowito/chopin" class="btn-primary">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="tutorial-layout">
+        <!-- Sidebar TOC -->
+        <aside class="tutorial-sidebar">
+            <div class="toc">
+                <h3 class="toc-title">RBAC &amp; Permissions</h3>
+                <ol class="toc-list">
+                    <li><a href="#overview" class="toc-link">Overview</a></li>
+                    <li><a href="#setup" class="toc-link">Database Setup</a></li>
+                    <li><a href="#login-required" class="toc-link">#[login_required]</a></li>
+                    <li><a href="#permission-required" class="toc-link">#[permission_required]</a></li>
+                    <li><a href="#permission-guard" class="toc-link">PermissionGuard Extractor</a></li>
+                    <li><a href="#middleware" class="toc-link">Route Middleware</a></li>
+                    <li><a href="#rbac-service" class="toc-link">RbacService Admin API</a></li>
+                    <li><a href="#full-example" class="toc-link">Full Example</a></li>
+                    <li><a href="#testing" class="toc-link">Testing</a></li>
+                </ol>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="tutorial-content">
+
+            <!-- Hero -->
+            <div class="tutorial-hero">
+                <h1>RBAC &amp; Permissions</h1>
+                <p>Protect Chopin handlers with fine-grained, database-configurable permissions using proc macros, extractors, and route-level middleware.</p>
+                <div class="page-indicator">Page 4b of 7</div>
+            </div>
+
+            <!-- 1. Overview -->
+            <section id="overview" class="tutorial-section">
+                <div class="section-number">01</div>
+                <h2>Overview</h2>
+                <p>Chopin ships with a complete <strong>Role-Based Access Control (RBAC)</strong> system. Permissions are stored in the database and cached in memory — you can create, assign, and revoke them at runtime without redeploying.</p>
+
+                <h3>Architecture at a glance</h3>
+
+                <table class="config-table">
+                    <thead>
+                        <tr>
+                            <th>Component</th>
+                            <th>What it does</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>#[login_required]</code></td><td>Proc macro — injects JWT auth into any async handler</td></tr>
+                        <tr><td><code>#[permission_required("…")]</code></td><td>Proc macro — injects auth + permission check in one step</td></tr>
+                        <tr><td><code>PermissionGuard</code></td><td>Axum extractor for manual permission checks in handler bodies</td></tr>
+                        <tr><td><code>login_required_layer</code></td><td>Middleware for protecting a whole Router at once</td></tr>
+                        <tr><td><code>permission_required_layer</code></td><td>Middleware for enforcing a single permission on a whole Router</td></tr>
+                        <tr><td><code>RbacService</code></td><td>In-memory cached service — CRUD for permissions and role assignments</td></tr>
+                    </tbody>
+                </table>
+
+                <h3>Roles</h3>
+                <p>Every user has one of three built-in roles. <strong>superuser</strong> bypasses all permission checks automatically.</p>
+
+                <div class="role-hierarchy">
+                    <div class="role-card">
+                        <div class="role-level">Level 0</div>
+                        <h4>user</h4>
+                        <p>Default — must be granted permissions explicitly</p>
+                    </div>
+                    <div class="role-arrow">&rarr;</div>
+                    <div class="role-card">
+                        <div class="role-level">Level 1</div>
+                        <h4>admin</h4>
+                        <p>Elevated — has its own permission set</p>
+                    </div>
+                    <div class="role-arrow">&rarr;</div>
+                    <div class="role-card">
+                        <div class="role-level">Level 2</div>
+                        <h4>superuser</h4>
+                        <p>Full bypass — always allowed</p>
+                    </div>
+                </div>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        All RBAC types are re-exported from <code>chopin_core::prelude::*</code>. A single <code>use chopin_core::prelude::*;</code> is all you need.
+                    </div>
+                </div>
+            </section>
+
+            <!-- 2. Database Setup -->
+            <section id="setup" class="tutorial-section">
+                <div class="section-number">02</div>
+                <h2>Database Setup</h2>
+                <p>RBAC requires two tables. The migration ships with Chopin — just run it once.</p>
+
+                <h3>Register the migration</h3>
+<pre><code><span class="comment">// src/main.rs (or wherever you configure your App)</span>
+<span class="kw">use</span> chopin_core::prelude::*;
+<span class="kw">use</span> chopin_core::migrations::m20250218_000001_add_rbac_tables::Migration <span class="kw">as</span> RbacMigration;
+
+App::new()
+    .migration(RbacMigration) <span class="comment">// adds permissions + role_permissions tables</span>
+    …</code></pre>
+
+                <h3>What gets created</h3>
+<pre><code><span class="comment">-- permissions</span>
+<span class="kw">CREATE TABLE</span> permissions (
+    id          INTEGER  PRIMARY KEY AUTOINCREMENT,
+    codename    TEXT     NOT NULL UNIQUE,   <span class="comment">-- e.g. "can_publish_post"</span>
+    name        TEXT     NOT NULL,          <span class="comment">-- human-readable label</span>
+    description TEXT,
+    created_at  DATETIME NOT NULL
+);
+
+<span class="comment">-- role_permissions  (many roles → many permissions)</span>
+<span class="kw">CREATE TABLE</span> role_permissions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    role          TEXT    NOT NULL,           <span class="comment">-- "user" | "admin" | "superuser"</span>
+    permission_id INTEGER NOT NULL REFERENCES permissions(id),
+    UNIQUE (role, permission_id)
+);</code></pre>
+
+                <h3>Seed permissions at startup</h3>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="kw">async fn</span> <span class="fn">seed_permissions</span>(rbac: &RbacService, db: &DatabaseConnection) {
+    <span class="comment">// idempotent — skip if already exists</span>
+    <span class="kw">let _ =</span> rbac.create_permission(
+        db,
+        <span class="str">"can_publish_post"</span>,           <span class="comment">// codename (unique key)</span>
+        <span class="str">"Can Publish Post"</span>,            <span class="comment">// display name</span>
+        <span class="type">Some</span>(<span class="str">"Allows publishing posts"</span>), <span class="comment">// optional description</span>
+    ).<span class="kw">await</span>;
+
+    <span class="comment">// Grant the permission to the "admin" role</span>
+    <span class="kw">let _ =</span> rbac.assign_permission_to_role(db, <span class="str">"admin"</span>, <span class="str">"can_publish_post"</span>).<span class="kw">await</span>;
+}</code></pre>
+            </section>
+
+            <!-- 3. #[login_required] -->
+            <section id="login-required" class="tutorial-section">
+                <div class="section-number">03</div>
+                <h2><code>#[login_required]</code></h2>
+                <p>The <code>#[login_required]</code> proc macro transforms any async handler to <strong>automatically validate the JWT</strong> in the <code>Authorization: Bearer</code> header. No extractor boilerplate needed.</p>
+
+                <h3>Basic usage</h3>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="comment">// Before the macro expands, the handler has no auth parameter.</span>
+<span class="comment">// After expansion, `__chopin_auth: AuthUser` is injected automatically.</span>
+#[login_required]
+<span class="kw">pub async fn</span> <span class="fn">get_profile</span>() -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;ProfileData&gt;&gt;, ChopinError&gt; {
+    <span class="comment">// __chopin_auth is available anywhere in the body</span>
+    <span class="kw">let</span> user_id = &__chopin_auth.user_id;
+    <span class="kw">let</span> email   = &__chopin_auth.email;
+    <span class="kw">let</span> role    = &__chopin_auth.role;
+
+    <span class="type">Ok</span>(Json(ApiResponse::success(ProfileData { user_id: user_id.clone(), email: email.clone() })))
+}</code></pre>
+
+                <h3>Mixing with other extractors</h3>
+<pre><code><span class="kw">use</span> axum::extract::{Path, State};
+<span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="comment">// Other extractors come after the injected auth parameter</span>
+#[login_required]
+<span class="kw">pub async fn</span> <span class="fn">update_post</span>(
+    State(state): State&lt;AppState&gt;,
+    Path(post_id): Path&lt;<span class="type">i64</span>&gt;,
+    Json(body): Json&lt;UpdatePostRequest&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
+    <span class="comment">// __chopin_auth.user_id is the authenticated user</span>
+    services::update_post(&state.db, post_id, &__chopin_auth.user_id, body).<span class="kw">await</span>
+}</code></pre>
+
+                <h3>What happens on failure</h3>
+<pre><code><span class="comment">// Missing or invalid Authorization header → 401 Unauthorized</span>
+<span class="comment">// { "success": false, "error": "Missing authorization token" }</span>
+
+<span class="comment">// Expired or tampered token → 401 Unauthorized</span>
+<span class="comment">// { "success": false, "error": "Invalid or expired token" }</span></code></pre>
+            </section>
+
+            <!-- 4. #[permission_required] -->
+            <section id="permission-required" class="tutorial-section">
+                <div class="section-number">04</div>
+                <h2><code>#[permission_required("…")]</code></h2>
+                <p>The <code>#[permission_required]</code> macro goes further — it validates the token <em>and</em> checks that the user's role has been granted the listed permissions. The handler body only runs if all checks pass.</p>
+
+                <h3>Single permission</h3>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+#[permission_required("can_publish_post")]
+<span class="kw">pub async fn</span> <span class="fn">publish_post</span>(
+    State(state): State&lt;AppState&gt;,
+    Path(post_id): Path&lt;<span class="type">i64</span>&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
+    <span class="comment">// Only runs if the JWT is valid AND the user's role has "can_publish_post"</span>
+    services::publish(&state.db, post_id, &__chopin_auth.user_id).<span class="kw">await</span>
+}</code></pre>
+
+                <h3>Multiple permissions (all required)</h3>
+<pre><code>#[permission_required("can_edit_post", "can_publish_post")]
+<span class="kw">pub async fn</span> <span class="fn">edit_and_publish</span>(…) { … }</code></pre>
+
+                <h3>Available injected variables</h3>
+                <table class="config-table">
+                    <thead>
+                        <tr><th>Variable</th><th>Type</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>__chopin_auth</code></td><td><code>AuthUser</code></td><td>Validated JWT claims (user_id, email, role)</td></tr>
+                        <tr><td><code>__chopin_guard</code></td><td><code>PermissionGuard</code></td><td>Permission checker loaded from RBAC cache</td></tr>
+                    </tbody>
+                </table>
+
+                <h3>What happens on failure</h3>
+<pre><code><span class="comment">// No valid token        → 401 { "error": "Missing authorization token" }</span>
+<span class="comment">// Authenticated but not permitted → 403 { "error": "Permission denied: can_publish_post" }</span>
+<span class="comment">// superuser             → always allowed (bypasses all checks)</span></code></pre>
+
+                <div class="callout">
+                    <i data-lucide="zap" class="inline-icon"></i>
+                    <div>
+                        <strong>Superuser bypass</strong> — users with <code>role = "superuser"</code> always pass permission checks. You never need to explicitly grant permissions to superusers.
+                    </div>
+                </div>
+            </section>
+
+            <!-- 5. PermissionGuard Extractor -->
+            <section id="permission-guard" class="tutorial-section">
+                <div class="section-number">05</div>
+                <h2>PermissionGuard Extractor</h2>
+                <p><code>PermissionGuard</code> is an Axum extractor for cases where you need <strong>fine-grained control</strong> over permission checks inside a handler — for example, checking different permissions based on branch logic.</p>
+
+                <h3>Import and use</h3>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="comment">// PermissionGuard validates JWT and pre-loads the user's permission set</span>
+<span class="kw">pub async fn</span> <span class="fn">moderate_content</span>(
+    guard: PermissionGuard,
+    State(state): State&lt;AppState&gt;,
+    Path(content_id): Path&lt;<span class="type">i64</span>&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;<span class="type">()&gt;&gt;</span>, ChopinError&gt; {
+    <span class="comment">// Require a single permission (returns Err(403) if missing)</span>
+    guard.require(<span class="str">"can_moderate"</span>)?;
+
+    services::delete_content(&state.db, content_id).<span class="kw">await</span>
+}</code></pre>
+
+                <h3>All PermissionGuard methods</h3>
+<pre><code><span class="comment">// Require ONE permission — returns 403 if not held</span>
+guard.require(<span class="str">"can_moderate"</span>)?;
+
+<span class="comment">// Require ALL listed permissions</span>
+guard.require_all(&[<span class="str">"can_edit"</span>, <span class="str">"can_publish"</span>])?;
+
+<span class="comment">// Require AT LEAST ONE of the listed permissions</span>
+guard.require_any(&[<span class="str">"can_edit"</span>, <span class="str">"can_view_drafts"</span>])?;
+
+<span class="comment">// Non-panicking check (returns bool)</span>
+<span class="kw">if</span> guard.has_permission(<span class="str">"can_view_stats"</span>) {
+    <span class="comment">// append stats to response</span>
+}
+
+<span class="comment">// Role helpers</span>
+<span class="kw">if</span> guard.has_role(<span class="str">"admin"</span>) { … }
+guard.require_role(<span class="str">"admin"</span>)?; <span class="comment">// 403 if not that exact role</span>
+
+<span class="comment">// Fields on the guard</span>
+guard.user_id    <span class="comment">// String — authenticated user UUID</span>
+guard.role       <span class="comment">// String — "user" | "admin" | "superuser"</span>
+guard.permissions <span class="comment">// Vec&lt;String&gt; — all codenames the role holds</span></code></pre>
+
+                <h3>Conditional logic example</h3>
+<pre><code>#[login_required]
+<span class="kw">pub async fn</span> <span class="fn">get_report</span>(
+    guard: PermissionGuard,
+    State(state): State&lt;AppState&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;ReportData&gt;&gt;, ChopinError&gt; {
+    guard.require(<span class="str">"can_view_reports"</span>)?;
+
+    <span class="kw">let mut</span> report = services::build_report(&state.db).<span class="kw">await</span>?;
+
+    <span class="comment">// Include sensitive stats only if the user also holds this permission</span>
+    <span class="kw">if</span> guard.has_permission(<span class="str">"can_view_financials"</span>) {
+        report.financials = <span class="type">Some</span>(services::get_financials(&state.db).<span class="kw">await</span>?);
+    }
+
+    <span class="type">Ok</span>(Json(ApiResponse::success(report)))
+}</code></pre>
+            </section>
+
+            <!-- 6. Route Middleware -->
+            <section id="middleware" class="tutorial-section">
+                <div class="section-number">06</div>
+                <h2>Route Middleware</h2>
+                <p>When you want to protect an <em>entire group of routes</em> without touching individual handlers, use the middleware helpers.</p>
+
+                <h3><code>login_required_layer</code></h3>
+<pre><code><span class="kw">use</span> axum::{Router, routing::get};
+<span class="kw">use</span> axum::middleware::from_fn;
+<span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="comment">// All routes in this router require a valid JWT</span>
+<span class="kw">fn</span> <span class="fn">private_routes</span>() -> Router&lt;AppState&gt; {
+    Router::new()
+        .route(<span class="str">"/api/me"</span>,            get(get_profile))
+        .route(<span class="str">"/api/me/settings"</span>,    get(get_settings).patch(update_settings))
+        .layer(from_fn(login_required_layer))
+}</code></pre>
+
+                <h3><code>permission_required_layer</code></h3>
+<pre><code><span class="kw">use</span> axum::middleware::from_fn_with_state;
+<span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="comment">// Every route in this group requires "can_manage_users"</span>
+<span class="kw">fn</span> <span class="fn">admin_routes</span>(state: AppState) -> Router&lt;AppState&gt; {
+    Router::new()
+        .route(<span class="str">"/api/admin/users"</span>,         get(list_users))
+        .route(<span class="str">"/api/admin/users/:id"</span>,      get(get_user).delete(delete_user))
+        .layer(from_fn_with_state(
+            state,
+            permission_required_layer(<span class="str">"can_manage_users"</span>),
+        ))
+}</code></pre>
+
+                <h3>Composing layers</h3>
+<pre><code><span class="comment">// Nest admin routes as a sub-router, apply middleware once</span>
+<span class="kw">fn</span> <span class="fn">router</span>(state: AppState) -> Router&lt;AppState&gt; {
+    Router::new()
+        .nest(<span class="str">"/api/public"</span>,  public_routes())
+        .nest(<span class="str">"/api/private"</span>, private_routes())
+        .nest(<span class="str">"/api/admin"</span>,   admin_routes(state))
+}</code></pre>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        <strong>Middleware vs. Macros</strong> — Use proc macros (<code>#[login_required]</code>, <code>#[permission_required]</code>) when protection belongs to a single handler. Use layer middleware when protecting a group of routes with uniform access rules.
+                    </div>
+                </div>
+            </section>
+
+            <!-- 7. RbacService Admin API -->
+            <section id="rbac-service" class="tutorial-section">
+                <div class="section-number">07</div>
+                <h2>RbacService Admin API</h2>
+                <p><code>RbacService</code> is available via <code>AppState</code> and from handler extensions. Use it to manage permissions at runtime — no restart required.</p>
+
+                <h3>Access from a handler</h3>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+<span class="kw">use</span> axum::extract::State;
+
+<span class="kw">pub async fn</span> <span class="fn">create_permission_handler</span>(
+    State(state): State&lt;AppState&gt;,
+    Json(body): Json&lt;CreatePermissionRequest&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;PermissionRecord&gt;&gt;, ChopinError&gt; {
+    <span class="kw">let</span> perm = state.rbac
+        .create_permission(&state.db, &body.codename, &body.name, body.description.as_deref())
+        .<span class="kw">await</span>
+        .map_err(|e| ChopinError::Internal(e.to_string()))?;
+
+    <span class="type">Ok</span>(Json(ApiResponse::success(perm)))
+}</code></pre>
+
+                <h3>Full API reference</h3>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="kw">let</span> rbac: &RbacService = &state.rbac;
+
+<span class="comment">// Create a permission (idempotent by codename via UNIQUE constraint)</span>
+rbac.create_permission(&db, <span class="str">"can_publish_post"</span>, <span class="str">"Publish Post"</span>, <span class="type">None</span>).<span class="kw">await</span>?;
+
+<span class="comment">// Assign a permission codename to a role</span>
+rbac.assign_permission_to_role(&db, <span class="str">"admin"</span>, <span class="str">"can_publish_post"</span>).<span class="kw">await</span>?;
+
+<span class="comment">// Remove a permission from a role</span>
+rbac.remove_permission_from_role(&db, <span class="str">"user"</span>, <span class="str">"can_publish_post"</span>).<span class="kw">await</span>?;
+
+<span class="comment">// Check whether a role has a permission (uses in-memory cache)</span>
+<span class="kw">let</span> allowed: <span class="type">bool</span> = rbac.has_permission(&db, <span class="str">"admin"</span>, <span class="str">"can_publish_post"</span>).<span class="kw">await</span>;
+
+<span class="comment">// Fetch all permissions for a role (cached, 5-minute TTL)</span>
+<span class="kw">let</span> perms: Vec&lt;<span class="type">String</span>&gt; = rbac.get_permissions_for_role(&db, <span class="str">"admin"</span>).<span class="kw">await</span>?;
+
+<span class="comment">// Invalidate cache for one role (force DB reload on next request)</span>
+rbac.invalidate_role(<span class="str">"admin"</span>).<span class="kw">await</span>;
+
+<span class="comment">// Invalidate entire cache</span>
+rbac.invalidate_all().<span class="kw">await</span>;</code></pre>
+
+                <h3>Cache behaviour</h3>
+                <table class="config-table">
+                    <thead><tr><th>Property</th><th>Value</th></tr></thead>
+                    <tbody>
+                        <tr><td>Storage</td><td>In-process <code>RwLock&lt;HashMap&lt;role, permissions&gt;&gt;</code></td></tr>
+                        <tr><td>TTL</td><td>5 minutes (per role)</td></tr>
+                        <tr><td>Stale eviction</td><td>Checked on read, evicted lazily</td></tr>
+                        <tr><td>Manual invalidation</td><td><code>rbac.invalidate_role("admin")</code></td></tr>
+                        <tr><td>Superuser</td><td>Never hits cache — always returns <code>true</code></td></tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <!-- 8. Full Example -->
+            <section id="full-example" class="tutorial-section">
+                <div class="section-number">08</div>
+                <h2>Full Example</h2>
+                <p>A self-contained blog module that uses every RBAC feature.</p>
+
+<pre><code><span class="comment">// src/apps/blog/handlers.rs</span>
+<span class="kw">use</span> axum::extract::{Path, State};
+<span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="comment">// ── Public: anyone can read ─────────────────────────────────────────────────</span>
+<span class="kw">pub async fn</span> <span class="fn">list_posts</span>(
+    State(state): State&lt;AppState&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;Vec&lt;PostResponse&gt;&gt;&gt;, ChopinError&gt; {
+    <span class="kw">let</span> posts = services::list_published(&state.db).<span class="kw">await</span>?;
+    <span class="type">Ok</span>(Json(ApiResponse::success(posts)))
+}
+
+<span class="comment">// ── Authenticated: any logged-in user can draft ─────────────────────────────</span>
+#[login_required]
+<span class="kw">pub async fn</span> <span class="fn">create_draft</span>(
+    State(state): State&lt;AppState&gt;,
+    Json(body): Json&lt;CreatePostRequest&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
+    services::create(&state.db, &__chopin_auth.user_id, body).<span class="kw">await</span>
+}
+
+<span class="comment">// ── Permission guard: only roles with "can_publish_post" ────────────────────</span>
+#[permission_required("can_publish_post")]
+<span class="kw">pub async fn</span> <span class="fn">publish_post</span>(
+    State(state): State&lt;AppState&gt;,
+    Path(post_id): Path&lt;<span class="type">i64</span>&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;PostResponse&gt;&gt;, ChopinError&gt; {
+    services::publish(&state.db, post_id, &__chopin_auth.user_id).<span class="kw">await</span>
+}
+
+<span class="comment">// ── Fine-grained: conditional extra data via PermissionGuard ───────────────</span>
+#[login_required]
+<span class="kw">pub async fn</span> <span class="fn">get_post_admin</span>(
+    guard: PermissionGuard,
+    State(state): State&lt;AppState&gt;,
+    Path(post_id): Path&lt;<span class="type">i64</span>&gt;,
+) -> <span class="type">Result</span>&lt;Json&lt;ApiResponse&lt;PostAdminView&gt;&gt;, ChopinError&gt; {
+    guard.require(<span class="str">"can_edit_post"</span>)?;
+
+    <span class="kw">let mut</span> view = services::get_admin_view(&state.db, post_id).<span class="kw">await</span>?;
+
+    <span class="kw">if</span> guard.has_permission(<span class="str">"can_view_analytics"</span>) {
+        view.analytics = <span class="type">Some</span>(services::get_analytics(&state.db, post_id).<span class="kw">await</span>?);
+    }
+
+    <span class="type">Ok</span>(Json(ApiResponse::success(view)))
+}</code></pre>
+
+<pre><code><span class="comment">// src/apps/blog/router.rs</span>
+<span class="kw">use</span> axum::{Router, routing::{get, post, put}};
+<span class="kw">use</span> axum::middleware::from_fn;
+<span class="kw">use</span> chopin_core::prelude::*;
+
+<span class="kw">pub fn</span> <span class="fn">routes</span>() -> Router&lt;AppState&gt; {
+    <span class="kw">let</span> public = Router::new()
+        .route(<span class="str">"/posts"</span>, get(handlers::list_posts));
+
+    <span class="kw">let</span> private = Router::new()
+        .route(<span class="str">"/posts"</span>,            post(handlers::create_draft))
+        .route(<span class="str">"/posts/:id/publish"</span>, put(handlers::publish_post))
+        .route(<span class="str">"/posts/:id/admin"</span>,   get(handlers::get_post_admin))
+        .layer(from_fn(login_required_layer));
+
+    Router::new().merge(public).merge(private)
+}</code></pre>
+
+<pre><code><span class="comment">// src/main.rs — seed permissions on startup</span>
+<span class="kw">use</span> chopin_core::prelude::*;
+<span class="kw">use</span> chopin_core::migrations::m20250218_000001_add_rbac_tables::Migration <span class="kw">as</span> RbacMigration;
+
+#[tokio::main]
+<span class="kw">async fn</span> <span class="fn">main</span>() {
+    <span class="kw">let</span> app = App::new()
+        .migration(RbacMigration)
+        .module(BlogModule)
+        .build()
+        .<span class="kw">await</span>;
+
+    <span class="comment">// Seed after DB is ready</span>
+    <span class="kw">let _ =</span> app.rbac.create_permission(&app.db, <span class="str">"can_publish_post"</span>, <span class="str">"Publish Post"</span>, <span class="type">None</span>).<span class="kw">await</span>;
+    <span class="kw">let _ =</span> app.rbac.create_permission(&app.db, <span class="str">"can_edit_post"</span>,    <span class="str">"Edit Post"</span>,    <span class="type">None</span>).<span class="kw">await</span>;
+    <span class="kw">let _ =</span> app.rbac.create_permission(&app.db, <span class="str">"can_view_analytics"</span>, <span class="str">"View Analytics"</span>, <span class="type">None</span>).<span class="kw">await</span>;
+
+    <span class="kw">let _ =</span> app.rbac.assign_permission_to_role(&app.db, <span class="str">"admin"</span>, <span class="str">"can_publish_post"</span>).<span class="kw">await</span>;
+    <span class="kw">let _ =</span> app.rbac.assign_permission_to_role(&app.db, <span class="str">"admin"</span>, <span class="str">"can_edit_post"</span>).<span class="kw">await</span>;
+    <span class="kw">let _ =</span> app.rbac.assign_permission_to_role(&app.db, <span class="str">"admin"</span>, <span class="str">"can_view_analytics"</span>).<span class="kw">await</span>;
+    <span class="kw">let _ =</span> app.rbac.assign_permission_to_role(&app.db, <span class="str">"user"</span>,  <span class="str">"can_edit_post"</span>).<span class="kw">await</span>;
+
+    app.run()..<span class="kw">await</span>.unwrap();
+}</code></pre>
+            </section>
+
+            <!-- 9. Testing -->
+            <section id="testing" class="tutorial-section">
+                <div class="section-number">09</div>
+                <h2>Testing Protected Routes</h2>
+                <p>Chopin provides a <code>PermissionGuard::test_guard()</code> helper that creates a guard directly from role and permission strings — no HTTP stack or JWT required.</p>
+
+                <h3>Unit-test permission logic</h3>
+<pre><code><span class="kw">use</span> chopin_core::prelude::*;
+
+#[tokio::test]
+<span class="kw">async fn</span> <span class="fn">test_admin_can_publish</span>() {
+    <span class="kw">let</span> guard = PermissionGuard::test_guard(
+        <span class="str">"user-123"</span>,
+        <span class="str">"admin"</span>,
+        vec![<span class="str">"can_publish_post"</span>.to_string(), <span class="str">"can_edit_post"</span>.to_string()],
+    );
+
+    assert!(guard.has_permission(<span class="str">"can_publish_post"</span>));
+    assert!(guard.require(<span class="str">"can_publish_post"</span>).is_ok());
+    assert!(guard.require(<span class="str">"can_delete_everything"</span>).is_err());
+}
+
+#[tokio::test]
+<span class="kw">async fn</span> <span class="fn">test_superuser_bypass</span>() {
+    <span class="kw">let</span> rbac = RbacService::new();
+    <span class="kw">let</span> db   = chopin_core::testing::create_test_db().<span class="kw">await</span>;
+
+    <span class="comment">// Superuser has permission even with no DB rows</span>
+    <span class="kw">let</span> allowed = rbac.has_permission(&db, <span class="str">"superuser"</span>, <span class="str">"anything_at_all"</span>).<span class="kw">await</span>;
+    assert!(allowed);
+}
+
+#[tokio::test]
+<span class="kw">async fn</span> <span class="fn">test_require_any</span>() {
+    <span class="kw">let</span> guard = PermissionGuard::test_guard(
+        <span class="str">"user-456"</span>,
+        <span class="str">"user"</span>,
+        vec![<span class="str">"can_view_drafts"</span>.to_string()],
+    );
+
+    <span class="comment">// Has at least one of the two — passes</span>
+    assert!(guard.require_any(&[<span class="str">"can_edit_post"</span>, <span class="str">"can_view_drafts"</span>]).is_ok());
+
+    <span class="comment">// Has neither — fails</span>
+    assert!(guard.require_any(&[<span class="str">"can_publish_post"</span>, <span class="str">"can_delete_post"</span>]).is_err());
+}</code></pre>
+
+                <h3>Integration test with test server</h3>
+<pre><code><span class="kw">use</span> axum_test::TestServer;
+<span class="kw">use</span> chopin_core::testing::create_test_app;
+
+#[tokio::test]
+<span class="kw">async fn</span> <span class="fn">test_publish_requires_permission</span>() {
+    <span class="kw">let</span> (app, db) = create_test_app().<span class="kw">await</span>;
+    <span class="kw">let</span> server    = TestServer::new(app).unwrap();
+
+    <span class="comment">// User without the permission → 403</span>
+    <span class="kw">let</span> token = create_test_token(<span class="str">"user-1"</span>, <span class="str">"user@test.com"</span>, <span class="str">"user"</span>);
+    <span class="kw">let</span> res = server
+        .put(<span class="str">"/posts/1/publish"</span>)
+        .add_header(<span class="str">"Authorization"</span>, <span class="kw">format!</span>(<span class="str">"Bearer {}"</span>, token))
+        .await;
+    assert_eq!(res.status_code(), <span class="num">403</span>);
+
+    <span class="comment">// Admin with the permission → 200</span>
+    db.rbac.assign_permission_to_role(&db.conn, <span class="str">"admin"</span>, <span class="str">"can_publish_post"</span>).<span class="kw">await</span>.unwrap();
+    <span class="kw">let</span> admin_token = create_test_token(<span class="str">"user-2"</span>, <span class="str">"admin@test.com"</span>, <span class="str">"admin"</span>);
+    <span class="kw">let</span> res = server
+        .put(<span class="str">"/posts/1/publish"</span>)
+        .add_header(<span class="str">"Authorization"</span>, <span class="kw">format!</span>(<span class="str">"Bearer {}"</span>, admin_token))
+        .await;
+    assert_eq!(res.status_code(), <span class="num">200</span>);
+}</code></pre>
+            </section>
+
+            <!-- Navigation -->
+            <nav class="tutorial-nav">
+                <a href="tutorial-api.html" class="btn-secondary">&larr; Building APIs</a>
+                <a href="tutorial-modules.html" class="btn-primary">Next: Modules →</a>
+            </nav>
+
+        </main>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-bottom" style="border-top: none; padding-top: 0;">
+                <div class="footer-bottom-left">
+                    <p>&copy; 2026 Chopin. All rights reserved.</p>
+                </div>
+                <div class="footer-bottom-right">
+                    <p>Made with <i data-lucide="music" class="inline-icon-sm"></i> by the <a href="https://github.com/kowito">Chopin team</a></p>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+    <script>
+        lucide.createIcons();
+
+        const sections = document.querySelectorAll('.tutorial-section');
+        const tocLinks = document.querySelectorAll('.toc-link');
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    tocLinks.forEach(link => link.classList.remove('active'));
+                    const id = entry.target.getAttribute('id');
+                    const activeLink = document.querySelector(`.toc-link[href="#${id}"]`);
+                    if (activeLink) activeLink.classList.add('active');
+                }
+            });
+        }, { rootMargin: '-80px 0px -60% 0px' });
+
+        sections.forEach(section => observer.observe(section));
+    </script>
+</body>
+</html>
