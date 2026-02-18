@@ -6,68 +6,71 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // ── Add new columns to users table (one per ALTER for SQLite compat) ──
+        // ── users ─────────────────────────────────────────────────────────────
         manager
-            .alter_table(
-                Table::alter()
+            .create_table(
+                Table::create()
                     .table(Users::Table)
-                    .add_column(
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(Users::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Users::Email)
+                            .string()
+                            .not_null()
+                            .unique_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Users::Username)
+                            .string()
+                            .not_null()
+                            .unique_key(),
+                    )
+                    .col(ColumnDef::new(Users::PasswordHash).string().not_null())
+                    .col(
+                        ColumnDef::new(Users::Role)
+                            .string()
+                            .not_null()
+                            .default("user"),
+                    )
+                    .col(
+                        ColumnDef::new(Users::IsActive)
+                            .boolean()
+                            .not_null()
+                            .default(true),
+                    )
+                    .col(
                         ColumnDef::new(Users::EmailVerified)
                             .boolean()
                             .not_null()
                             .default(false),
                     )
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Users::Table)
-                    .add_column(ColumnDef::new(Users::TotpSecret).string().null())
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Users::Table)
-                    .add_column(
+                    .col(ColumnDef::new(Users::TotpSecret).string().null())
+                    .col(
                         ColumnDef::new(Users::TotpEnabled)
                             .boolean()
                             .not_null()
                             .default(false),
                     )
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Users::Table)
-                    .add_column(
+                    .col(
                         ColumnDef::new(Users::FailedLoginAttempts)
                             .integer()
                             .not_null()
                             .default(0),
                     )
+                    .col(ColumnDef::new(Users::LockedUntil).timestamp().null())
+                    .col(ColumnDef::new(Users::CreatedAt).timestamp().not_null())
+                    .col(ColumnDef::new(Users::UpdatedAt).timestamp().not_null())
                     .to_owned(),
             )
             .await?;
 
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Users::Table)
-                    .add_column(ColumnDef::new(Users::LockedUntil).timestamp().null())
-                    .to_owned(),
-            )
-            .await?;
-
-        // ── Create refresh_tokens table ──
+        // ── refresh_tokens ────────────────────────────────────────────────────
         manager
             .create_table(
                 Table::create()
@@ -109,7 +112,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // ── Create sessions table ──
+        // ── sessions ──────────────────────────────────────────────────────────
         manager
             .create_table(
                 Table::create()
@@ -138,7 +141,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // ── Create security_tokens table ──
+        // ── security_tokens ───────────────────────────────────────────────────
         manager
             .create_table(
                 Table::create()
@@ -183,7 +186,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // ── Create login_events table ──
+        // ── login_events ──────────────────────────────────────────────────────
         manager
             .create_table(
                 Table::create()
@@ -209,46 +212,133 @@ impl MigrationTrait for Migration {
                     )
                     .to_owned(),
             )
-            .await
+            .await?;
+
+        // ── permissions ───────────────────────────────────────────────────────
+        manager
+            .create_table(
+                Table::create()
+                    .table(Permissions::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(Permissions::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Permissions::Codename)
+                            .string()
+                            .not_null()
+                            .unique_key(),
+                    )
+                    .col(ColumnDef::new(Permissions::Name).string().not_null())
+                    .col(ColumnDef::new(Permissions::Description).string().null())
+                    .col(
+                        ColumnDef::new(Permissions::CreatedAt)
+                            .timestamp()
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        // ── role_permissions ──────────────────────────────────────────────────
+        manager
+            .create_table(
+                Table::create()
+                    .table(RolePermissions::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(RolePermissions::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(RolePermissions::Role).string().not_null())
+                    .col(
+                        ColumnDef::new(RolePermissions::PermissionId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(RolePermissions::CreatedAt)
+                            .timestamp()
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk_role_permissions_permission")
+                            .from(RolePermissions::Table, RolePermissions::PermissionId)
+                            .to(Permissions::Table, Permissions::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        // ── unique index on (role, permission_id) ─────────────────────────────
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_role_permissions_unique")
+                    .table(RolePermissions::Table)
+                    .col(RolePermissions::Role)
+                    .col(RolePermissions::PermissionId)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(Table::drop().table(LoginEvents::Table).to_owned())
+            .drop_table(Table::drop().table(RolePermissions::Table).if_exists().to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(SecurityTokens::Table).to_owned())
+            .drop_table(Table::drop().table(Permissions::Table).if_exists().to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(Sessions::Table).to_owned())
+            .drop_table(Table::drop().table(LoginEvents::Table).if_exists().to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(RefreshTokens::Table).to_owned())
+            .drop_table(Table::drop().table(SecurityTokens::Table).if_exists().to_owned())
             .await?;
-
         manager
-            .alter_table(
-                Table::alter()
-                    .table(Users::Table)
-                    .drop_column(Users::EmailVerified)
-                    .drop_column(Users::TotpSecret)
-                    .drop_column(Users::TotpEnabled)
-                    .drop_column(Users::FailedLoginAttempts)
-                    .drop_column(Users::LockedUntil)
-                    .to_owned(),
-            )
-            .await
+            .drop_table(Table::drop().table(Sessions::Table).if_exists().to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(RefreshTokens::Table).if_exists().to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Users::Table).if_exists().to_owned())
+            .await?;
+        Ok(())
     }
 }
+
+// ── Iden enums ────────────────────────────────────────────────────────────────
 
 #[derive(Iden)]
 enum Users {
     Table,
+    Id,
+    Email,
+    Username,
+    PasswordHash,
+    Role,
+    IsActive,
     EmailVerified,
     TotpSecret,
     TotpEnabled,
     FailedLoginAttempts,
     LockedUntil,
+    CreatedAt,
+    UpdatedAt,
 }
 
 #[derive(Iden)]
@@ -299,5 +389,24 @@ enum LoginEvents {
     FailureReason,
     IpAddress,
     UserAgent,
+    CreatedAt,
+}
+
+#[derive(Iden)]
+enum Permissions {
+    Table,
+    Id,
+    Codename,
+    Name,
+    Description,
+    CreatedAt,
+}
+
+#[derive(Iden)]
+enum RolePermissions {
+    Table,
+    Id,
+    Role,
+    PermissionId,
     CreatedAt,
 }
