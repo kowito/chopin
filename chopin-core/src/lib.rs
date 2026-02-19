@@ -51,8 +51,8 @@ pub use chopin_macros::{login_required, permission_required};
 // ── Axum re-exports ────────────────────────────────────────────
 // Users should never need `axum` in their Cargo.toml.
 pub use axum::{serve, Extension, Json, Router};
-pub use axum::response::{self, IntoResponse, Response};
-pub use axum::routing;
+pub use axum::response::IntoResponse;
+pub use axum::routing::get;
 
 // ── HTTP re-exports ────────────────────────────────────────────
 pub use axum::body;
