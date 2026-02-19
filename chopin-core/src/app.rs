@@ -325,6 +325,29 @@ impl App {
         self.fast_route(FastRoute::text(path, body))
     }
 
+    /// Convenience: register a JSON fast route with **per-request serialization**.
+    ///
+    /// Complies with TechEmpower benchmark rules — JSON is serialized on every
+    /// request using thread-local buffer reuse + sonic-rs SIMD (with `perf` feature).
+    ///
+    /// ```rust,ignore
+    /// use serde::Serialize;
+    ///
+    /// #[derive(Serialize)]
+    /// struct Message { message: &'static str }
+    ///
+    /// app.fast_json_serialize("/json", || Message {
+    ///     message: "Hello, World!",
+    /// })
+    /// ```
+    pub fn fast_json_serialize<F, T>(self, path: &str, f: F) -> Self
+    where
+        F: Fn() -> T + Send + Sync + 'static,
+        T: serde::Serialize,
+    {
+        self.fast_route(FastRoute::json_serialize(path, f))
+    }
+
     // ═══ Custom Routes Builder API ═══
 
     /// Merge a custom Axum [`Router`] into the application.

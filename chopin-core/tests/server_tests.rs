@@ -1,5 +1,76 @@
 use chopin_core::server::FastRoute;
 use hyper::Method;
+use serde::Serialize;
+
+// ═══ json_serialize (per-request serialization) ═══
+
+#[derive(Serialize)]
+struct Message {
+    message: &'static str,
+}
+
+#[test]
+fn test_fast_route_json_serialize_display() {
+    let route = FastRoute::json_serialize("/json", || Message {
+        message: "Hello, World!",
+    });
+    let display = format!("{}", route);
+    assert!(
+        display.contains("/json"),
+        "Should contain path: {}",
+        display
+    );
+    assert!(
+        display.contains("dynamic json"),
+        "Should show dynamic json: {}",
+        display
+    );
+}
+
+#[test]
+fn test_fast_route_json_serialize_debug() {
+    let route = FastRoute::json_serialize("/json", || Message {
+        message: "Hello, World!",
+    });
+    let debug = format!("{:?}", route);
+    assert!(debug.contains("FastRoute"), "debug: {}", debug);
+    assert!(debug.contains("/json"), "debug: {}", debug);
+    assert!(
+        debug.contains("dynamic"),
+        "Should show dynamic body: {}",
+        debug
+    );
+}
+
+#[test]
+fn test_fast_route_json_serialize_clone() {
+    let route = FastRoute::json_serialize("/json", || Message {
+        message: "Hello, World!",
+    });
+    let cloned = route.clone();
+    assert_eq!(format!("{}", route), format!("{}", cloned));
+}
+
+#[test]
+fn test_fast_route_json_serialize_with_decorators() {
+    let route = FastRoute::json_serialize("/json", || Message {
+        message: "Hello, World!",
+    })
+    .cors()
+    .get_only();
+
+    let display = format!("{}", route);
+    assert!(display.contains("/json"));
+    assert!(display.contains("+cors"));
+    assert!(display.contains("GET"));
+    assert!(display.contains("dynamic json"));
+}
+
+#[test]
+fn test_fast_route_json_serialize_path() {
+    let route = FastRoute::json_serialize("/api/data", || Message { message: "test" });
+    assert_eq!(route.path(), "/api/data");
+}
 
 // ═══ FastRoute construction ═══
 

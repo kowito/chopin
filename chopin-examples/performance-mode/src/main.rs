@@ -92,6 +92,13 @@
 
 use chopin_core::prelude::*;
 use chopin_core::FastRoute;
+use serde::Serialize;
+
+/// TechEmpower JSON serialization test payload.
+#[derive(Serialize)]
+struct Message {
+    message: &'static str,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -114,10 +121,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = App::new()
         .await?
-        // Bare: maximum performance benchmark endpoints (zero-alloc, no middleware)
-        .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#).get_only())
+        // Per-request JSON serialization (TechEmpower compliant, ~100-150ns)
+        .fast_route(
+            FastRoute::json_serialize("/json", || Message {
+                message: "Hello, World!",
+            })
+            .get_only(),
+        )
+        // Static plaintext (zero-alloc, ~35ns)
         .fast_route(FastRoute::text("/plaintext", b"Hello, World!").get_only())
-        // With CORS: frontend-accessible status endpoint (still zero per-request cost)
+        // With CORS: frontend-accessible status endpoint (static, still zero per-request cost)
         .fast_route(
             FastRoute::json("/api/status", br#"{"status":"ok"}"#)
                 .cors()

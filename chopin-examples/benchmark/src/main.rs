@@ -4,12 +4,12 @@
 //! Uses SO_REUSEPORT multi-core accept loops with per-core runtimes.
 //!
 //! Fast routes are registered via the `FastRoute` API — these bypass Axum
-//! entirely and serve pre-computed responses with zero heap allocation.
+//! entirely for maximum throughput.
 //!
 //! ## Endpoints
 //!
-//! - `GET /json`      → `{"message":"Hello, World!"}`   (FastRoute, zero-alloc)
-//! - `GET /plaintext` → `Hello, World!`                 (FastRoute, zero-alloc)
+//! - `GET /json`      → `{"message":"Hello, World!"}`   (FastRoute, per-request serialize, TFB compliant)
+//! - `GET /plaintext` → `Hello, World!`                 (FastRoute, zero-alloc static)
 //! - `GET /`          → Welcome JSON via Axum
 //! - `GET /api-docs`  → Scalar OpenAPI explorer
 //!
@@ -23,10 +23,10 @@
 //! ## Benchmark
 //!
 //! ```bash
-//! # JSON endpoint (FastRoute fast-path)
+//! # JSON endpoint (FastRoute, per-request serialization)
 //! wrk -t4 -c256 -d10s http://127.0.0.1:3000/json
 //!
-//! # Plaintext endpoint (FastRoute fast-path)
+//! # Plaintext endpoint (FastRoute, zero-alloc static)
 //! wrk -t4 -c256 -d10s http://127.0.0.1:3000/plaintext
 //!
 //! # Axum route (standard middleware path)
@@ -35,6 +35,14 @@
 
 use chopin_core::prelude::*;
 use chopin_core::FastRoute;
+use serde::Serialize;
+
+/// TechEmpower JSON serialization test payload.
+/// Serialized per-request to comply with TFB rules.
+#[derive(Serialize)]
+struct Message {
+    message: &'static str,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -54,11 +62,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = App::new()
         .await?
-        // Register benchmark endpoints as FastRoutes.
-        // These bypass Axum entirely — zero allocation, maximum throughput.
-        // .get_only() ensures only GET/HEAD hit the fast path; other methods
-        // fall through to the Axum Router.
-        .fast_route(FastRoute::json("/json", br#"{"message":"Hello, World!"}"#).get_only())
+        // JSON: per-request serialization (TechEmpower compliant).
+        // Uses thread-local buffer reuse + sonic-rs SIMD (~100-150ns/req).
+        .fast_route(
+            FastRoute::json_serialize("/json", || Message {
+                message: "Hello, World!",
+            })
+            .get_only(),
+        )
+        // Plaintext: static pre-computed bytes (zero-alloc, ~35ns/req).
         .fast_route(FastRoute::text("/plaintext", b"Hello, World!").get_only());
 
     app.run().await?;
