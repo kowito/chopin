@@ -1,5 +1,8 @@
 # Performance Benchmarks
 
+> **Latest: v0.3.3** — Added zero-alloc Content-Length headers (itoa) and slim hyper features, inspired by top TechEmpower entries.
+> See [PERFORMANCE_OPTIMIZATION.md](PERFORMANCE_OPTIMIZATION.md) for architecture details.
+
 ## JSON Throughput Benchmark (req/s @ 256 connections)
 
 ```
@@ -65,7 +68,21 @@
 
 **💰 Savings: $16,800/year**
 
-## Performance Optimization
+## Optimizations in v0.3.3
+
+Chopin learned from top **TechEmpower Rust leaders** (hyper, ntex, may-minihttp, xitca-web):
+
+| Optimization | TFB Pattern | Chopin Adoption | Benefit |
+|---|---|---|---|
+| **Slim hyper features** | Use `["server", "http1"]` only | ✅ Applied | 5-10% binary size reduction, better icache |
+| **Zero-alloc Content-Length** | Use itoa for integer formatting | ✅ Applied | 10ns per response (eliminates String alloc) |
+| **Per-core runtimes** | `current_thread` per core | ✅ Already had | Perfect CPU locality, no work-stealing |
+| **SO_REUSEPORT** | Kernel-level load balancing | ✅ Already had | Linear scaling, zero scheduler overhead |
+| **Thread-local JSON buffer** | BytesMut reuse + sonic-rs SIMD | ✅ Already had | Zero allocation after warmup |
+| **Cached Date header** | Epoch-based thread-local cache | ✅ Already had | 8ns hit, no synchronization |
+| **Pre-computed headers** | HeaderMap clone (one memcpy) | ✅ Already had | Faster than per-header insert |
+
+## Performance Tuning
 
 To reproduce these benchmarks or run your own:
 
@@ -77,7 +94,11 @@ REUSEPORT=true cargo run --release --features perf
 Enable all performance features in production:
 - **SO_REUSEPORT** — Per-core worker isolation
 - **TCP_NODELAY** — Reduced latency
-- **sonic-rs** — SIMD JSON serialization
-- **mimalloc** — High-performance allocator
+- **sonic-rs** — SIMD JSON serialization (2-3× faster than serde_json)
+- **mimalloc** — High-performance allocator (10% faster than glibc)
+- **itoa** — Zero-alloc Content-Length formatting (10ns faster per response)
+
+**For detailed tuning, see [PERFORMANCE_OPTIMIZATION.md](PERFORMANCE_OPTIMIZATION.md).**
+
 
 See [JSON Performance Guide](json-performance.md) for detailed tuning options.

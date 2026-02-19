@@ -14,8 +14,9 @@ Comprehensive guides for the Chopin web framework.
 
 ## Performance
 
+- [**PERFORMANCE_OPTIMIZATION.md**](PERFORMANCE_OPTIMIZATION.md) — Complete performance tuning guide (HTTP layer, FastRoute, headers, JSON, allocators)
 - [**BENCHMARKS.md**](BENCHMARKS.md) — Performance comparisons with 7 frameworks, cost analysis, optimization tips
-- [**json-performance.md**](json-performance.md) — SIMD JSON optimization with sonic-rs
+- [**json-performance.md**](json-performance.md) — SIMD JSON optimization with sonic-rs, thread-local buffering
 
 ## Debugging
 
@@ -59,6 +60,7 @@ docs/
 ├── QUICK_START.md               # Get started in 5 minutes
 ├── FEATURES.md                  # Feature matrix & capabilities
 ├── BENCHMARKS.md                # Performance comparisons
+├── PERFORMANCE_OPTIMIZATION.md  # Complete performance tuning guide
 ├── ARCHITECTURE.md              # System design (in repo root)
 ├── modular-architecture.md      # Module development guide
 ├── debugging-and-logging.md     # Debugging guide
