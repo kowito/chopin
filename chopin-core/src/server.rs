@@ -361,7 +361,7 @@ impl FastRoute {
             base_headers,
             preflight_headers: None,
             allowed_methods: None,
-            fresh_headers: true,  // Build all headers live — no cached state
+            fresh_headers: true, // Build all headers live — no cached state
         }
     }
 
@@ -937,13 +937,21 @@ pub async fn run_reuseport(
         tracing::info!(
             "Performance mode: {} cores (SO_REUSEPORT + {} tokio runtime), no fast routes",
             num_cores,
-            if use_multithread { "multi-thread" } else { "current_thread" }
+            if use_multithread {
+                "multi-thread"
+            } else {
+                "current_thread"
+            }
         );
     } else {
         tracing::info!(
             "Performance mode: {} cores (SO_REUSEPORT + {} tokio runtime), {} fast route(s): [{}]",
             num_cores,
-            if use_multithread { "multi-thread" } else { "current_thread" },
+            if use_multithread {
+                "multi-thread"
+            } else {
+                "current_thread"
+            },
             fast_routes.len(),
             fast_routes
                 .iter()
