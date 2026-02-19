@@ -47,6 +47,18 @@ fn now_header() -> HeaderValue {
     HeaderValue::from_str(&now).unwrap()
 }
 
+/// Build a **live** Date header value from the current wall-clock time.
+///
+/// Unlike [`cached_date_header`] (which serves a value updated every 500ms),
+/// this calls `SystemTime::now()` on every invocation — guaranteed fresh.
+///
+/// Used by `FastRoute::json_serialize` to ensure no header state is cached
+/// across requests, satisfying strict TechEmpower compliance.
+#[inline(always)]
+pub fn fresh_date_header() -> HeaderValue {
+    now_header()
+}
+
 /// Initialize the Date header cache and start the background updater.
 /// Should be called once at server startup. Safe to call multiple times.
 pub fn init_date_cache() {
