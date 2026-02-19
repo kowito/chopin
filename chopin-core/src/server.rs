@@ -219,7 +219,7 @@ impl FastRoute {
         base_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
         base_headers.insert(
             header::CONTENT_LENGTH,
-            HeaderValue::from_str(&body.len().to_string()).unwrap(),
+            perf::content_length_header(body.len()),
         );
         base_headers.insert(header::SERVER, SERVER_NAME.clone());
 
@@ -455,9 +455,10 @@ impl FastRoute {
             FastRouteBody::Dynamic(f) => {
                 let bytes = f();
                 // Content-Length computed per-request for dynamic bodies.
+                // Uses itoa for zero-alloc integer formatting.
                 headers.insert(
                     header::CONTENT_LENGTH,
-                    HeaderValue::from_str(&bytes.len().to_string()).unwrap(),
+                    perf::content_length_header(bytes.len()),
                 );
                 bytes
             }
