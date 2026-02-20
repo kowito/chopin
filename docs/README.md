@@ -14,9 +14,11 @@ Comprehensive guides for the Chopin web framework.
 
 ## Performance
 
-- [**PERFORMANCE_OPTIMIZATION.md**](PERFORMANCE_OPTIMIZATION.md) — Complete performance tuning guide (HTTP layer, FastRoute, headers, JSON, allocators)
+- [**PERFORMANCE_OPTIMIZATION.md**](PERFORMANCE_OPTIMIZATION.md) — Complete performance tuning guide (HTTP layer, **FastRoute**, headers, JSON, allocators)
 - [**BENCHMARKS.md**](BENCHMARKS.md) — Performance comparisons with 7 frameworks, cost analysis, optimization tips
 - [**json-performance.md**](json-performance.md) — SIMD JSON optimization with sonic-rs, thread-local buffering
+
+> 💡 **FastRoute quick reference:** `FastRoute::text("/plaintext", b"Hello")` (~35ns static), `FastRoute::json_serialize("/json", || Msg{..})` (~100-150ns dynamic). See [PERFORMANCE_OPTIMIZATION.md § FastRoute](PERFORMANCE_OPTIMIZATION.md) and the [Advanced Tutorial](tutorial-advanced.html).
 
 ## Debugging
 

@@ -12,7 +12,7 @@
 | **File Storage** | ✅ Core | Local filesystem or S3-compatible (R2, MinIO) |
 | **GraphQL** | ✅ Core | Optional async-graphql integration |
 | **Testing Utils** | ✅ Core | `TestApp` with in-memory SQLite |
-| **FastRoute** | ✅ Core | Zero-alloc static responses (~35ns/req) |
+| **FastRoute** | ✅ Core | Zero-alloc static (~35ns) and per-request dynamic serialization (~100-150ns); bypasses Axum middleware with pre-computed headers, optional CORS, Cache-Control, method filtering |
 | **Admin Panel** | 🔜 Opt-in | Django-style admin interface (vendor/chopin_admin) |
 | **CMS Module** | 🔜 Opt-in | Content management system (vendor/chopin_cms) |
 
@@ -87,6 +87,7 @@ See [modular-architecture.md](modular-architecture.md) for RBAC examples.
 - **3.75ms p99 latency** — Optimal for production
 - **2-8x faster** than Node.js, Python, even competing Rust frameworks
 - **50% cost savings** vs Node.js for same capacity
+- **FastRoute** — 7-142× faster than Axum for predictable endpoints (static: ~35ns, dynamic: ~100-150ns)
 
 ### Production Ready
 

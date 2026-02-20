@@ -186,7 +186,7 @@ Thread-local BytesMut (4 KB)
 
 ```toml
 [dependencies]
-chopin-core = { version = "0.3", features = ["perf"] }
+chopin-core = { version = "0.3.5", features = ["perf"] }
 ```
 
 This enables:
@@ -325,7 +325,7 @@ pub fn content_length_header(len: usize) -> HeaderValue {
 ```bash
 # Cargo.toml
 [dependencies]
-chopin-core = { version = "0.3", features = ["perf"] }
+chopin-core = { version = "0.3.5", features = ["perf"] }
 ```
 
 ```bash

@@ -201,6 +201,62 @@ curl -X PUT http://localhost:3000/api/posts/42/publish \
 # Returns: {"data":null,"error":"Permission denied: can_publish_post","success":false}
 ```
 
+## FastRoute: Zero-Allocation Endpoints
+
+`FastRoute` bypasses Axum middleware entirely for maximum throughput on predictable endpoints. Registered at startup, all headers are pre-computed — **zero per-request cost**.
+
+### Static routes (~35ns/req)
+
+```rust
+use chopin_core::{App, FastRoute};
+
+App::new().await?
+    // Static plaintext: clone body pointer + memcpy headers
+    .fast_route(FastRoute::text("/plaintext", b"Hello, World!").get_only())
+    
+    // Static JSON: pre-cached response
+    .fast_route(FastRoute::json("/health", br#"{"status":"ok"}"#).get_only())
+
+    // With CORS and Cache-Control decorators (pre-computed, zero per-request cost)
+    .fast_route(
+        FastRoute::json("/api/status", br#"{"status":"ok","version":"0.3.5"}"#)
+            .cors()
+            .cache_control("public, max-age=60")
+            .get_only()
+    )
+    .run().await?;
+```
+
+### Dynamic routes (~100-150ns/req)
+
+For endpoints that must serialize fresh JSON on every request (e.g., TechEmpower benchmark):
+
+```rust
+use chopin_core::{App, FastRoute};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct Message { message: &'static str }
+
+App::new().await?
+    // Per-request serialization — thread-local buffer reuse + sonic-rs SIMD
+    // TechEmpower benchmark compliant (no body caching)
+    .fast_route(FastRoute::json_serialize("/json", || Message {
+        message: "Hello, World!",
+    }).get_only())
+    .run().await?;
+```
+
+### Performance comparison
+
+| Route Type | Latency | Best For |
+|-----------|---------|----------|
+| `FastRoute::json()` / `text()` | ~35ns | Health, version, static API |
+| `FastRoute::json_serialize()` | ~100-150ns | TFB-compliant JSON, metrics |
+| Axum Router | ~1-5µs | Auth, DB queries, business logic |
+
+> FastRoute does **not** run middleware — no auth, no logging. Use Axum routes for those.
+
 ## Working with Databases
 
 ```rust

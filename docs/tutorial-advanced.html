@@ -44,6 +44,7 @@
                     <li><a href="#caching" class="toc-link">Caching</a></li>
                     <li><a href="#file-uploads" class="toc-link">File Uploads</a></li>
                     <li><a href="#graphql" class="toc-link">GraphQL</a></li>
+                    <li><a href="#fastroute" class="toc-link">FastRoute</a></li>
                 </ol>
             </div>
         </aside>
@@ -54,7 +55,7 @@
             <!-- Hero -->
             <div class="tutorial-hero">
                 <h1>Advanced Features</h1>
-                <p>Automatic API documentation with OpenAPI, high-performance caching, file uploads to S3, and optional GraphQL support.</p>
+                <p>Automatic API documentation with OpenAPI, high-performance caching, file uploads to S3, optional GraphQL, and <strong>FastRoute</strong> — zero-allocation endpoints that bypass the middleware stack entirely.</p>
                 <div class="page-indicator">Page 4 of 7</div>
             </div>
 
@@ -213,7 +214,7 @@ cache.flush().<span class="kw">await</span>?;                            <span c
 
                 <h3>Redis cache</h3>
 <pre><code><span class="comment"># Enable in Cargo.toml</span>
-chopin-core = { version = "0.3", features = ["redis"] }
+chopin-core = { version = "0.3.5", features = ["redis"] }
 
 <span class="comment"># Set in .env</span>
 REDIS_URL=redis://127.0.0.1:6379</code></pre>
@@ -284,7 +285,7 @@ REDIS_URL=redis://127.0.0.1:6379</code></pre>
 
                 <h3>S3 / Cloudflare R2 / MinIO</h3>
 <pre><code><span class="comment"># Enable in Cargo.toml</span>
-chopin-core = { version = "0.2", features = ["s3"] }
+chopin-core = { version = "0.3.5", features = ["s3"] }
 
 <span class="comment"># Configure in .env</span>
 S3_BUCKET=my-bucket
@@ -322,7 +323,7 @@ S3_ENDPOINT=http://localhost:9000</code></pre>
                 <p>Chopin includes optional GraphQL support via <code>async-graphql</code>. Enable it with the <code>graphql</code> feature flag.</p>
 
 <pre><code><span class="comment"># Cargo.toml</span>
-chopin-core = { version = "0.2", features = ["graphql"] }</code></pre>
+chopin-core = { version = "0.3.5", features = ["graphql"] }</code></pre>
 
 <pre><code><span class="kw">use</span> async_graphql::{Object, Schema, EmptyMutation, EmptySubscription};
 <span class="kw">use</span> chopin_core::graphql::graphql_routes;
@@ -350,7 +351,100 @@ chopin-core = { version = "0.2", features = ["graphql"] }</code></pre>
 <span class="kw">let</span> graphql = graphql_routes(schema);</code></pre>
             </section>
 
-            <!-- Navigation -->
+            <!-- 5. FastRoute -->
+            <section id="fastroute" class="tutorial-section">
+                <div class="section-number">17</div>
+                <h2>FastRoute: Zero-Allocation Endpoints</h2>
+                <p><strong>FastRoute</strong> bypasses Axum middleware entirely for maximum throughput. Routes are registered at startup with all headers pre-computed — the request handler itself does near-zero work on the hot path.</p>
+
+                <div class="callout">
+                    <i data-lucide="zap" class="inline-icon"></i>
+                    <div>
+                        <strong>When to use FastRoute:</strong> health checks, static API responses, version endpoints, and any route where you don't need auth, logging, or dynamic business logic. For everything else, use normal Axum routes.
+                    </div>
+                </div>
+
+                <h3>Static routes (~35ns/req, zero allocation)</h3>
+                <p>Pre-compute the entire response — body bytes and all headers — at registration time. Each request clones a <code>Bytes</code> pointer and a <code>HeaderMap</code> (one memcpy), then inserts a cached <code>Date</code> header.</p>
+
+<pre><code><span class="kw">use</span> chopin_core::{App, FastRoute};
+
+<span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+    <span class="comment">// Static plaintext — ~35ns/req</span>
+    .fast_route(FastRoute::text(<span class="str">"/plaintext"</span>, <span class="kw">b</span><span class="str">"Hello, World!"</span>).get_only())
+
+    <span class="comment">// Static JSON — pre-cached body, ~35ns/req</span>
+    .fast_route(FastRoute::json(<span class="str">"/health"</span>, <span class="kw">br</span><span class="str">#"{\"status\":\"ok\"}"#</span>).get_only())
+
+    <span class="comment">// Static HTML</span>
+    .fast_route(FastRoute::html(<span class="str">"/ping"</span>, <span class="kw">b</span><span class="str">"&lt;h1&gt;pong&lt;/h1&gt;"</span>).get_only())
+
+    <span class="comment">// With CORS, cache headers, and method filter — all pre-computed at startup</span>
+    .fast_route(
+        FastRoute::json(<span class="str">"/api/status"</span>, <span class="kw">br</span><span class="str">#"{\"status\":\"ok\",\"version\":\"0.3.5\"}"#</span>)
+            .cors()                                  <span class="comment">// Adds CORS headers</span>
+            .cache_control(<span class="str">"public, max-age=60"</span>)  <span class="comment">// Adds Cache-Control header</span>
+            .get_only()                              <span class="comment">// Only GET/HEAD; others fall through to Axum</span>
+    )
+    .run().<span class="kw">await</span>?;</code></pre>
+
+                <h3>Dynamic routes (~100-150ns/req)</h3>
+                <p>For endpoints that serialize fresh JSON on every request. Uses a <strong>thread-local buffer</strong> for zero heap allocation and <strong>sonic-rs SIMD</strong> for serialization. Fully TechEmpower JSON benchmark compliant.</p>
+
+<pre><code><span class="kw">use</span> chopin_core::{App, FastRoute};
+<span class="kw">use</span> serde::Serialize;
+
+<span class="attr">#[derive(Serialize)]</span>
+<span class="kw">struct</span> <span class="type">Message</span> { message: &<span class="lifetime">'static</span> <span class="kw">str</span> }
+
+<span class="kw">let</span> app = App::new().<span class="kw">await</span>?
+    <span class="comment">// Closure is called per request; body is NOT cached</span>
+    .fast_route(FastRoute::json_serialize(<span class="str">"/json"</span>, || <span class="type">Message</span> {
+        message: <span class="str">"Hello, World!"</span>,
+    }).get_only())
+    .run().<span class="kw">await</span>?;</code></pre>
+
+                <h3>Performance tiers</h3>
+                <table>
+                    <thead>
+                        <tr><th>Type</th><th>Latency</th><th>Allocation</th><th>Best For</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>json()</code> / <code>text()</code> / <code>html()</code></td>
+                            <td>~35ns</td>
+                            <td>None</td>
+                            <td><code>/health</code>, <code>/version</code>, static JSON</td>
+                        </tr>
+                        <tr>
+                            <td><code>json_serialize()</code></td>
+                            <td>~100-150ns</td>
+                            <td>Thread-local (reused)</td>
+                            <td><code>/json</code>, metrics, TFB-compliant</td>
+                        </tr>
+                        <tr>
+                            <td>Axum Router</td>
+                            <td>~1-5µs</td>
+                            <td>Per-request</td>
+                            <td>Auth, DB, business logic, logging</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>All builder options</h3>
+<pre><code>FastRoute::json(<span class="str">"/api/v1/status"</span>, body)
+    .get_only()                          <span class="comment">// Allow GET + HEAD only</span>
+    .cors()                              <span class="comment">// CORS headers (pre-computed)</span>
+    .cache_control(<span class="str">"public, max-age=300"</span>) <span class="comment">// Cache-Control (pre-computed)</span>
+    .header(header::X_CONTENT_TYPE_OPTIONS, <span class="str">"nosniff"</span>) <span class="comment">// Any custom header</span></code></pre>
+
+                <div class="callout">
+                    <i data-lucide="info" class="inline-icon"></i>
+                    <div>
+                        FastRoute endpoints are <strong>7-142× faster</strong> than Axum middleware routes but skip the middleware stack entirely — no <code>#[login_required]</code>, no request tracing, no Axum extractors. Use them for endpoints that are literally just sending back a pre-determined response.
+                    </div>
+                </div>
+            </section>
             <nav class="tutorial-nav">
                 <a href="tutorial-api.html" class="btn-secondary">&larr; API</a>
                 <a href="tutorial-deployment.html" class="btn-primary">Next: Deployment →</a>

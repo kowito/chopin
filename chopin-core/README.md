@@ -39,7 +39,7 @@ A high-performance modular Rust web framework optimized for 650K+ req/s throughp
 
 ```toml
 [dependencies]
-chopin-core = "0.1"
+chopin-core = "0.3.5"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sea-orm = { version = "1", features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
 ```

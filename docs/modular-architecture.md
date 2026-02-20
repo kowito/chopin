@@ -518,3 +518,4 @@ pub struct BlogModule;
 - See [ARCHITECTURE.md](../ARCHITECTURE.md) for system design details
 - Check `chopin-examples/basic-api/` for a complete MVSR example
 - Read [JSON Performance](json-performance.md) for optimization techniques
+- Read [PERFORMANCE_OPTIMIZATION.md](PERFORMANCE_OPTIMIZATION.md) for `FastRoute` — zero-alloc endpoints that complement your modules for ultra-high-throughput paths like `/health`, `/json`, and `/plaintext`

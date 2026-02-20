@@ -1,6 +1,6 @@
 # Performance Benchmarks
 
-> **Latest: v0.3.3** — Added zero-alloc Content-Length headers (itoa) and slim hyper features, inspired by top TechEmpower entries.
+> **Latest: v0.3.5** — Production-ready with zero-alloc optimization layers, OpenAPI docs, and comprehensive security features.
 > See [PERFORMANCE_OPTIMIZATION.md](PERFORMANCE_OPTIMIZATION.md) for architecture details.
 
 ## JSON Throughput Benchmark (req/s @ 256 connections)
@@ -68,9 +68,11 @@
 
 **💰 Savings: $16,800/year**
 
-## Optimizations in v0.3.3
+## Optimizations in v0.3.5
 
 Chopin learned from top **TechEmpower Rust leaders** (hyper, ntex, may-minihttp, xitca-web):
+
+**All optimizations from v0.3.3+ are production-ready and tested:**
 
 | Optimization | TFB Pattern | Chopin Adoption | Benefit |
 |---|---|---|---|

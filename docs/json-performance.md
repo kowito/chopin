@@ -18,7 +18,7 @@ This guide covers how to configure and use Chopin for maximum JSON throughput.
 ```toml
 # Cargo.toml
 [dependencies]
-chopin-core = { version = "0.2", features = ["perf"] }
+chopin-core = { version = "0.3.5", features = ["perf"] }
 ```
 
 This enables:
@@ -235,7 +235,7 @@ Uses standard `serde_json` and system malloc. Still benefits from thread-local b
 
 ## Content-Length Header Optimization
 
-**New in v0.3.3:** Zero-alloc integer formatting using `itoa` crate.
+**Since v0.3.3:** Zero-alloc integer formatting using `itoa` crate (now stable in v0.3.5).
 
 ### The Problem
 
@@ -342,11 +342,11 @@ For a typical 500-byte JSON response:
 
 2. **Don't disable `perf` in production**
    ```toml
-   # ❌ Production: missing features = ["perf"]
-   chopin-core = "0.2"
+   # ❌ Production: outdated version + missing features
+   chopin-core = "0.3"
 
-   # ✅ Production: enable perf
-   chopin-core = { version = "0.3", features = ["perf"] }
+   # ✅ Production: enable perf features with latest version
+   chopin-core = { version = "0.3.5", features = ["perf"] }
    ```
 
 3. **Don't use `Vec::with_capacity()` for small responses**
