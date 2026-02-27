@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["write_str_escape","write_str_escape_raw","write_value","write_value_raw"],"static":["ESCAPE_TABLE"],"trait":["Serialize","SerializeRaw"]};

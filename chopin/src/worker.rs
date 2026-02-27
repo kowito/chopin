@@ -13,16 +13,16 @@ pub struct Worker {
     id: usize,
     router: Router,
     metrics: Arc<WorkerMetrics>,
-    pipe_fd: i32, // Read end of pipe from acceptor
+    listen_fd: i32, // Shared listen socket
 }
 
 impl Worker {
-    pub fn new(id: usize, router: Router, metrics: Arc<WorkerMetrics>, pipe_fd: i32) -> Self {
+    pub fn new(id: usize, router: Router, metrics: Arc<WorkerMetrics>, listen_fd: i32) -> Self {
         Self {
             id,
             router,
             metrics,
-            pipe_fd,
+            listen_fd,
         }
     }
 
@@ -30,42 +30,34 @@ impl Worker {
         // 1. Setup epoll/kqueue instance
         let epoll = Epoll::new().expect("Failed to create epoll instance");
 
-        // Register the pipe read FD to receive new connections from the acceptor
-        let pipe_token = u64::MAX;
-        epoll.add(self.pipe_fd, pipe_token, EPOLLIN).expect("Failed to register pipe fd");
+        // Register the shared listen socket
+        let listen_token = u64::MAX;
+        epoll.add(self.listen_fd, listen_token, EPOLLIN).expect("Failed to register listen fd");
 
         // 2. Initialize Slab Allocator
         let mut slab = ConnectionSlab::new(100_000); // 100k connections per core capacity
 
-        println!("Worker {} entering main event loop (pipe_fd={}).", self.id, self.pipe_fd);
+        println!("Worker {} entering main event loop (listen_fd={}).", self.id, self.listen_fd);
 
         let mut events = vec![epoll_event { events: 0, u64: 0 }; 1024]; // Process up to 1024 events at once
         
-        // Wait timeout in ms. Low during shutdown, otherwise bounded for pruning
+        // Wait timeout in ms.
         let mut timeout = 1000; 
         
-        // Track time efficiently in the loop to avoid syscalls during inner parsing
         let mut now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
         let mut last_prune = now;
+        let mut iter_count: u32 = 0;
 
         while !shutdown.load(Ordering::Acquire) {
-            now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
-
-            // Prune stale connections every 1 second
-            if now - last_prune >= 1 {
-                for i in 0..slab.high_water() {
-                    // Check timeouts
-                    if let Some(conn) = slab.get(i) {
-                        if conn.state != ConnState::Free && now - conn.last_active > 30 {
-                            let fd = conn.fd;
-                            epoll.delete(fd).ok();
-                            unsafe { libc::close(fd); }
-                            slab.free(i);
-                            self.metrics.dec_conn();
-                        }
-                    }
+            iter_count = iter_count.wrapping_add(1);
+            
+            // Only update time and prune every 1024 iterations or after wait
+            if iter_count % 1024 == 0 {
+                now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
+                if now - last_prune >= 1 {
+                    self.prune_connections(&mut slab, now);
+                    last_prune = now;
                 }
-                last_prune = now;
             }
 
             let n = match epoll.wait(&mut events, timeout) {
@@ -78,15 +70,20 @@ impl Worker {
                 let is_read = (events[i].events & EPOLLIN as u32) != 0;
                 let is_write = (events[i].events & EPOLLOUT as u32) != 0;
 
-                if token == pipe_token {
-                    // Drain all FDs from the acceptor pipe
+                if token == listen_token {
+                    // Shared accept loop
                     if shutdown.load(Ordering::Acquire) {
                         continue;
                     }
 
                     loop {
-                        match syscalls::recv_fd_from_pipe(self.pipe_fd) {
+                        match syscalls::accept_connection(self.listen_fd) {
                             Ok(Some(client_fd)) => {
+                                // Enable TCP_NODELAY
+                                unsafe {
+                                    let one: libc::c_int = 1;
+                                    libc::setsockopt(client_fd, libc::IPPROTO_TCP, libc::TCP_NODELAY, &one as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+                                }
                                 // Add to slab
                                 if let Some(idx) = slab.allocate(client_fd) {
                                     // Register with epoll
@@ -106,7 +103,7 @@ impl Worker {
                                     unsafe { libc::close(client_fd); }
                                 }
                             }
-                            Ok(None) => break, // WouldBlock
+                            Ok(None) => break, // WouldBlock (another worker likely took it)
                             Err(_) => break,
                         }
                     }
@@ -192,7 +189,7 @@ impl Worker {
                                             }
                                         };
 
-                                        // Format response using raw byte copies (zero-fmt overhead)
+                                        // Format response using raw byte copies
                                         let buf = &mut conn.write_buf[..];
                                         let mut pos: usize = 0;
                                         
@@ -284,7 +281,6 @@ impl Worker {
                                             }
                                             crate::http::Body::Stream(mut iter) => {
                                                 for chunk in iter.by_ref() {
-                                                    // Hex length
                                                     let hex_len = {
                                                         let mut n = chunk.len();
                                                         let mut hex_buf = [0u8; 8];
@@ -344,7 +340,6 @@ impl Worker {
                                                self.metrics.add_bytes(n);
                                                conn.write_pos += n as u16;
                                                if conn.write_pos as usize >= write_total {
-                                                   // Full write complete
                                                    if conn.route_id == 1 && !shutdown.load(Ordering::Acquire) {
                                                        conn.state = ConnState::Reading;
                                                        conn.parse_pos = 0;
@@ -355,11 +350,8 @@ impl Worker {
                                                        next_state = ConnState::Closing;
                                                    }
                                                }
-                                               // else: partial write, stay in Writing state
                                           }
-                                          Ok(_) => {
-                                               // WouldBlock / 0 bytes, stay in Writing
-                                          }
+                                          Ok(_) => {}
                                           Err(_) => {
                                                next_state = ConnState::Closing;
                                           }
@@ -385,13 +377,28 @@ impl Worker {
         }
 
         println!("Worker {} exiting gracefully.", self.id);
-        unsafe { libc::close(self.pipe_fd); }
+        // listen_socket is shared, should be closed by server or once by all?
+        // In this case, each worker can close its own FD reference if it was dup-ed, 
+        // but here it's just the same integer. We'll let the server close it.
         for i in 0..slab.capacity() {
              if let Some(conn) = slab.get(i) {
                   if conn.state != ConnState::Free {
                        unsafe { libc::close(conn.fd); }
                   }
              }
+        }
+    }
+
+    fn prune_connections(&self, slab: &mut ConnectionSlab, now: u32) {
+        for i in 0..slab.high_water() {
+            if let Some(conn) = slab.get(i) {
+                if conn.state != ConnState::Free && now - conn.last_active > 30 {
+                    let fd = conn.fd;
+                    unsafe { libc::close(fd); }
+                    slab.free(i);
+                    self.metrics.dec_conn();
+                }
+            }
         }
     }
 }

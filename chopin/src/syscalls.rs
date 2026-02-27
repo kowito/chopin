@@ -142,6 +142,53 @@ pub fn create_listen_socket(host: &str, port: u16) -> io::Result<c_int> {
     }
 }
 
+pub fn create_listen_socket_reuseport(host: &str, port: u16) -> io::Result<c_int> {
+    unsafe {
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        // Set non-blocking
+        let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+
+        let one: c_int = 1;
+        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR, &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t);
+        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEPORT, &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t);
+
+        let addr_str = format!("{}:{}", host, port);
+        let addr: std::net::SocketAddr = addr_str.parse().unwrap();
+        
+        match addr {
+            std::net::SocketAddr::V4(a) => {
+                let sin = libc::sockaddr_in {
+                    sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,
+                    sin_family: libc::AF_INET as libc::sa_family_t,
+                    sin_port: a.port().to_be(),
+                    sin_addr: libc::in_addr { s_addr: u32::from_ne_bytes(a.ip().octets()) },
+                    sin_zero: [0; 8],
+                };
+                
+                if libc::bind(fd, &sin as *const _ as *const libc::sockaddr, std::mem::size_of_val(&sin) as libc::socklen_t) < 0 {
+                    let err = io::Error::last_os_error();
+                    libc::close(fd);
+                    return Err(err);
+                }
+            }
+            _ => panic!("IPv6 not supported"),
+        }
+
+        if libc::listen(fd, libc::SOMAXCONN) < 0 {
+            let err = io::Error::last_os_error();
+            libc::close(fd);
+            return Err(err);
+        }
+
+        Ok(fd)
+    }
+}
+
 /// Accept a non-blocking connection
 pub fn accept_connection(listen_fd: c_int) -> io::Result<Option<c_int>> {
     #[cfg(target_os = "linux")]

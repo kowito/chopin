@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["GLOBAL_SCRATCHPAD"],"fn":["with_scratch_tape"],"struct":["Scratchpad"]};

@@ -1,2 +1,0 @@
-window.ALL_CRATES = ["bytemuck","byteorder","cfg_if","fxhash","itoa","kowito_json","kowito_json_derive","libm","num_complex","num_traits","paste","proc_macro2","pulp","pulp_wasm_simd_flag","quote","reborrow","ryu","serde","serde_core","serde_derive","syn","unicode_ident"];
-//{"start":21,"fragment_lengths":[10,12,9,9,7,14,21,7,14,13,8,14,7,22,8,11,6,8,13,15,6,16]}
