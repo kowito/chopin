@@ -1,6 +1,3 @@
-[package]
-name = "chopin2"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
+[workspace]
+members = ["chopin", "chopin-pg"]
+resolver = "3"
