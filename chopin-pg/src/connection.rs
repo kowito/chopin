@@ -97,14 +97,13 @@ impl PgConnection {
     /// Perform the startup and authentication handshake.
     fn startup(&mut self, config: &PgConfig) -> PgResult<()> {
         // Send StartupMessage
+        self.ensure_write_capacity(512);
         let n = codec::encode_startup(&mut self.write_buf, &config.user, &config.database, &[]);
         self.stream.write_all(&self.write_buf[..n]).map_err(PgError::Io)?;
 
         // Read server response
         loop {
-            if self.read_pos == 0 || codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
-                self.fill_read_buf()?;
-            }
+            self.fill_read_buf(None)?;
 
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
                 let header = codec::decode_header(&self.read_buf).unwrap();
@@ -186,9 +185,7 @@ impl PgConnection {
     /// Handle SASL Continue/Final exchange.
     fn wait_for_sasl_continue(&mut self, scram: &mut ScramClient, _config: &PgConfig) -> PgResult<()> {
         loop {
-            if self.read_pos == 0 || codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
-                self.fill_read_buf()?;
-            }
+            self.fill_read_buf(None)?;
 
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
                 let header = codec::decode_header(&self.read_buf).unwrap();
@@ -233,6 +230,7 @@ impl PgConnection {
 
     /// Execute a simple query (no parameters). Returns all result rows.
     pub fn query_simple(&mut self, sql: &str) -> PgResult<Vec<Row>> {
+        self.ensure_write_capacity(5 + sql.len());
         let n = codec::encode_query(&mut self.write_buf, sql);
         self.stream.write_all(&self.write_buf[..n]).map_err(PgError::Io)?;
         self.read_query_results()
@@ -242,6 +240,11 @@ impl PgConnection {
     /// Uses implicit statement caching for performance.
     pub fn query(&mut self, sql: &str, params: &[&dyn crate::types::ToParam]) -> PgResult<Vec<Row>> {
         let stmt = self.stmt_cache.get_or_create(sql);
+        
+        // Conservative upper bound for write buffer
+        let estimated = 10 + sql.len() + (params.len() * 256); 
+        self.ensure_write_capacity(estimated);
+        
         let mut pos = 0;
 
         if stmt.is_new {
@@ -348,7 +351,7 @@ impl PgConnection {
 
         // Read until CopyInResponse
         loop {
-            self.fill_read_buf()?;
+            self.fill_read_buf(None)?;
             let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) else {
                 continue;
             };
@@ -395,7 +398,24 @@ impl PgConnection {
 
     // ─── Internal Methods ─────────────────────────────────────
 
-    fn fill_read_buf(&mut self) -> PgResult<()> {
+    fn fill_read_buf(&mut self, min_size: Option<usize>) -> PgResult<()> {
+        if let Some(min) = min_size {
+            self.ensure_read_capacity(min);
+        }
+        
+        if self.read_pos == self.read_buf.len() {
+            // Already full, but we need more for a message. 
+            // codec::message_complete probably returned None.
+            // Check if we have enough to know EXACTLY how much we need.
+            if self.read_pos >= 5 {
+                let header = codec::decode_header(&self.read_buf).unwrap();
+                let total = 1 + header.length as usize;
+                self.ensure_read_capacity(total - self.read_pos);
+            } else {
+                self.ensure_read_capacity(8192); // generic grow
+            }
+        }
+
         let n = self.stream.read(&mut self.read_buf[self.read_pos..]).map_err(PgError::Io)?;
         if n == 0 {
             return Err(PgError::ConnectionClosed);
@@ -409,12 +429,26 @@ impl PgConnection {
         self.read_pos -= n;
     }
 
+    fn ensure_read_capacity(&mut self, additional: usize) {
+        if self.read_pos + additional > self.read_buf.len() {
+            let new_len = (self.read_pos + additional).max(self.read_buf.len() * 2);
+            self.read_buf.resize(new_len, 0);
+        }
+    }
+
+    fn ensure_write_capacity(&mut self, additional: usize) {
+        if additional > self.write_buf.len() {
+            let new_len = additional.max(self.write_buf.len() * 2);
+            self.write_buf.resize(new_len, 0);
+        }
+    }
+
     fn read_query_results(&mut self) -> PgResult<Vec<Row>> {
         let mut rows = Vec::new();
         let mut columns: Vec<codec::ColumnDesc> = Vec::new();
 
         loop {
-            self.fill_read_buf()?;
+            self.fill_read_buf(None)?;
 
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
                 let header = codec::decode_header(&self.read_buf).unwrap();
@@ -464,7 +498,7 @@ impl PgConnection {
         let mut columns = cached_columns.unwrap_or_default();
 
         loop {
-            self.fill_read_buf()?;
+            self.fill_read_buf(None)?;
 
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
                 let header = codec::decode_header(&self.read_buf).unwrap();
@@ -510,7 +544,7 @@ impl PgConnection {
 
     fn drain_to_ready(&mut self) -> PgResult<()> {
         loop {
-            self.fill_read_buf()?;
+            self.fill_read_buf(None)?;
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
                 let header = codec::decode_header(&self.read_buf).unwrap();
                 if header.tag == BackendTag::ReadyForQuery {
@@ -568,7 +602,7 @@ impl<'a> CopyWriter<'a> {
 
         // Drain to ReadyForQuery
         loop {
-            self.conn.fill_read_buf()?;
+            self.conn.fill_read_buf(None)?;
             while let Some(msg_len) = codec::message_complete(&self.conn.read_buf[..self.conn.read_pos]) {
                 let header = codec::decode_header(&self.conn.read_buf).unwrap();
                 if header.tag == BackendTag::ReadyForQuery {

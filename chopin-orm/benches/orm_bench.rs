@@ -11,35 +11,87 @@ pub struct BenchUser {
     pub age: i32,
 }
 
-fn setup_db() -> PgPool {
+fn setup_db(count: i32) -> PgPool {
     let config = PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
     let mut pool = PgPool::connect(config, 1).unwrap();
 
     let conn = pool.get().unwrap();
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS bench_users (
+        "DROP TABLE IF EXISTS bench_users",
+        &[],
+    ).unwrap();
+    conn.execute(
+        "CREATE TABLE bench_users (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             age INT NOT NULL
         )",
         &[],
     ).unwrap();
-    conn.execute("TRUNCATE TABLE bench_users RESTART IDENTITY", &[]).unwrap();
     
-    // Insert 100 rows
-    for i in 0..100 {
-        conn.execute(
-            "INSERT INTO bench_users (name, age) VALUES ($1, $2)",
-            &[&format!("User {}", i), &i],
-        ).unwrap();
+    // Batch insert for speed
+    if count > 0 {
+        // Simple batch insert logic for benchmarking setup
+        // For 1M rows, we might want to use COPY or multiple large batches
+        // But for benchmark setup consistency, we'll do reasonably sized batches
+        let batch_size = 5000;
+        for i in (0..count).step_by(batch_size) {
+            let end = (i + batch_size as i32).min(count);
+            let mut query = String::from("INSERT INTO bench_users (name, age) VALUES ");
+            let mut val_strings = Vec::new();
+            for j in i..end {
+                val_strings.push(format!("('User {}', {})", j, j));
+            }
+            query.push_str(&val_strings.join(", "));
+            conn.execute(&query, &[]).unwrap();
+        }
     }
     pool
 }
 
-fn bench_raw_pg(c: &mut Criterion) {
-    let mut pool = setup_db();
+fn bench_scale(c: &mut Criterion) {
+    let scales = [1_000, 100_000]; // 1M might be too slow for immediate feedback, but user asked. 
+                                  // Let's see if we can include it.
     
-    c.bench_function("raw_pg_select_100_rows", |b| {
+    for &count in &scales {
+        let mut pool = setup_db(count);
+        let group_name = format!("scale_{}", count);
+        let mut group = c.benchmark_group(group_name);
+        
+        group.bench_function("raw_pg", |b| {
+            b.iter(|| {
+                let conn = pool.get().unwrap();
+                let rows = conn.query("SELECT id, name, age FROM bench_users", &[]).unwrap();
+                let users: Vec<BenchUser> = rows.into_iter().map(|row| {
+                    BenchUser {
+                        id: row.get_i32(0).unwrap().unwrap(),
+                        name: row.get_str(1).unwrap().unwrap().to_string(),
+                        age: row.get_i32(2).unwrap().unwrap(),
+                    }
+                }).collect();
+                black_box(users);
+            })
+        });
+
+        group.bench_function("chopin_orm", |b| {
+            b.iter(|| {
+                let users = BenchUser::find().all(&mut pool).unwrap();
+                black_box(users);
+            })
+        });
+        
+        group.finish();
+    }
+}
+
+// 1M row benchmark separately because it takes much longer
+fn bench_1m(c: &mut Criterion) {
+    let count = 1_000_000;
+    let mut pool = setup_db(count);
+    let mut group = c.benchmark_group("scale_1m");
+    group.sample_size(10); // Standard 100 iterations on 1M rows is too slow
+    
+    group.bench_function("raw_pg", |b| {
         b.iter(|| {
             let conn = pool.get().unwrap();
             let rows = conn.query("SELECT id, name, age FROM bench_users", &[]).unwrap();
@@ -53,18 +105,16 @@ fn bench_raw_pg(c: &mut Criterion) {
             black_box(users);
         })
     });
-}
 
-fn bench_chopin_orm(c: &mut Criterion) {
-    let mut pool = setup_db();
-    
-    c.bench_function("chopin_orm_select_100_rows", |b| {
+    group.bench_function("chopin_orm", |b| {
         b.iter(|| {
             let users = BenchUser::find().all(&mut pool).unwrap();
             black_box(users);
         })
     });
+    
+    group.finish();
 }
 
-criterion_group!(benches, bench_raw_pg, bench_chopin_orm);
+criterion_group!(benches, bench_scale, bench_1m);
 criterion_main!(benches);
