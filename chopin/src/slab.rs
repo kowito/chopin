@@ -5,6 +5,7 @@ pub struct ConnectionSlab {
     entries: Box<[Conn]>,
     head_free: i32,
     active_count: usize,
+    high_water: usize, // Highest index ever allocated (pruning only scans up to here)
 }
 
 impl ConnectionSlab {
@@ -24,6 +25,7 @@ impl ConnectionSlab {
             entries: entries.into_boxed_slice(),
             head_free: 0,
             active_count: 0,
+            high_water: 0,
         }
     }
 
@@ -45,11 +47,15 @@ impl ConnectionSlab {
         conn.fd = new_fd;
         conn.state = ConnState::Accepted;
         conn.parse_pos = 0;
+        conn.write_pos = 0;
         conn.route_id = 0;
         // Notice we do NOT clear read_buf/write_buf. 
         // We defer to state parsing tracking to never leak state, saving memset cycles.
 
         self.active_count += 1;
+        if idx >= self.high_water {
+            self.high_water = idx + 1;
+        }
         Some(idx)
     }
 
@@ -94,6 +100,12 @@ impl ConnectionSlab {
     #[inline(always)]
     pub fn capacity(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Returns the scan limit for pruning (only need to check 0..high_water)
+    #[inline(always)]
+    pub fn high_water(&self) -> usize {
+        self.high_water
     }
 }
 

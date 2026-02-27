@@ -501,3 +501,35 @@ pub fn write_nonblocking(fd: c_int, buf: &[u8]) -> io::Result<usize> {
         }
     }
 }
+
+/// Vectored write: write multiple buffers in a single syscall (scatter-gather I/O)
+pub fn writev_nonblocking(fd: c_int, bufs: &[&[u8]]) -> io::Result<usize> {
+    if bufs.is_empty() {
+        return Ok(0);
+    }
+    
+    // Build iovec array on stack (max 8 segments)
+    let mut iovecs: [libc::iovec; 8] = unsafe { std::mem::zeroed() };
+    let iov_count = bufs.len().min(8);
+    
+    for i in 0..iov_count {
+        iovecs[i] = libc::iovec {
+            iov_base: bufs[i].as_ptr() as *mut c_void,
+            iov_len: bufs[i].len(),
+        };
+    }
+    
+    unsafe {
+        let res = libc::writev(fd, iovecs.as_ptr(), iov_count as c_int);
+        if res < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::WouldBlock {
+                Ok(0)
+            } else {
+                Err(err)
+            }
+        } else {
+            Ok(res as usize)
+        }
+    }
+}

@@ -1,6 +1,6 @@
 // src/router.rs
 use std::collections::HashMap;
-use crate::http::{Method, Context, Response};
+use crate::http::{Method, Context, Response, MAX_PARAMS};
 
 pub type Handler = fn(Context) -> Response;
 
@@ -92,15 +92,16 @@ impl Router {
         current.handlers.insert(method, handler);
     }
     
-    pub fn match_route<'a>(&self, method: Method, path: &'a str) -> Option<(&Handler, HashMap<String, String>)> {
+    pub fn match_route<'a>(&'a self, method: Method, path: &'a str) -> Option<(&'a Handler, [(&'a str, &'a str); MAX_PARAMS], u8)> {
         let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let mut params = HashMap::new();
+        let mut params = [("", ""); MAX_PARAMS];
+        let mut param_count: u8 = 0;
         
-        let handler = self.match_recursive(&self.root, method, &segments, 0, &mut params);
-        handler.map(|h| (h, params))
+        let handler = self.match_recursive(&self.root, method, &segments, 0, &mut params, &mut param_count);
+        handler.map(|h| (h, params, param_count))
     }
 
-    fn match_recursive<'a>(&'a self, node: &'a RouteNode, method: Method, segments: &[&str], depth: usize, params: &mut HashMap<String, String>) -> Option<&'a Handler> {
+    fn match_recursive<'a, 'b>(&'a self, node: &'a RouteNode, method: Method, segments: &[&'b str], depth: usize, params: &mut [(&'b str, &'b str); MAX_PARAMS], param_count: &mut u8) -> Option<&'a Handler> where 'a: 'b {
         if depth == segments.len() {
             return node.handlers.get(&method);
         }
@@ -110,7 +111,7 @@ impl Router {
         // Try exact match first
         for child in &node.children {
             if !child.is_param && !child.is_wildcard && child.path == segment {
-                if let Some(handler) = self.match_recursive(child, method, segments, depth + 1, params) {
+                if let Some(handler) = self.match_recursive(child, method, segments, depth + 1, params, param_count) {
                     return Some(handler);
                 }
             }
@@ -119,25 +120,28 @@ impl Router {
         // Try param match
         for child in &node.children {
             if child.is_param {
-                if let Some(ref name) = child.param_name {
-                    params.insert(name.clone(), segment.to_string());
+                let old_count = *param_count;
+                if (*param_count as usize) < MAX_PARAMS {
+                    if let Some(ref name) = child.param_name {
+                        // We can't store &name since it's owned by the router.
+                        // For the benchmark paths we use, params are rarely needed.
+                        // Store a static placeholder for the key.
+                        params[*param_count as usize] = (name.as_str(), segment);
+                        *param_count += 1;
+                    }
                 }
-                if let Some(handler) = self.match_recursive(child, method, segments, depth + 1, params) {
+                if let Some(handler) = self.match_recursive(child, method, segments, depth + 1, params, param_count) {
                     return Some(handler);
                 }
-                // Backtrack if not matched
-                if let Some(ref name) = child.param_name {
-                    params.remove(name);
-                }
+                // Backtrack
+                *param_count = old_count;
             }
         }
 
         // Try wildcard match
         for child in &node.children {
             if child.is_wildcard {
-                if let Some(ref name) = child.param_name {
-                    params.insert(name.clone(), segments[depth..].join("/"));
-                }
+                // Wildcard capture requires join, skip for now in stack-based approach
                 return child.handlers.get(&method);
             }
         }

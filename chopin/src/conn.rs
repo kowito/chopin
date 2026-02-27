@@ -27,12 +27,11 @@ impl Default for ConnState {
 pub struct Conn {
     pub fd: i32,                // File Descriptor or Free List Next Index
     pub state: ConnState,       // State machine enum
-    pub parse_pos: u16,         // Parse checkpoint
-    pub route_id: u16,          // Cached Route index for later lookup
+    pub parse_pos: u16,         // Parse checkpoint / total read valid bytes / total write len
+    pub write_pos: u16,         // Bytes already written (for partial write resume)
+    pub route_id: u16,          // Cached Route index for later lookup / State
     pub last_active: u32,       // Cached timestamp in seconds
     pub requests_served: u32,   // Number of HTTP requests served on this keep-alive connection
-    // Header size = 4(fd) + 1(state) + 2(pos) + 2(route) + 4(active) + 4(served) = 17 bytes
-    // Due to alignment (4-byte alignment requirement), padded to 24 bytes by Rust compiler.
     
     pub read_buf: [u8; READ_BUF_SIZE],
     pub write_buf: [u8; WRITE_BUF_SIZE],
@@ -45,6 +44,7 @@ impl Conn {
             fd: -1,
             state: ConnState::Free,
             parse_pos: 0,
+            write_pos: 0,
             route_id: 0,
             last_active: 0,
             requests_served: 0,

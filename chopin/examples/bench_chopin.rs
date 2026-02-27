@@ -24,7 +24,6 @@ fn main() {
     // Disable print statements for benchmarking by removing the logger_mw
     // and using max workers for throughput.
     Server::bind("0.0.0.0:8080")
-        .workers(1) // Avoid EADDRINUSE macos issues
         .serve(router)
         .unwrap();
 }

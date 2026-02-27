@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+// src/http.rs
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Method {
@@ -22,11 +22,15 @@ impl Method {
     }
 }
 
+pub const MAX_HEADERS: usize = 16;
+pub const MAX_PARAMS: usize = 4;
+
 pub struct Request<'a> {
     pub method: Method,
     pub path: &'a str,
     pub query: Option<&'a str>,
-    pub headers: Vec<(&'a str, &'a str)>,
+    pub headers: [(&'a str, &'a str); MAX_HEADERS],
+    pub header_count: u8,
     pub body: &'a [u8],
 }
 
@@ -123,7 +127,8 @@ impl Response {
 
 pub struct Context<'a> {
     pub req: Request<'a>,
-    pub params: HashMap<String, String>, // Dynamic route parameters
+    pub params: [(&'a str, &'a str); MAX_PARAMS],
+    pub param_count: u8,
 }
 
 impl<'a> Context<'a> {

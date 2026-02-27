@@ -1,5 +1,5 @@
 // src/parser.rs
-use crate::http::{Method, Request};
+use crate::http::{Method, Request, MAX_HEADERS};
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -39,11 +39,12 @@ pub fn parse_request(buf: &[u8]) -> Result<(Request<'_>, usize), ParseError> {
     }
     if req_line_end + 1 >= buf.len() { return Err(ParseError::Incomplete); }
 
-    let mut headers = Vec::new();
+    let mut headers = [("", ""); MAX_HEADERS];
+    let mut header_count: u8 = 0;
     let mut cursor = req_line_end + 2;
 
     while cursor + 1 < buf.len() {
-        if headers.len() >= 64 {
+        if header_count as usize >= MAX_HEADERS {
             return Err(ParseError::TooLarge);
         }
 
@@ -81,14 +82,15 @@ pub fn parse_request(buf: &[u8]) -> Result<(Request<'_>, usize), ParseError> {
 
         let val = std::str::from_utf8(&buf[val_start..line_end]).map_err(|_| ParseError::InvalidFormat)?;
 
-        headers.push((name, val));
+        headers[header_count as usize] = (name, val);
+        header_count += 1;
         cursor = line_end + 2;
     }
 
     let header_end = cursor;
     let remaining = &buf[header_end..];
     
-    Ok((Request { method, path, query, headers, body: remaining }, header_end))
+    Ok((Request { method, path, query, headers, header_count, body: remaining }, header_end))
 }
 
 #[cfg(test)]

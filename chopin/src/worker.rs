@@ -64,7 +64,7 @@ impl Worker {
 
             // Prune stale connections every 1 second
             if now - last_prune >= 1 {
-                for i in 0..slab.capacity() {
+                for i in 0..slab.high_water() {
                     // Check timeouts
                     if let Some(conn) = slab.get(i) {
                         if conn.state != ConnState::Free && now - conn.last_active > 30 {
@@ -130,10 +130,6 @@ impl Worker {
                         let fd = conn_ref.fd;
                         let mut next_state = conn_ref.state;
                         
-                        // Because we borrow `conn` exclusively from `slab.get_mut`, 
-                        // we must manage borrow splitting manually here if we modify it.
-                        // To keep it simple for now, pull it mutably per action.
-                        
                         if is_read {
                             if let Some(conn) = slab.get_mut(idx) {
                                 match syscalls::read_nonblocking(fd, &mut conn.read_buf) {
@@ -142,9 +138,7 @@ impl Worker {
                                         next_state = ConnState::Closing;
                                     }
                                     Ok(n) => {
-                                        // Process HTTP Request in chunks using `conn.parse_pos` etc.
-                                        // For the moment, let's just transition to Handling -> Writing
-                                        conn.parse_pos += n as u16;
+                                        conn.parse_pos = n as u16;
                                         conn.state = ConnState::Parsing;
                                         next_state = ConnState::Parsing;
                                     }
@@ -162,13 +156,16 @@ impl Worker {
                                     Ok((req, _consumed)) => {
                                         let mut ctx = crate::http::Context {
                                             req,
-                                            params: std::collections::HashMap::new(),
+                                            params: [("", ""); crate::http::MAX_PARAMS],
+                                            param_count: 0,
                                         };
                                         
-                                        let mut keep_alive = false;
-                                        for (k, v) in ctx.req.headers.iter() {
-                                            if k.eq_ignore_ascii_case("Connection") && v.eq_ignore_ascii_case("keep-alive") {
-                                                keep_alive = true;
+                                        // HTTP/1.1 defaults to keep-alive per RFC 7230
+                                        let mut keep_alive = true;
+                                        for i in 0..ctx.req.header_count as usize {
+                                            let (k, v) = ctx.req.headers[i];
+                                            if k.eq_ignore_ascii_case("Connection") && v.eq_ignore_ascii_case("close") {
+                                                keep_alive = false;
                                             }
                                         }
                                         
@@ -181,9 +178,9 @@ impl Worker {
                                         }
                                         
                                         let response = match self.router.match_route(ctx.req.method, ctx.req.path) {
-                                            Some((handler, params)) => {
+                                            Some((handler, params, param_count)) => {
                                                 ctx.params = params;
-                                                // Wrap handler execution in panic recovery
+                                                ctx.param_count = param_count;
                                                 let mw = self.router.global_middleware;
                                                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                                     if let Some(middleware) = mw {
@@ -204,46 +201,130 @@ impl Worker {
                                             }
                                         };
 
-                                        // Format response
-                                        use std::io::Write;
-                                        let mut cursor = std::io::Cursor::new(&mut conn.write_buf[..]);
+                                        // Format response using raw byte copies (zero-fmt overhead)
+                                        let buf = &mut conn.write_buf[..];
+                                        let mut pos: usize = 0;
+                                        
+                                        // Status line
+                                        let status_line: &[u8] = match response.status {
+                                            200 => b"HTTP/1.1 200 OK\r\n",
+                                            404 => b"HTTP/1.1 404 Not Found\r\n",
+                                            500 => b"HTTP/1.1 500 Internal Server Error\r\n",
+                                            _ => b"HTTP/1.1 200 OK\r\n",
+                                        };
+                                        buf[pos..pos + status_line.len()].copy_from_slice(status_line);
+                                        pos += status_line.len();
+                                        
+                                        // Content-Type
+                                        buf[pos..pos + 14].copy_from_slice(b"Content-Type: ");
+                                        pos += 14;
+                                        let ct = response.content_type.as_bytes();
+                                        buf[pos..pos + ct.len()].copy_from_slice(ct);
+                                        pos += ct.len();
+                                        buf[pos..pos + 2].copy_from_slice(b"\r\n");
+                                        pos += 2;
+                                        
                                         let is_chunked = matches!(response.body, crate::http::Body::Stream(_));
                                         
                                         if is_chunked {
-                                            let _ = write!(cursor, "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nTransfer-Encoding: chunked\r\nConnection: {}\r\n", 
-                                                response.status, response.content_type,
-                                                if keep_alive { "keep-alive" } else { "close" }
-                                            );
+                                            buf[pos..pos + 28].copy_from_slice(b"Transfer-Encoding: chunked\r\n");
+                                            pos += 28;
                                         } else {
-                                            let _ = write!(cursor, "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: {}\r\n", 
-                                                response.status, response.content_type, response.body.len(),
-                                                if keep_alive { "keep-alive" } else { "close" }
-                                            );
+                                            // Content-Length with inline itoa
+                                            buf[pos..pos + 16].copy_from_slice(b"Content-Length: ");
+                                            pos += 16;
+                                            let body_len = response.body.len();
+                                            let mut itoa_buf = [0u8; 10];
+                                            let itoa_len = {
+                                                let mut n = body_len;
+                                                if n == 0 {
+                                                    itoa_buf[0] = b'0';
+                                                    1
+                                                } else {
+                                                    let mut i = 0;
+                                                    while n > 0 {
+                                                        itoa_buf[i] = b'0' + (n % 10) as u8;
+                                                        n /= 10;
+                                                        i += 1;
+                                                    }
+                                                    itoa_buf[..i].reverse();
+                                                    i
+                                                }
+                                            };
+                                            buf[pos..pos + itoa_len].copy_from_slice(&itoa_buf[..itoa_len]);
+                                            pos += itoa_len;
+                                            buf[pos..pos + 2].copy_from_slice(b"\r\n");
+                                            pos += 2;
                                         }
                                         
-                                        for (k, v) in &response.headers {
-                                            let _ = write!(cursor, "{}: {}\r\n", k, v);
+                                        // Connection header
+                                        if keep_alive {
+                                            buf[pos..pos + 24].copy_from_slice(b"Connection: keep-alive\r\n");
+                                            pos += 24;
+                                        } else {
+                                            buf[pos..pos + 19].copy_from_slice(b"Connection: close\r\n");
+                                            pos += 19;
                                         }
-                                        let _ = write!(cursor, "\r\n");
+                                        
+                                        // Custom headers
+                                        for (k, v) in &response.headers {
+                                            let kb = k.as_bytes();
+                                            let vb = v.as_bytes();
+                                            buf[pos..pos + kb.len()].copy_from_slice(kb);
+                                            pos += kb.len();
+                                            buf[pos..pos + 2].copy_from_slice(b": ");
+                                            pos += 2;
+                                            buf[pos..pos + vb.len()].copy_from_slice(vb);
+                                            pos += vb.len();
+                                            buf[pos..pos + 2].copy_from_slice(b"\r\n");
+                                            pos += 2;
+                                        }
+                                        
+                                        // End of headers
+                                        buf[pos..pos + 2].copy_from_slice(b"\r\n");
+                                        pos += 2;
 
+                                        // Body
                                         match response.body {
                                             crate::http::Body::Empty => {}
-                                            crate::http::Body::Bytes(b) => {
-                                                let _ = cursor.write_all(&b);
+                                            crate::http::Body::Bytes(ref b) => {
+                                                buf[pos..pos + b.len()].copy_from_slice(b);
+                                                pos += b.len();
                                             }
                                             crate::http::Body::Stream(mut iter) => {
                                                 for chunk in iter.by_ref() {
-                                                    let _ = write!(cursor, "{:X}\r\n", chunk.len());
-                                                    let _ = cursor.write_all(&chunk);
-                                                    let _ = write!(cursor, "\r\n");
+                                                    // Hex length
+                                                    let hex_len = {
+                                                        let mut n = chunk.len();
+                                                        let mut hex_buf = [0u8; 8];
+                                                        let mut i = 0;
+                                                        if n == 0 { hex_buf[0] = b'0'; i = 1; }
+                                                        else {
+                                                            while n > 0 {
+                                                                let d = (n % 16) as u8;
+                                                                hex_buf[i] = if d < 10 { b'0' + d } else { b'A' + d - 10 };
+                                                                n /= 16;
+                                                                i += 1;
+                                                            }
+                                                            hex_buf[..i].reverse();
+                                                        }
+                                                        (hex_buf, i)
+                                                    };
+                                                    buf[pos..pos + hex_len.1].copy_from_slice(&hex_len.0[..hex_len.1]);
+                                                    pos += hex_len.1;
+                                                    buf[pos..pos + 2].copy_from_slice(b"\r\n");
+                                                    pos += 2;
+                                                    buf[pos..pos + chunk.len()].copy_from_slice(&chunk);
+                                                    pos += chunk.len();
+                                                    buf[pos..pos + 2].copy_from_slice(b"\r\n");
+                                                    pos += 2;
                                                 }
-                                                let _ = write!(cursor, "0\r\n\r\n");
+                                                buf[pos..pos + 5].copy_from_slice(b"0\r\n\r\n");
+                                                pos += 5;
                                             }
                                         }
-                                        
-                                        conn.parse_pos = cursor.position() as u16; // abuse parse_pos for write len
-                                        
-                                        // Cache keep alive state in route_id (0: close, 1: keep-alive)
+                                        conn.parse_pos = pos as u16; // total write len
+                                        conn.write_pos = 0; // start from beginning
                                         conn.route_id = if keep_alive { 1 } else { 0 };
                                         
                                         conn.state = ConnState::Writing;
@@ -252,11 +333,10 @@ impl Worker {
                                         let _ = epoll.modify(fd, idx as u64, EPOLLIN | EPOLLOUT);
                                     }
                                     Err(crate::parser::ParseError::Incomplete) => {
-                                        // Wait for more data
                                         conn.state = ConnState::Reading;
                                         next_state = ConnState::Reading;
                                     }
-                                    Err(crate::parser::ParseError::InvalidFormat) | Err(crate::parser::ParseError::TooLarge) => {
+                                    Err(_) => {
                                         next_state = ConnState::Closing;
                                     }
                                 }
@@ -265,24 +345,35 @@ impl Worker {
 
                         if next_state == ConnState::Writing || is_write {
                              if let Some(conn) = slab.get_mut(idx) {
-                                 let write_len = conn.parse_pos as usize;
-                                 match syscalls::write_nonblocking(fd, &conn.write_buf[..write_len]) {
-                                     Ok(n) => {
-                                          self.metrics.add_bytes(n);
-                                          // Assume full write for now
-                                          if conn.route_id == 1 && !shutdown.load(Ordering::Acquire) {
-                                              conn.state = ConnState::Reading;
-                                              conn.parse_pos = 0;
-                                              next_state = ConnState::Reading;
-                                          } else {
-                                              conn.state = ConnState::Closing;
-                                              next_state = ConnState::Closing;
+                                  let write_total = conn.parse_pos as usize;
+                                  let write_start = conn.write_pos as usize;
+                                  if write_start < write_total {
+                                      match syscalls::write_nonblocking(fd, &conn.write_buf[write_start..write_total]) {
+                                          Ok(n) if n > 0 => {
+                                               self.metrics.add_bytes(n);
+                                               conn.write_pos += n as u16;
+                                               if conn.write_pos as usize >= write_total {
+                                                   // Full write complete
+                                                   if conn.route_id == 1 && !shutdown.load(Ordering::Acquire) {
+                                                       conn.state = ConnState::Reading;
+                                                       conn.parse_pos = 0;
+                                                       conn.write_pos = 0;
+                                                       next_state = ConnState::Reading;
+                                                   } else {
+                                                       conn.state = ConnState::Closing;
+                                                       next_state = ConnState::Closing;
+                                                   }
+                                               }
+                                               // else: partial write, stay in Writing state
                                           }
-                                     }
-                                     Err(_) => {
-                                          next_state = ConnState::Closing;
-                                     }
-                                 }
+                                          Ok(_) => {
+                                               // WouldBlock / 0 bytes, stay in Writing
+                                          }
+                                          Err(_) => {
+                                               next_state = ConnState::Closing;
+                                          }
+                                      }
+                                  }
                              }
                         }
 
@@ -292,7 +383,6 @@ impl Worker {
                              slab.free(idx);
                              self.metrics.dec_conn();
                         } else {
-                             // Update last_active since we did work in this state transition
                              if let Some(conn) = slab.get_mut(idx) {
                                   conn.last_active = now;
                              }
@@ -300,14 +390,10 @@ impl Worker {
                     }
                 }
             }
-            
-            // Adjust timeout if shutdown requested so we don't hang in epoll_wait infinitely
             if shutdown.load(Ordering::Acquire) { timeout = 100; }
         }
 
         println!("Worker {} exiting gracefully.", self.id);
-        
-        // Cleanup loop
         unsafe { libc::close(listen_fd); }
         for i in 0..slab.capacity() {
              if let Some(conn) = slab.get(i) {

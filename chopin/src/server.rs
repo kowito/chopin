@@ -35,18 +35,30 @@ impl Server {
         }).expect("Error setting Ctrl-C handler");
 
 
-        let metrics = Arc::new(crate::metrics::WorkerMetrics::new());
-        let metrics_clone = metrics.clone();
+        let mut worker_metrics = Vec::with_capacity(self.workers);
+        for _ in 0..self.workers {
+            worker_metrics.push(Arc::new(crate::metrics::WorkerMetrics::new()));
+        }
+
+        let metrics_clones = worker_metrics.clone();
         let shutdown_metrics = shutdown_flag.clone();
         
         thread::Builder::new().name("chopin-metrics".to_string()).spawn(move || {
             while !shutdown_metrics.load(Ordering::Acquire) {
                 thread::sleep(std::time::Duration::from_secs(5));
                 if shutdown_metrics.load(Ordering::Acquire) { break; }
-                let reqs = metrics_clone.req_count.load(Ordering::Relaxed);
-                let active = metrics_clone.active_conns.load(Ordering::Relaxed);
-                let bytes = metrics_clone.bytes_sent.load(Ordering::Relaxed);
-                println!("[Metrics] Active Connections: {} | Total Requests: {} | Bytes Sent: {}", active, reqs, bytes);
+                
+                let mut total_reqs = 0;
+                let mut total_active = 0;
+                let mut total_bytes = 0;
+
+                for m in &metrics_clones {
+                    total_reqs += m.req_count.load(Ordering::Relaxed);
+                    total_active += m.active_conns.load(Ordering::Relaxed);
+                    total_bytes += m.bytes_sent.load(Ordering::Relaxed);
+                }
+
+                println!("[Metrics] Active Connections: {} | Total Requests: {} | Bytes Sent: {}", total_active, total_reqs, total_bytes);
             }
         }).ok();
 
@@ -59,7 +71,7 @@ impl Server {
 
             let host_port = self.host_port.clone();
             let shutdown = shutdown_flag.clone();
-            let metrics_worker = metrics.clone();
+            let metrics_worker = worker_metrics[i].clone();
 
             let handle = thread::Builder::new()
                 .name(format!("chopin-worker-{}", i))
