@@ -97,6 +97,12 @@ impl Response {
         }
     }
 
+    pub fn json_fast<T: kowito_json::serialize::Serialize>(val: &T) -> Self {
+        let mut buf = Vec::with_capacity(128); // Initial small buffer
+        val.serialize(&mut buf);
+        Self::json(buf)
+    }
+
     pub fn not_found() -> Self {
         Self {
             status: 404,
