@@ -14,8 +14,7 @@ pub struct User {
 
 #[test]
 fn test_orm_crud() {
-    let config =
-        PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
+    let config = PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
     let mut pool = PgPool::connect(config, 1).unwrap();
 
     {
@@ -102,8 +101,7 @@ pub struct AllTypesModel {
 
 #[test]
 fn test_exhaustive_types() {
-    let config =
-        PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
+    let config = PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
     let mut pool = PgPool::connect(config, 1).unwrap();
 
     {
@@ -149,7 +147,10 @@ fn test_exhaustive_types() {
     };
     null_model.insert(&mut pool).unwrap();
 
-    let all = AllTypesModel::find().order_by("id ASC").all(&mut pool).unwrap();
+    let all = AllTypesModel::find()
+        .order_by("id ASC")
+        .all(&mut pool)
+        .unwrap();
     assert_eq!(all.len(), 2);
     assert_eq!(all[0].optional_text, Some("hello".to_string()));
     assert_eq!(all[0].optional_int, Some(84));
@@ -157,7 +158,10 @@ fn test_exhaustive_types() {
     assert_eq!(all[1].optional_int, None);
 
     // Filter by Option wrapper None / Null mapping natively
-    let found = AllTypesModel::find().filter("optional_text IS NULL", vec![]).all(&mut pool).unwrap();
+    let found = AllTypesModel::find()
+        .filter("optional_text IS NULL", vec![])
+        .all(&mut pool)
+        .unwrap();
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].name, "Nulls");
 }
@@ -172,8 +176,7 @@ pub struct TxModel {
 
 #[test]
 fn test_transactions() {
-    let config =
-        PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
+    let config = PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
     let mut pool = PgPool::connect(config, 1).unwrap();
 
     {
@@ -192,9 +195,12 @@ fn test_transactions() {
 
     // 1. Commit Test
     {
-        let mut pg_conn = pool.get().unwrap();
-        let mut tx = chopin_orm::Transaction::begin(&mut pg_conn).unwrap();
-        let mut model1 = TxModel { id: 0, name: "Commit Me".to_string() };
+        let pg_conn = pool.get().unwrap();
+        let mut tx = chopin_orm::Transaction::begin(pg_conn).unwrap();
+        let mut model1 = TxModel {
+            id: 0,
+            name: "Commit Me".to_string(),
+        };
         model1.insert(&mut tx).unwrap();
         tx.commit().unwrap();
     }
@@ -204,11 +210,14 @@ fn test_transactions() {
 
     // 2. Rollback Test
     {
-        let mut pg_conn2 = pool.get().unwrap();
-        let mut tx2 = chopin_orm::Transaction::begin(&mut pg_conn2).unwrap();
-        let mut model2 = TxModel { id: 0, name: "Rollback Me".to_string() };
+        let pg_conn2 = pool.get().unwrap();
+        let mut tx2 = chopin_orm::Transaction::begin(pg_conn2).unwrap();
+        let mut model2 = TxModel {
+            id: 0,
+            name: "Rollback Me".to_string(),
+        };
         model2.insert(&mut tx2).unwrap();
-        
+
         // verify it's inside the transaction
         let found_in_tx = TxModel::find().all(&mut tx2).unwrap();
         assert_eq!(found_in_tx.len(), 2);
@@ -233,8 +242,7 @@ pub struct AdvModel {
 
 #[test]
 fn test_advanced_queries() {
-    let config =
-        PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
+    let config = PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
     let mut pool = PgPool::connect(config, 1).unwrap();
 
     {
@@ -253,15 +261,26 @@ fn test_advanced_queries() {
     }
 
     // 1. Test Count
-    let mut m1 = AdvModel { id: 0, name: "A".to_string(), hits: 10 };
-    let mut m2 = AdvModel { id: 0, name: "B".to_string(), hits: 20 };
+    let mut m1 = AdvModel {
+        id: 0,
+        name: "A".to_string(),
+        hits: 10,
+    };
+    let mut m2 = AdvModel {
+        id: 0,
+        name: "B".to_string(),
+        hits: 20,
+    };
     m1.insert(&mut pool).unwrap();
     m2.insert(&mut pool).unwrap();
 
     let total = AdvModel::find().count(&mut pool).unwrap();
     assert_eq!(total, 2);
 
-    let filtered_count = AdvModel::find().filter("hits > 15", vec![]).count(&mut pool).unwrap();
+    let filtered_count = AdvModel::find()
+        .filter("hits > 15", vec![])
+        .count(&mut pool)
+        .unwrap();
     assert_eq!(filtered_count, 1);
 
     // 2. Test Upsert
@@ -271,7 +290,7 @@ fn test_advanced_queries() {
         name: "A_Updated".to_string(),
         hits: 99,
     };
-    
+
     // This would normally fail with unique constraint violation on `id`.
     // However, `upsert` handles it and updates the row.
     upsert_model.upsert(&mut pool).unwrap();
@@ -279,7 +298,11 @@ fn test_advanced_queries() {
     let total_after_upsert = AdvModel::find().count(&mut pool).unwrap();
     assert_eq!(total_after_upsert, 2); // Still 2 rows!
 
-    let updated_a = AdvModel::find().filter("id = $1", vec![m1.id.to_param()]).one(&mut pool).unwrap().unwrap();
+    let updated_a = AdvModel::find()
+        .filter("id = $1", vec![m1.id.to_param()])
+        .one(&mut pool)
+        .unwrap()
+        .unwrap();
     assert_eq!(updated_a.name, "A_Updated");
     assert_eq!(updated_a.hits, 99);
 }

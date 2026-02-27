@@ -1,26 +1,49 @@
 //! # chopin-orm
-//! 
+//!
 //! An easy-to-use Object-Relational Mapper (ORM) for `chopin2`, backed by the high-performance
 //! `chopin-pg` synchronous PostgreSQL driver.
 
 pub use chopin_orm_macro::Model;
-pub use chopin_pg::{connection::PgConnection, error::PgError, pool::PgPool, types::PgValue, PgResult, Row}; // Ensure PgConnection is accessible
+pub use chopin_pg::{
+    PgResult, Row, connection::PgConnection, error::PgError, pool::PgPool, types::PgValue,
+};
 
 pub mod builder;
 pub use builder::QueryBuilder;
+pub mod error;
+pub use error::{OrmError, OrmResult};
 
 pub trait Executor {
-    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToParam]) -> PgResult<u64>;
-    fn query(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToParam]) -> PgResult<Vec<Row>>;
+    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToParam])
+    -> OrmResult<u64>;
+    fn query(
+        &mut self,
+        query: &str,
+        params: &[&dyn chopin_pg::types::ToParam],
+    ) -> OrmResult<Vec<Row>>;
 }
 
 impl Executor for PgPool {
-    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToParam]) -> PgResult<u64> {
-        self.get()?.execute(query, params)
+    fn execute(
+        &mut self,
+        query: &str,
+        params: &[&dyn chopin_pg::types::ToParam],
+    ) -> OrmResult<u64> {
+        self.get()
+            .map_err(OrmError::from)?
+            .execute(query, params)
+            .map_err(OrmError::from)
     }
 
-    fn query(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToParam]) -> PgResult<Vec<Row>> {
-        self.get()?.query(query, params)
+    fn query(
+        &mut self,
+        query: &str,
+        params: &[&dyn chopin_pg::types::ToParam],
+    ) -> OrmResult<Vec<Row>> {
+        self.get()
+            .map_err(OrmError::from)?
+            .query(query, params)
+            .map_err(OrmError::from)
     }
 }
 
@@ -29,29 +52,37 @@ pub struct Transaction<'a> {
 }
 
 impl<'a> Transaction<'a> {
-    pub fn begin(conn: &'a mut PgConnection) -> PgResult<Self> {
-        conn.execute("BEGIN", &[])?;
+    pub fn begin(conn: &'a mut PgConnection) -> OrmResult<Self> {
+        conn.execute("BEGIN", &[]).map_err(OrmError::from)?;
         Ok(Self { conn })
     }
 
-    pub fn commit(self) -> PgResult<()> {
-        self.conn.execute("COMMIT", &[])?;
+    pub fn commit(self) -> OrmResult<()> {
+        self.conn.execute("COMMIT", &[]).map_err(OrmError::from)?;
         Ok(())
     }
 
-    pub fn rollback(self) -> PgResult<()> {
-        self.conn.execute("ROLLBACK", &[])?;
+    pub fn rollback(self) -> OrmResult<()> {
+        self.conn.execute("ROLLBACK", &[]).map_err(OrmError::from)?;
         Ok(())
     }
 }
 
 impl<'a> Executor for Transaction<'a> {
-    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToParam]) -> PgResult<u64> {
-        self.conn.execute(query, params)
+    fn execute(
+        &mut self,
+        query: &str,
+        params: &[&dyn chopin_pg::types::ToParam],
+    ) -> OrmResult<u64> {
+        self.conn.execute(query, params).map_err(OrmError::from)
     }
 
-    fn query(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToParam]) -> PgResult<Vec<Row>> {
-        self.conn.query(query, params)
+    fn query(
+        &mut self,
+        query: &str,
+        params: &[&dyn chopin_pg::types::ToParam],
+    ) -> OrmResult<Vec<Row>> {
+        self.conn.query(query, params).map_err(OrmError::from)
     }
 }
 
@@ -59,20 +90,20 @@ pub trait Model: FromRow + Sized + Send + Sync {
     fn table_name() -> &'static str;
     fn primary_key_column() -> &'static str;
     fn columns() -> &'static [&'static str];
-    
+
     fn primary_key_value(&self) -> PgValue;
-    fn set_primary_key(&mut self, value: PgValue) -> PgResult<()>;
+    fn set_primary_key(&mut self, value: PgValue) -> OrmResult<()>;
     fn get_values(&self) -> Vec<PgValue>;
 
     /// Insert the model into the database. Updates the primary key if it's auto-generated.
-    fn insert(&mut self, executor: &mut impl Executor) -> PgResult<()> {
+    fn insert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
         let all_cols = Self::columns();
         let pk_col = Self::primary_key_column();
-        
+
         let mut cols = Vec::new();
         let values = self.get_values();
         let mut final_values = Vec::new();
-        
+
         for (i, col) in all_cols.iter().enumerate() {
             if *col != pk_col {
                 cols.push(*col);
@@ -89,10 +120,15 @@ pub trait Model: FromRow + Sized + Send + Sync {
             Self::primary_key_column()
         );
 
-        let params: Vec<&dyn chopin_pg::types::ToParam> = final_values.iter().map(|v| v as _).collect();
-        
-        log::debug!("Executing Insert: {} | Params: {}", query, final_values.len());
-        
+        let params: Vec<&dyn chopin_pg::types::ToParam> =
+            final_values.iter().map(|v| v as _).collect();
+
+        log::debug!(
+            "Executing Insert: {} | Params: {}",
+            query,
+            final_values.len()
+        );
+
         // We know we inserted one row, get returning pk.
         let rows = executor.query(&query, &params)?;
         if let Some(row) = rows.first() {
@@ -103,22 +139,22 @@ pub trait Model: FromRow + Sized + Send + Sync {
     }
 
     /// Insert the model or update it if the primary key conflicts
-    fn upsert(&mut self, executor: &mut impl Executor) -> PgResult<()> {
+    fn upsert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
         let all_cols = Self::columns();
         let pk_col = Self::primary_key_column();
-        
+
         let mut cols = Vec::new();
         let values = self.get_values();
         let mut final_values = Vec::new();
         let mut set_clauses = Vec::new();
-        
+
         // Push the PK first because we must provide it to conflict.
         let pk_idx = all_cols.iter().position(|c| *c == pk_col).ok_or_else(|| {
-            PgError::Protocol("Primary key column missing from Model::columns()".to_string())
+            OrmError::ModelError("Primary key column missing from Model::columns()".to_string())
         })?;
         cols.push(pk_col);
         final_values.push(values[pk_idx].clone());
-        
+
         for (i, col) in all_cols.iter().enumerate() {
             if *col != pk_col {
                 cols.push(*col);
@@ -139,10 +175,15 @@ pub trait Model: FromRow + Sized + Send + Sync {
             set_clauses.join(", ")
         );
 
-        let params: Vec<&dyn chopin_pg::types::ToParam> = final_values.iter().map(|v| v as _).collect();
-        
-        log::debug!("Executing Upsert: {} | Params: {}", query, final_values.len());
-        
+        let params: Vec<&dyn chopin_pg::types::ToParam> =
+            final_values.iter().map(|v| v as _).collect();
+
+        log::debug!(
+            "Executing Upsert: {} | Params: {}",
+            query,
+            final_values.len()
+        );
+
         // We know we inserted/updated one row, get returning pk.
         let rows = executor.query(&query, &params)?;
         if let Some(row) = rows.first() {
@@ -153,11 +194,11 @@ pub trait Model: FromRow + Sized + Send + Sync {
     }
 
     /// Update the model in the database matching its primary key.
-    fn update(&self, executor: &mut impl Executor) -> PgResult<()> {
+    fn update(&self, executor: &mut impl Executor) -> OrmResult<()> {
         let cols = Self::columns();
         let mut set_clauses = Vec::new();
         let mut param_idx = 1;
-        
+
         for col in cols {
             if *col == Self::primary_key_column() {
                 continue; // don't update PK
@@ -176,9 +217,12 @@ pub trait Model: FromRow + Sized + Send + Sync {
 
         let mut values = self.get_values();
         // Remove the primary key from values to match the query bindings order
-        let pk_idx = cols.iter().position(|c| *c == Self::primary_key_column()).ok_or_else(|| {
-            PgError::Protocol("Primary key column missing from Model::columns()".to_string())
-        })?;
+        let pk_idx = cols
+            .iter()
+            .position(|c| *c == Self::primary_key_column())
+            .ok_or_else(|| {
+                OrmError::ModelError("Primary key column missing from Model::columns()".to_string())
+            })?;
         let pk_val = values.remove(pk_idx);
         values.push(pk_val); // Put PK at the end (for WHERE clause)
 
@@ -189,7 +233,7 @@ pub trait Model: FromRow + Sized + Send + Sync {
     }
 
     /// Delete the model from the database.
-    fn delete(&self, executor: &mut impl Executor) -> PgResult<()> {
+    fn delete(&self, executor: &mut impl Executor) -> OrmResult<()> {
         let query = format!(
             "DELETE FROM {} WHERE {} = $1",
             Self::table_name(),
@@ -197,107 +241,113 @@ pub trait Model: FromRow + Sized + Send + Sync {
         );
 
         let pk = self.primary_key_value();
-        
+
         log::debug!("Executing Delete: {} | Params: 1", query);
-        
+
         executor.execute(&query, &[&pk])?;
         Ok(())
     }
 }
 
 pub trait FromRow: Sized {
-    fn from_row(row: &Row) -> PgResult<Self>;
+    fn from_row(row: &Row) -> OrmResult<Self>;
 }
 
 pub trait ExtractValue: Sized {
-    fn extract(row: &Row, col: &str) -> PgResult<Self>;
-    fn from_pg_value(val: PgValue) -> PgResult<Self>;
+    fn extract(row: &Row, col: &str) -> OrmResult<Self>;
+    fn from_pg_value(val: PgValue) -> OrmResult<Self>;
 }
 
 // Implement ExtractValue for common types
 impl ExtractValue for String {
-    fn extract(row: &Row, col: &str) -> PgResult<Self> {
-        let val = row.get_by_name(col)?;
+    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
+        let val = row.get_by_name(col).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
-    fn from_pg_value(val: PgValue) -> PgResult<Self> {
+    fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Text(s) => Ok(s),
-            _ => Err(PgError::TypeConversion("Expected Text".into())),
+            _ => Err(OrmError::Extraction("Expected Text".into())),
         }
     }
 }
 
 impl ExtractValue for i32 {
-    fn extract(row: &Row, col: &str) -> PgResult<Self> {
-        let val = row.get_by_name(col)?;
+    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
+        let val = row.get_by_name(col).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
-    fn from_pg_value(val: PgValue) -> PgResult<Self> {
+    fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Int4(v) => Ok(v),
             PgValue::Int2(v) => Ok(v as i32),
-            PgValue::Text(s) => s.parse().map_err(|_| PgError::TypeConversion("Not an i32".into())),
-            _ => Err(PgError::TypeConversion("Expected Int4".into())),
+            PgValue::Text(s) => s
+                .parse()
+                .map_err(|_| OrmError::Extraction("Not an i32".into())),
+            _ => Err(OrmError::Extraction("Expected Int4".into())),
         }
     }
 }
 
 impl ExtractValue for i64 {
-    fn extract(row: &Row, col: &str) -> PgResult<Self> {
-        let val = row.get_by_name(col)?;
+    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
+        let val = row.get_by_name(col).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
-    fn from_pg_value(val: PgValue) -> PgResult<Self> {
+    fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Int8(v) => Ok(v),
             PgValue::Int4(v) => Ok(v as i64),
             PgValue::Int2(v) => Ok(v as i64),
-            PgValue::Text(s) => s.parse().map_err(|_| PgError::TypeConversion("Not an i64".into())),
-            _ => Err(PgError::TypeConversion("Expected Int8".into())),
+            PgValue::Text(s) => s
+                .parse()
+                .map_err(|_| OrmError::Extraction("Not an i64".into())),
+            _ => Err(OrmError::Extraction("Expected Int8".into())),
         }
     }
 }
 
 impl ExtractValue for bool {
-    fn extract(row: &Row, col: &str) -> PgResult<Self> {
-        let val = row.get_by_name(col)?;
+    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
+        let val = row.get_by_name(col).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
-    fn from_pg_value(val: PgValue) -> PgResult<Self> {
+    fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Bool(v) => Ok(v),
             PgValue::Text(s) => Ok(s == "t" || s == "true" || s == "1"),
-            _ => Err(PgError::TypeConversion("Expected Bool".into())),
+            _ => Err(OrmError::Extraction("Expected Bool".into())),
         }
     }
 }
 
 impl ExtractValue for f64 {
-    fn extract(row: &Row, col: &str) -> PgResult<Self> {
-        let val = row.get_by_name(col)?;
+    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
+        let val = row.get_by_name(col).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
-    fn from_pg_value(val: PgValue) -> PgResult<Self> {
+    fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Float8(v) => Ok(v),
             PgValue::Float4(v) => Ok(v as f64),
-            PgValue::Text(s) => s.parse().map_err(|_| PgError::TypeConversion("Not an f64".into())),
-            _ => Err(PgError::TypeConversion("Expected Float8".into())),
+            PgValue::Text(s) => s
+                .parse()
+                .map_err(|_| OrmError::Extraction("Not an f64".into())),
+            _ => Err(OrmError::Extraction("Expected Float8".into())),
         }
     }
 }
 
 // Option wrapper
 impl<T: ExtractValue> ExtractValue for Option<T> {
-    fn extract(row: &Row, col: &str) -> PgResult<Self> {
-        let val = row.get_by_name(col)?;
+    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
+        let val = row.get_by_name(col).map_err(OrmError::from)?;
         if let PgValue::Null = val {
             return Ok(None);
         }
         T::from_pg_value(val).map(Some)
     }
-    fn from_pg_value(val: PgValue) -> PgResult<Self> {
+    fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         if let PgValue::Null = val {
             return Ok(None);
         }

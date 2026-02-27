@@ -3,7 +3,7 @@ use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = PgConfig::new("127.0.0.1", 5432, "chopin", "chopin", "postgres");
-    
+
     println!("Connecting to PostgreSQL...");
     let mut conn = PgConnection::connect(&config)?;
     println!("Connected!");
@@ -14,11 +14,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     conn.query_simple("CREATE TABLE bench_crud (id INT PRIMARY KEY, val TEXT, count INT)")?;
 
     let scales = [1_000, 100_000, 1_000_000];
-    
+
     for scale in scales {
         println!("\n=== SCALE: {} rows ===", scale);
         conn.query_simple("TRUNCATE bench_crud")?;
-        
+
         // 1. Bulk Insert Using COPY
         println!("Feeding {} rows via COPY...", scale);
         let start = Instant::now();
@@ -37,7 +37,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         writer.finish()?;
         let duration = start.elapsed();
-        println!("COPY Throughput: {:.2} rows/s", scale as f64 / duration.as_secs_f64());
+        println!(
+            "COPY Throughput: {:.2} rows/s",
+            scale as f64 / duration.as_secs_f64()
+        );
 
         // 2. Point SELECT
         println!("Benchmarking 10,000 Point SELECTs...");
@@ -47,27 +50,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = conn.query_one("SELECT val FROM bench_crud WHERE id = $1", &[&id])?;
         }
         let duration = start.elapsed();
-        println!("SELECT Throughput: {:.2} req/s", 10_000.0 / duration.as_secs_f64());
+        println!(
+            "SELECT Throughput: {:.2} req/s",
+            10_000.0 / duration.as_secs_f64()
+        );
 
         // 3. Point UPDATE
         println!("Benchmarking 10,000 Point UPDATEs...");
         let start = Instant::now();
         for i in 0..10_000 {
             let id = i % scale;
-            let _ = conn.execute("UPDATE bench_crud SET count = count + 1 WHERE id = $1", &[&id])?;
+            let _ = conn.execute(
+                "UPDATE bench_crud SET count = count + 1 WHERE id = $1",
+                &[&id],
+            )?;
         }
         let duration = start.elapsed();
-        println!("UPDATE Throughput: {:.2} req/s", 10_000.0 / duration.as_secs_f64());
+        println!(
+            "UPDATE Throughput: {:.2} req/s",
+            10_000.0 / duration.as_secs_f64()
+        );
 
         // 4. Point INSERT (Single row)
         println!("Benchmarking 10,000 Single INSERTs...");
         let start = Instant::now();
         for i in 0..10_000 {
             let id = scale + i;
-            let _ = conn.execute("INSERT INTO bench_crud (id, val, count) VALUES ($1, $2, $3)", &[&id, &"new_val", &0i32])?;
+            let _ = conn.execute(
+                "INSERT INTO bench_crud (id, val, count) VALUES ($1, $2, $3)",
+                &[&id, &"new_val", &0i32],
+            )?;
         }
         let duration = start.elapsed();
-        println!("INSERT Throughput: {:.2} req/s", 10_000.0 / duration.as_secs_f64());
+        println!(
+            "INSERT Throughput: {:.2} req/s",
+            10_000.0 / duration.as_secs_f64()
+        );
 
         // 5. Point DELETE
         println!("Benchmarking 10,000 Point DELETEs...");
@@ -77,7 +95,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = conn.execute("DELETE FROM bench_crud WHERE id = $1", &[&id])?;
         }
         let duration = start.elapsed();
-        println!("DELETE Throughput: {:.2} req/s", 10_000.0 / duration.as_secs_f64());
+        println!(
+            "DELETE Throughput: {:.2} req/s",
+            10_000.0 / duration.as_secs_f64()
+        );
     }
 
     println!("\nBenchmark complete!");

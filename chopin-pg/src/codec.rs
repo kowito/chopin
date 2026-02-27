@@ -13,7 +13,12 @@ pub const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 /// Encode a StartupMessage into `buf`. Returns bytes written.
 ///
 /// Format: Int32(len) Int32(196608=v3.0) { CString(param) CString(value) }* \0
-pub fn encode_startup(buf: &mut [u8], user: &str, database: &str, params: &[(&str, &str)]) -> usize {
+pub fn encode_startup(
+    buf: &mut [u8],
+    user: &str,
+    database: &str,
+    params: &[(&str, &str)],
+) -> usize {
     let mut pos = 4; // reserve length prefix
 
     // Protocol version 3.0
@@ -324,12 +329,22 @@ pub fn message_complete(buf: &[u8]) -> Option<usize> {
 
 /// Read an i32 from a backend message body.
 pub fn read_i32(buf: &[u8], offset: usize) -> i32 {
-    i32::from_be_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]])
+    i32::from_be_bytes([
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+    ])
 }
 
 /// Read a u32 from a backend message body.
 pub fn read_u32(buf: &[u8], offset: usize) -> u32 {
-    u32::from_be_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]])
+    u32::from_be_bytes([
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+    ])
 }
 
 /// Read an i16 from a backend message body.
@@ -405,7 +420,7 @@ pub fn parse_row_description(body: &[u8]) -> Vec<ColumnDesc> {
 
 /// Parse a DataRow message body. Returns column byte slices.
 /// Each column is Option<&[u8]> where None = SQL NULL.
-pub fn parse_data_row<'a>(body: &'a [u8]) -> Vec<Option<&'a [u8]>> {
+pub fn parse_data_row(body: &[u8]) -> Vec<Option<&[u8]>> {
     let num_columns = read_i16(body, 0) as usize;
     let mut columns = Vec::with_capacity(num_columns);
     let mut pos = 2;

@@ -1,11 +1,6 @@
 // examples/hello_json.rs
-use chopin::{Server, Router, Context, Response, Json};
-use serde::{Serialize, Deserialize};
-
-#[derive(Serialize)]
-struct HelloMessage {
-    message: &'static str,
-}
+use chopin::{Context, Json, Response, Router, Server};
+use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
 struct UserPayload<'a> {
@@ -22,15 +17,29 @@ fn create_user(ctx: Context) -> Response {
         Ok(j) => j,
         Err(e) => return e,
     };
-    
-    Response::ok(format!("Created user '{}' age {}", payload.name, payload.age))
+
+    Response::ok(format!(
+        "Created user '{}' age {}",
+        payload.name, payload.age
+    ))
 }
 
 fn hello_text(ctx: Context) -> Response {
-    let name = ctx.params.get("name").map(|s| s.as_str()).unwrap_or("World");
+    let name = ctx
+        .params
+        .iter()
+        .find(|(k, _)| *k == "name")
+        .map(|(_, v)| *v)
+        .unwrap_or("World");
     let uppercase = ctx.req.query.unwrap_or("") == "upper=true";
-    let user_agent = ctx.req.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("User-Agent")).map(|(_, v)| *v).unwrap_or("Unknown");
-    
+    let user_agent = ctx
+        .req
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("User-Agent"))
+        .map(|(_, v)| *v)
+        .unwrap_or("Unknown");
+
     let mut greeting = format!("Hello, {}! You are using {}.", name, user_agent);
     if uppercase {
         greeting = greeting.to_uppercase();
@@ -51,10 +60,16 @@ fn logger_mw(ctx: Context, next: fn(Context) -> Response) -> Response {
     let method = format!("{:?}", ctx.req.method);
     let path = ctx.req.path.to_string();
     let start = std::time::Instant::now();
-    
+
     let res = next(ctx);
-    
-    println!("{} {} -> {} in {:?}", method, path, res.status, start.elapsed());
+
+    println!(
+        "{} {} -> {} in {:?}",
+        method,
+        path,
+        res.status,
+        start.elapsed()
+    );
     res
 }
 

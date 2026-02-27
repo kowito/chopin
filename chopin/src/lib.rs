@@ -1,19 +1,21 @@
 // src/lib.rs
-pub mod http;
-pub mod worker;
 pub mod conn;
-pub mod slab;
+pub mod error;
+pub mod extract;
+pub mod http;
+pub mod json;
+pub mod metrics;
 pub mod parser;
 pub mod router;
-pub mod syscalls;
 pub mod server;
-pub mod metrics;
-pub mod extract;
-pub mod json;
+pub mod slab;
+pub mod syscalls;
+pub mod worker;
 
 // Re-exports for users
-pub use server::Server;
-pub use router::Router;
-pub use http::{Method, Request, Response, Context};
+pub use error::{ChopinError, ChopinResult};
 pub use extract::{FromRequest, Json, Query};
+pub use http::{Context, Method, Request, Response};
 pub use json::KJson;
+pub use router::Router;
+pub use server::Server;

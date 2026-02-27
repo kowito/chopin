@@ -1,4 +1,5 @@
 //! PostgreSQL type system — type OIDs and value conversions.
+use crate::error::{PgError, PgResult};
 
 /// Well-known PostgreSQL type OIDs.
 pub mod oid {
@@ -77,57 +78,74 @@ impl PgValue {
     }
 
     /// Parse a text-format column value based on its type OID.
-    pub fn from_text(type_oid: u32, data: &[u8]) -> Self {
-        let s = std::str::from_utf8(data).unwrap_or("");
+    pub fn from_text(type_oid: u32, data: &[u8]) -> PgResult<Self> {
+        let s = std::str::from_utf8(data)
+            .map_err(|_| PgError::TypeConversion("Invalid UTF-8".to_string()))?;
         match type_oid {
-            oid::BOOL => PgValue::Bool(s == "t" || s == "true" || s == "1"),
-            oid::INT2 => PgValue::Int2(s.parse().unwrap_or(0)),
-            oid::INT4 | oid::OID => PgValue::Int4(s.parse().unwrap_or(0)),
-            oid::INT8 => PgValue::Int8(s.parse().unwrap_or(0)),
-            oid::FLOAT4 => PgValue::Float4(s.parse().unwrap_or(0.0)),
-            oid::FLOAT8 | oid::NUMERIC => PgValue::Float8(s.parse().unwrap_or(0.0)),
-            oid::JSONB => PgValue::Jsonb(data.to_vec()),
-            oid::JSON => PgValue::Json(s.to_string()),
-            oid::BYTEA => PgValue::Bytes(decode_bytea_hex(s)),
-            _ => PgValue::Text(s.to_string()),
+            oid::BOOL => Ok(PgValue::Bool(s == "t" || s == "true" || s == "1")),
+            oid::INT2 => {
+                Ok(PgValue::Int2(s.parse().map_err(|_| {
+                    PgError::TypeConversion("Invalid INT2".to_string())
+                })?))
+            }
+            oid::INT4 | oid::OID => {
+                Ok(PgValue::Int4(s.parse().map_err(|_| {
+                    PgError::TypeConversion("Invalid INT4/OID".to_string())
+                })?))
+            }
+            oid::INT8 => {
+                Ok(PgValue::Int8(s.parse().map_err(|_| {
+                    PgError::TypeConversion("Invalid INT8".to_string())
+                })?))
+            }
+            oid::FLOAT4 => {
+                Ok(PgValue::Float4(s.parse().map_err(|_| {
+                    PgError::TypeConversion("Invalid FLOAT4".to_string())
+                })?))
+            }
+            oid::FLOAT8 | oid::NUMERIC => {
+                Ok(PgValue::Float8(s.parse().map_err(|_| {
+                    PgError::TypeConversion("Invalid FLOAT8/NUMERIC".to_string())
+                })?))
+            }
+            oid::JSONB => Ok(PgValue::Jsonb(data.to_vec())),
+            oid::JSON => Ok(PgValue::Json(s.to_string())),
+            oid::BYTEA => Ok(PgValue::Bytes(decode_bytea_hex(s))),
+            _ => Ok(PgValue::Text(s.to_string())),
         }
     }
 
     /// Parse a binary-format column value based on its type OID.
-    pub fn from_binary(type_oid: u32, data: &[u8]) -> Self {
+    pub fn from_binary(type_oid: u32, data: &[u8]) -> PgResult<Self> {
         match type_oid {
-            oid::BOOL => PgValue::Bool(data.first().map_or(false, |&b| b != 0)),
-            oid::INT2 if data.len() >= 2 => PgValue::Int2(i16::from_be_bytes([data[0], data[1]])),
-            oid::INT4 | oid::OID if data.len() >= 4 => {
-                PgValue::Int4(i32::from_be_bytes([data[0], data[1], data[2], data[3]]))
+            oid::BOOL => Ok(PgValue::Bool(data.first().is_some_and(|&b| b != 0))),
+            oid::INT2 if data.len() >= 2 => {
+                Ok(PgValue::Int2(i16::from_be_bytes([data[0], data[1]])))
             }
-            oid::INT8 if data.len() >= 8 => {
-                PgValue::Int8(i64::from_be_bytes([
-                    data[0], data[1], data[2], data[3],
-                    data[4], data[5], data[6], data[7],
-                ]))
-            }
-            oid::FLOAT4 if data.len() >= 4 => {
-                PgValue::Float4(f32::from_be_bytes([data[0], data[1], data[2], data[3]]))
-            }
-            oid::FLOAT8 if data.len() >= 8 => {
-                PgValue::Float8(f64::from_be_bytes([
-                    data[0], data[1], data[2], data[3],
-                    data[4], data[5], data[6], data[7],
-                ]))
-            }
+            oid::INT4 | oid::OID if data.len() >= 4 => Ok(PgValue::Int4(i32::from_be_bytes([
+                data[0], data[1], data[2], data[3],
+            ]))),
+            oid::INT8 if data.len() >= 8 => Ok(PgValue::Int8(i64::from_be_bytes([
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+            ]))),
+            oid::FLOAT4 if data.len() >= 4 => Ok(PgValue::Float4(f32::from_be_bytes([
+                data[0], data[1], data[2], data[3],
+            ]))),
+            oid::FLOAT8 if data.len() >= 8 => Ok(PgValue::Float8(f64::from_be_bytes([
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+            ]))),
             oid::JSONB => {
                 // First byte is version (1), rest is JSON
                 if data.len() > 1 {
-                    PgValue::Jsonb(data[1..].to_vec())
+                    Ok(PgValue::Jsonb(data[1..].to_vec()))
                 } else {
-                    PgValue::Jsonb(Vec::new())
+                    Ok(PgValue::Jsonb(Vec::new()))
                 }
             }
-            oid::BYTEA => PgValue::Bytes(data.to_vec()),
+            oid::BYTEA => Ok(PgValue::Bytes(data.to_vec())),
             _ => {
                 // Fallback: treat as text
-                PgValue::Text(String::from_utf8_lossy(data).to_string())
+                Ok(PgValue::Text(String::from_utf8_lossy(data).to_string()))
             }
         }
     }
@@ -138,12 +156,36 @@ pub trait ToParam {
     fn to_param(&self) -> PgValue;
 }
 
-impl ToParam for i32 { fn to_param(&self) -> PgValue { PgValue::Int4(*self) } }
-impl ToParam for i64 { fn to_param(&self) -> PgValue { PgValue::Int8(*self) } }
-impl ToParam for &str { fn to_param(&self) -> PgValue { PgValue::Text(self.to_string()) } }
-impl ToParam for String { fn to_param(&self) -> PgValue { PgValue::Text(self.clone()) } }
-impl ToParam for bool { fn to_param(&self) -> PgValue { PgValue::Bool(*self) } }
-impl ToParam for f64 { fn to_param(&self) -> PgValue { PgValue::Float8(*self) } }
+impl ToParam for i32 {
+    fn to_param(&self) -> PgValue {
+        PgValue::Int4(*self)
+    }
+}
+impl ToParam for i64 {
+    fn to_param(&self) -> PgValue {
+        PgValue::Int8(*self)
+    }
+}
+impl ToParam for &str {
+    fn to_param(&self) -> PgValue {
+        PgValue::Text(self.to_string())
+    }
+}
+impl ToParam for String {
+    fn to_param(&self) -> PgValue {
+        PgValue::Text(self.clone())
+    }
+}
+impl ToParam for bool {
+    fn to_param(&self) -> PgValue {
+        PgValue::Bool(*self)
+    }
+}
+impl ToParam for f64 {
+    fn to_param(&self) -> PgValue {
+        PgValue::Float8(*self)
+    }
+}
 impl<T: ToParam> ToParam for Option<T> {
     fn to_param(&self) -> PgValue {
         match self {

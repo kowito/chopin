@@ -9,19 +9,19 @@
 //! - **SCRAM-SHA-256**: Full authentication support.
 //! - **Extended Query Protocol**: Parse/Bind/Execute with implicit caching.
 
-pub mod protocol;
-pub mod codec;
 pub mod auth;
+pub mod codec;
 pub mod connection;
-pub mod types;
 pub mod error;
-pub mod row;
 pub mod pool;
+pub mod protocol;
+pub mod row;
 pub mod statement;
+pub mod types;
 
-pub use connection::{PgConnection, PgConfig};
+pub use connection::{PgConfig, PgConnection};
+pub use error::{PgError, PgResult};
 pub use pool::PgPool;
 pub use row::Row;
-pub use types::PgValue;
-pub use error::{PgError, PgResult};
 pub use statement::Statement;
+pub use types::PgValue;

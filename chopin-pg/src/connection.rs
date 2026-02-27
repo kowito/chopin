@@ -7,10 +7,10 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use crate::codec;
-use crate::protocol::*;
 use crate::auth::ScramClient;
+use crate::codec;
 use crate::error::{PgError, PgResult};
+use crate::protocol::*;
 use crate::row::Row;
 use crate::statement::StatementCache;
 
@@ -37,17 +37,23 @@ impl PgConfig {
 
     /// Parse from a connection string: `postgres://user:pass@host:port/db`
     pub fn from_url(url: &str) -> PgResult<Self> {
-        let url = url.strip_prefix("postgres://").or_else(|| url.strip_prefix("postgresql://"))
+        let url = url
+            .strip_prefix("postgres://")
+            .or_else(|| url.strip_prefix("postgresql://"))
             .ok_or_else(|| PgError::Protocol("Invalid URL scheme".to_string()))?;
 
         // user:pass@host:port/db
-        let (userpass, hostdb) = url.split_once('@')
+        let (userpass, hostdb) = url
+            .split_once('@')
             .ok_or_else(|| PgError::Protocol("Missing @ in URL".to_string()))?;
         let (user, password) = userpass.split_once(':').unwrap_or((userpass, ""));
-        let (hostport, database) = hostdb.split_once('/')
+        let (hostport, database) = hostdb
+            .split_once('/')
             .ok_or_else(|| PgError::Protocol("Missing database in URL".to_string()))?;
         let (host, port_str) = hostport.split_once(':').unwrap_or((hostport, "5432"));
-        let port: u16 = port_str.parse().map_err(|_| PgError::Protocol("Invalid port".to_string()))?;
+        let port: u16 = port_str
+            .parse()
+            .map_err(|_| PgError::Protocol("Invalid port".to_string()))?;
 
         Ok(Self {
             host: host.to_string(),
@@ -80,7 +86,7 @@ impl PgConnection {
 
         let mut conn = Self {
             stream,
-            read_buf: vec![0u8; 64 * 1024], // 64 KB read buffer
+            read_buf: vec![0u8; 64 * 1024],  // 64 KB read buffer
             write_buf: vec![0u8; 64 * 1024], // 64 KB write buffer
             read_pos: 0,
             tx_status: TransactionStatus::Idle,
@@ -99,14 +105,17 @@ impl PgConnection {
         // Send StartupMessage
         self.ensure_write_capacity(512);
         let n = codec::encode_startup(&mut self.write_buf, &config.user, &config.database, &[]);
-        self.stream.write_all(&self.write_buf[..n]).map_err(PgError::Io)?;
+        self.stream
+            .write_all(&self.write_buf[..n])
+            .map_err(PgError::Io)?;
 
         // Read server response
         loop {
             self.fill_read_buf(None)?;
 
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
-                let header = codec::decode_header(&self.read_buf).unwrap();
+                let header = codec::decode_header(&self.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 let body = &self.read_buf[5..msg_len];
 
                 match header.tag {
@@ -117,8 +126,11 @@ impl PgConnection {
                                 // Handled! Keep going to ReadyForQuery
                             }
                             Some(AuthType::CleartextPassword) => {
-                                let n = codec::encode_password(&mut self.write_buf, &config.password);
-                                self.stream.write_all(&self.write_buf[..n]).map_err(PgError::Io)?;
+                                let n =
+                                    codec::encode_password(&mut self.write_buf, &config.password);
+                                self.stream
+                                    .write_all(&self.write_buf[..n])
+                                    .map_err(PgError::Io)?;
                             }
                             Some(AuthType::SASLInit) => {
                                 let mut scram = ScramClient::new(&config.user, &config.password);
@@ -128,7 +140,9 @@ impl PgConnection {
                                     "SCRAM-SHA-256",
                                     &client_first,
                                 );
-                                self.stream.write_all(&self.write_buf[..n]).map_err(PgError::Io)?;
+                                self.stream
+                                    .write_all(&self.write_buf[..n])
+                                    .map_err(PgError::Io)?;
 
                                 self.consume_read(msg_len);
                                 self.wait_for_sasl_continue(&mut scram, config)?;
@@ -137,17 +151,23 @@ impl PgConnection {
                                 continue;
                             }
                             Some(AuthType::MD5Password) => {
-                                return Err(PgError::Auth("MD5 auth not fully implemented, use SCRAM-SHA-256".to_string()));
+                                return Err(PgError::Auth(
+                                    "MD5 auth not fully implemented, use SCRAM-SHA-256".to_string(),
+                                ));
                             }
                             _ => {
-                                return Err(PgError::Auth(format!("Unsupported auth type: {}", auth_type)));
+                                return Err(PgError::Auth(format!(
+                                    "Unsupported auth type: {}",
+                                    auth_type
+                                )));
                             }
                         }
                     }
                     BackendTag::ParameterStatus => {
                         let (name, consumed) = codec::read_cstring(body, 0);
                         let (value, _) = codec::read_cstring(body, consumed);
-                        self.server_params.push((name.to_string(), value.to_string()));
+                        self.server_params
+                            .push((name.to_string(), value.to_string()));
                     }
                     BackendTag::BackendKeyData => {
                         self.process_id = codec::read_i32(body, 0);
@@ -171,7 +191,11 @@ impl PgConnection {
                                 _ => {}
                             }
                         }
-                        return Err(PgError::Server { severity, code, message });
+                        return Err(PgError::Server {
+                            severity,
+                            code,
+                            message,
+                        });
                     }
                     _ => {
                         // Skip unknown messages
@@ -183,12 +207,17 @@ impl PgConnection {
     }
 
     /// Handle SASL Continue/Final exchange.
-    fn wait_for_sasl_continue(&mut self, scram: &mut ScramClient, _config: &PgConfig) -> PgResult<()> {
+    fn wait_for_sasl_continue(
+        &mut self,
+        scram: &mut ScramClient,
+        _config: &PgConfig,
+    ) -> PgResult<()> {
         loop {
             self.fill_read_buf(None)?;
 
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
-                let header = codec::decode_header(&self.read_buf).unwrap();
+                let header = codec::decode_header(&self.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 let body = &self.read_buf[5..msg_len].to_vec();
 
                 match header.tag {
@@ -197,23 +226,30 @@ impl PgConnection {
                         match AuthType::from_i32(auth_type) {
                             Some(AuthType::SASLContinue) => {
                                 let server_first = &body[4..];
-                                let client_final = scram.process_server_first(server_first)
-                                    .map_err(|e| PgError::Auth(e))?;
-                                
-                                let n = codec::encode_sasl_response(&mut self.write_buf, &client_final);
-                                self.stream.write_all(&self.write_buf[..n]).map_err(PgError::Io)?;
+                                let client_final = scram
+                                    .process_server_first(server_first)
+                                    .map_err(PgError::Auth)?;
+
+                                let n =
+                                    codec::encode_sasl_response(&mut self.write_buf, &client_final);
+                                self.stream
+                                    .write_all(&self.write_buf[..n])
+                                    .map_err(PgError::Io)?;
                             }
                             Some(AuthType::SASLFinal) => {
                                 let server_final = &body[4..];
-                                scram.verify_server_final(server_final)
-                                    .map_err(|e| PgError::Auth(e))?;
+                                scram
+                                    .verify_server_final(server_final)
+                                    .map_err(PgError::Auth)?;
                             }
                             Some(AuthType::Ok) => {
                                 self.consume_read(msg_len);
                                 return Ok(());
                             }
                             _ => {
-                                return Err(PgError::Auth("Unexpected auth message during SASL".to_string()));
+                                return Err(PgError::Auth(
+                                    "Unexpected auth message during SASL".to_string(),
+                                ));
                             }
                         }
                     }
@@ -232,19 +268,25 @@ impl PgConnection {
     pub fn query_simple(&mut self, sql: &str) -> PgResult<Vec<Row>> {
         self.ensure_write_capacity(5 + sql.len());
         let n = codec::encode_query(&mut self.write_buf, sql);
-        self.stream.write_all(&self.write_buf[..n]).map_err(PgError::Io)?;
+        self.stream
+            .write_all(&self.write_buf[..n])
+            .map_err(PgError::Io)?;
         self.read_query_results()
     }
 
     /// Execute a parameterized query using the Extended Query Protocol.
     /// Uses implicit statement caching for performance.
-    pub fn query(&mut self, sql: &str, params: &[&dyn crate::types::ToParam]) -> PgResult<Vec<Row>> {
+    pub fn query(
+        &mut self,
+        sql: &str,
+        params: &[&dyn crate::types::ToParam],
+    ) -> PgResult<Vec<Row>> {
         let stmt = self.stmt_cache.get_or_create(sql);
-        
+
         // Conservative upper bound for write buffer
-        let estimated = 10 + sql.len() + (params.len() * 256); 
+        let estimated = 10 + sql.len() + (params.len() * 256);
         self.ensure_write_capacity(estimated);
-        
+
         let mut pos = 0;
 
         if stmt.is_new {
@@ -253,24 +295,27 @@ impl PgConnection {
             pos += n;
 
             // Describe (to get column info)
-            let n = codec::encode_describe(&mut self.write_buf[pos..], DescribeTarget::Statement, &stmt.name);
+            let n = codec::encode_describe(
+                &mut self.write_buf[pos..],
+                DescribeTarget::Statement,
+                &stmt.name,
+            );
             pos += n;
         }
 
         // Bind
-        let param_values: Vec<Option<Vec<u8>>> = params.iter()
+        let param_values: Vec<Option<Vec<u8>>> = params
+            .iter()
             .map(|p| p.to_param().to_text_bytes())
             .collect();
-        let param_refs: Vec<Option<&[u8]>> = param_values.iter()
-            .map(|p| p.as_deref())
-            .collect();
+        let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
         let n = codec::encode_bind(
             &mut self.write_buf[pos..],
-            "",               // unnamed portal
+            "", // unnamed portal
             &stmt.name,
-            &[],              // all text format
+            &[], // all text format
             &param_refs,
-            &[],              // all text format results
+            &[], // all text format results
         );
         pos += n;
 
@@ -282,7 +327,9 @@ impl PgConnection {
         let n = codec::encode_sync(&mut self.write_buf[pos..]);
         pos += n;
 
-        self.stream.write_all(&self.write_buf[..pos]).map_err(PgError::Io)?;
+        self.stream
+            .write_all(&self.write_buf[..pos])
+            .map_err(PgError::Io)?;
 
         // Read results
         let rows = self.read_extended_results(sql, &stmt.name, stmt.is_new, stmt.columns)?;
@@ -347,7 +394,9 @@ impl PgConnection {
     /// Start a COPY FROM STDIN operation.
     pub fn copy_in(&mut self, sql: &str) -> PgResult<CopyWriter<'_>> {
         let n = codec::encode_query(&mut self.write_buf, sql);
-        self.stream.write_all(&self.write_buf[..n]).map_err(PgError::Io)?;
+        self.stream
+            .write_all(&self.write_buf[..n])
+            .map_err(PgError::Io)?;
 
         // Read until CopyInResponse
         loop {
@@ -355,7 +404,8 @@ impl PgConnection {
             let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) else {
                 continue;
             };
-            let header = codec::decode_header(&self.read_buf).unwrap();
+            let header = codec::decode_header(&self.read_buf)
+                .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
             match header.tag {
                 BackendTag::CopyInResponse => {
                     self.consume_read(msg_len);
@@ -402,13 +452,14 @@ impl PgConnection {
         if let Some(min) = min_size {
             self.ensure_read_capacity(min);
         }
-        
+
         if self.read_pos == self.read_buf.len() {
-            // Already full, but we need more for a message. 
+            // Already full, but we need more for a message.
             // codec::message_complete probably returned None.
             // Check if we have enough to know EXACTLY how much we need.
             if self.read_pos >= 5 {
-                let header = codec::decode_header(&self.read_buf).unwrap();
+                let header = codec::decode_header(&self.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 let total = 1 + header.length as usize;
                 self.ensure_read_capacity(total - self.read_pos);
             } else {
@@ -416,7 +467,10 @@ impl PgConnection {
             }
         }
 
-        let n = self.stream.read(&mut self.read_buf[self.read_pos..]).map_err(PgError::Io)?;
+        let n = self
+            .stream
+            .read(&mut self.read_buf[self.read_pos..])
+            .map_err(PgError::Io)?;
         if n == 0 {
             return Err(PgError::ConnectionClosed);
         }
@@ -451,7 +505,8 @@ impl PgConnection {
             self.fill_read_buf(None)?;
 
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
-                let header = codec::decode_header(&self.read_buf).unwrap();
+                let header = codec::decode_header(&self.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 let body = &self.read_buf[5..msg_len];
 
                 match header.tag {
@@ -501,7 +556,8 @@ impl PgConnection {
             self.fill_read_buf(None)?;
 
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
-                let header = codec::decode_header(&self.read_buf).unwrap();
+                let header = codec::decode_header(&self.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 let body = &self.read_buf[5..msg_len];
 
                 match header.tag {
@@ -510,7 +566,12 @@ impl PgConnection {
                     BackendTag::RowDescription => {
                         columns = codec::parse_row_description(body);
                         if is_new {
-                            self.stmt_cache.insert(sql, stmt_name.to_string(), 0, Some(columns.clone()));
+                            self.stmt_cache.insert(
+                                sql,
+                                stmt_name.to_string(),
+                                0,
+                                Some(columns.clone()),
+                            );
                         }
                     }
                     BackendTag::NoData => {
@@ -546,7 +607,8 @@ impl PgConnection {
         loop {
             self.fill_read_buf(None)?;
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
-                let header = codec::decode_header(&self.read_buf).unwrap();
+                let header = codec::decode_header(&self.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 if header.tag == BackendTag::ReadyForQuery {
                     let body = &self.read_buf[5..msg_len];
                     self.tx_status = TransactionStatus::from(body[0]);
@@ -571,7 +633,11 @@ impl PgConnection {
                 _ => {}
             }
         }
-        PgError::Server { severity, code, message }
+        PgError::Server {
+            severity,
+            code,
+            message,
+        }
     }
 }
 
@@ -592,19 +658,28 @@ impl<'a> CopyWriter<'a> {
     /// Write a chunk of COPY data.
     pub fn write_data(&mut self, data: &[u8]) -> PgResult<()> {
         let n = codec::encode_copy_data(&mut self.conn.write_buf, data);
-        self.conn.stream.write_all(&self.conn.write_buf[..n]).map_err(PgError::Io)
+        self.conn
+            .stream
+            .write_all(&self.conn.write_buf[..n])
+            .map_err(PgError::Io)
     }
 
     /// Finish the COPY operation.
     pub fn finish(self) -> PgResult<()> {
         let n = codec::encode_copy_done(&mut self.conn.write_buf);
-        self.conn.stream.write_all(&self.conn.write_buf[..n]).map_err(PgError::Io)?;
+        self.conn
+            .stream
+            .write_all(&self.conn.write_buf[..n])
+            .map_err(PgError::Io)?;
 
         // Drain to ReadyForQuery
         loop {
             self.conn.fill_read_buf(None)?;
-            while let Some(msg_len) = codec::message_complete(&self.conn.read_buf[..self.conn.read_pos]) {
-                let header = codec::decode_header(&self.conn.read_buf).unwrap();
+            while let Some(msg_len) =
+                codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])
+            {
+                let header = codec::decode_header(&self.conn.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 if header.tag == BackendTag::ReadyForQuery {
                     let body = &self.conn.read_buf[5..msg_len];
                     self.conn.tx_status = TransactionStatus::from(body[0]);
@@ -622,4 +697,3 @@ impl<'a> CopyWriter<'a> {
         }
     }
 }
-

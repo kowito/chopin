@@ -1,4 +1,5 @@
 // src/syscalls.rs
+use crate::error::ChopinResult;
 use libc::{c_int, c_void, sockaddr, sockaddr_in, socklen_t};
 use std::io;
 use std::mem;
@@ -8,13 +9,13 @@ use std::ptr;
 // ---- Socket Operations ----
 
 /// Create a non-blocking TCP server socket with SO_REUSEPORT (crucial for per-core binding)
-pub fn create_listen_socket(host: &str, port: u16) -> io::Result<c_int> {
+pub fn create_listen_socket(host: &str, port: u16) -> ChopinResult<c_int> {
     #[cfg(target_os = "linux")]
     unsafe {
         // 1. Create socket
         let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_NONBLOCK, 0);
         if fd < 0 {
-            return Err(io::Error::last_os_error());
+            return Err(io::Error::last_os_error().into());
         }
 
         // 2. Set SO_REUSEPORT to allow multiple workers to bind to the same port
@@ -29,11 +30,13 @@ pub fn create_listen_socket(host: &str, port: u16) -> io::Result<c_int> {
         {
             let err = io::Error::last_os_error();
             libc::close(fd);
-            return Err(err);
+            return Err(err.into());
         }
 
         // 3. Bind
-        let ip: Ipv4Addr = host.parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let ip: Ipv4Addr = host
+            .parse()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         #[cfg(target_os = "macos")]
         let addr = sockaddr_in {
             sin_len: mem::size_of::<sockaddr_in>() as u8,
@@ -63,7 +66,7 @@ pub fn create_listen_socket(host: &str, port: u16) -> io::Result<c_int> {
         {
             let err = io::Error::last_os_error();
             libc::close(fd);
-            return Err(err);
+            return Err(err.into());
         }
 
         // 4. Listen
@@ -71,7 +74,7 @@ pub fn create_listen_socket(host: &str, port: u16) -> io::Result<c_int> {
         if libc::listen(fd, libc::SOMAXCONN) < 0 {
             let err = io::Error::last_os_error();
             libc::close(fd);
-            return Err(err);
+            return Err(err.into());
         }
 
         Ok(fd)
@@ -82,7 +85,7 @@ pub fn create_listen_socket(host: &str, port: u16) -> io::Result<c_int> {
         // 1. Create socket
         let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
         if fd < 0 {
-            return Err(io::Error::last_os_error());
+            return Err(io::Error::last_os_error().into());
         }
 
         // Set non-blocking manually
@@ -90,7 +93,7 @@ pub fn create_listen_socket(host: &str, port: u16) -> io::Result<c_int> {
         if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
             let err = io::Error::last_os_error();
             libc::close(fd);
-            return Err(err);
+            return Err(err.into());
         }
 
         // 2. Set SO_REUSEPORT to allow multiple workers to bind to the same port
@@ -105,11 +108,13 @@ pub fn create_listen_socket(host: &str, port: u16) -> io::Result<c_int> {
         {
             let err = io::Error::last_os_error();
             libc::close(fd);
-            return Err(err);
+            return Err(err.into());
         }
 
         // 3. Bind
-        let ip: Ipv4Addr = host.parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let ip: Ipv4Addr = host
+            .parse()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let addr = sockaddr_in {
             sin_len: mem::size_of::<sockaddr_in>() as u8,
             sin_family: libc::AF_INET as libc::sa_family_t,
@@ -128,25 +133,25 @@ pub fn create_listen_socket(host: &str, port: u16) -> io::Result<c_int> {
         {
             let err = io::Error::last_os_error();
             libc::close(fd);
-            return Err(err);
+            return Err(err.into());
         }
 
         // 4. Listen
         if libc::listen(fd, libc::SOMAXCONN) < 0 {
             let err = io::Error::last_os_error();
             libc::close(fd);
-            return Err(err);
+            return Err(err.into());
         }
 
         Ok(fd)
     }
 }
 
-pub fn create_listen_socket_reuseport(host: &str, port: u16) -> io::Result<c_int> {
+pub fn create_listen_socket_reuseport(host: &str, port: u16) -> ChopinResult<c_int> {
     unsafe {
         let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
         if fd < 0 {
-            return Err(io::Error::last_os_error());
+            return Err(io::Error::last_os_error().into());
         }
 
         // Set non-blocking
@@ -154,26 +159,47 @@ pub fn create_listen_socket_reuseport(host: &str, port: u16) -> io::Result<c_int
         libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
 
         let one: c_int = 1;
-        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR, &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t);
-        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEPORT, &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t);
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            &one as *const _ as *const c_void,
+            mem::size_of_val(&one) as socklen_t,
+        );
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEPORT,
+            &one as *const _ as *const c_void,
+            mem::size_of_val(&one) as socklen_t,
+        );
 
         let addr_str = format!("{}:{}", host, port);
-        let addr: std::net::SocketAddr = addr_str.parse().unwrap();
-        
+        let addr: std::net::SocketAddr = addr_str
+            .parse()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Invalid address"))?;
+
         match addr {
             std::net::SocketAddr::V4(a) => {
                 let sin = libc::sockaddr_in {
                     sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,
                     sin_family: libc::AF_INET as libc::sa_family_t,
                     sin_port: a.port().to_be(),
-                    sin_addr: libc::in_addr { s_addr: u32::from_ne_bytes(a.ip().octets()) },
+                    sin_addr: libc::in_addr {
+                        s_addr: u32::from_ne_bytes(a.ip().octets()),
+                    },
                     sin_zero: [0; 8],
                 };
-                
-                if libc::bind(fd, &sin as *const _ as *const libc::sockaddr, std::mem::size_of_val(&sin) as libc::socklen_t) < 0 {
+
+                if libc::bind(
+                    fd,
+                    &sin as *const _ as *const libc::sockaddr,
+                    std::mem::size_of_val(&sin) as libc::socklen_t,
+                ) < 0
+                {
                     let err = io::Error::last_os_error();
                     libc::close(fd);
-                    return Err(err);
+                    return Err(err.into());
                 }
             }
             _ => panic!("IPv6 not supported"),
@@ -182,7 +208,7 @@ pub fn create_listen_socket_reuseport(host: &str, port: u16) -> io::Result<c_int
         if libc::listen(fd, libc::SOMAXCONN) < 0 {
             let err = io::Error::last_os_error();
             libc::close(fd);
-            return Err(err);
+            return Err(err.into());
         }
 
         Ok(fd)
@@ -190,7 +216,7 @@ pub fn create_listen_socket_reuseport(host: &str, port: u16) -> io::Result<c_int
 }
 
 /// Accept a non-blocking connection
-pub fn accept_connection(listen_fd: c_int) -> io::Result<Option<c_int>> {
+pub fn accept_connection(listen_fd: c_int) -> ChopinResult<Option<c_int>> {
     #[cfg(target_os = "linux")]
     unsafe {
         let fd = libc::accept4(
@@ -199,13 +225,13 @@ pub fn accept_connection(listen_fd: c_int) -> io::Result<Option<c_int>> {
             ptr::null_mut(),
             libc::SOCK_NONBLOCK,
         );
-        
+
         if fd < 0 {
             let err = io::Error::last_os_error();
             if err.kind() == io::ErrorKind::WouldBlock {
                 Ok(None)
             } else {
-                Err(err)
+                Err(err.into())
             }
         } else {
             // Disable Nagle's algorithm for lower latency
@@ -223,18 +249,16 @@ pub fn accept_connection(listen_fd: c_int) -> io::Result<Option<c_int>> {
 
     #[cfg(target_os = "macos")]
     unsafe {
-        let fd = libc::accept(
-            listen_fd,
-            ptr::null_mut(),
-            ptr::null_mut(),
-        );
+        let fd = libc::accept(listen_fd, ptr::null_mut(), ptr::null_mut());
 
         if fd < 0 {
             let err = io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::EWOULDBLOCK) || err.kind() == io::ErrorKind::WouldBlock {
+            if err.raw_os_error() == Some(libc::EWOULDBLOCK)
+                || err.kind() == io::ErrorKind::WouldBlock
+            {
                 Ok(None)
             } else {
-                Err(err)
+                Err(err.into())
             }
         } else {
             // Set O_NONBLOCK manually since macos lacks accept4
@@ -242,12 +266,12 @@ pub fn accept_connection(listen_fd: c_int) -> io::Result<Option<c_int>> {
             if flags < 0 {
                 let err = io::Error::last_os_error();
                 libc::close(fd);
-                return Err(err);
+                return Err(err.into());
             }
             if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
                 let err = io::Error::last_os_error();
                 libc::close(fd);
-                return Err(err);
+                return Err(err.into());
             }
 
             // Disable Nagle's algorithm for lower latency
@@ -272,25 +296,25 @@ pub use linux_epoll::*;
 #[cfg(target_os = "linux")]
 mod linux_epoll {
     use super::*;
-    use libc::{epoll_event, EPOLLIN, EPOLLOUT, EPOLLET};
+    use libc::{EPOLLET, EPOLLIN, EPOLLOUT, epoll_event};
 
     pub struct Epoll {
         pub fd: c_int,
     }
 
     impl Epoll {
-        pub fn new() -> io::Result<Self> {
+        pub fn new() -> ChopinResult<Self> {
             unsafe {
                 let fd = libc::epoll_create1(0);
                 if fd < 0 {
-                    return Err(io::Error::last_os_error());
+                    return Err(io::Error::last_os_error().into());
                 }
                 Ok(Self { fd })
             }
         }
 
         /// Add a file descriptor to epoll. We use Edge Triggered (EPOLLET) for high performance.
-        pub fn add(&self, fd: c_int, token: u64, interests: i32) -> io::Result<()> {
+        pub fn add(&self, fd: c_int, token: u64, interests: i32) -> ChopinResult<()> {
             let mut event = epoll_event {
                 events: (interests | EPOLLET) as u32,
                 u64: token,
@@ -298,13 +322,13 @@ mod linux_epoll {
 
             unsafe {
                 if libc::epoll_ctl(self.fd, libc::EPOLL_CTL_ADD, fd, &mut event) < 0 {
-                    return Err(io::Error::last_os_error());
+                    return Err(io::Error::last_os_error().into());
                 }
             }
             Ok(())
         }
 
-        pub fn modify(&self, fd: c_int, token: u64, interests: i32) -> io::Result<()> {
+        pub fn modify(&self, fd: c_int, token: u64, interests: i32) -> ChopinResult<()> {
             let mut event = epoll_event {
                 events: (interests | EPOLLET) as u32,
                 u64: token,
@@ -312,25 +336,25 @@ mod linux_epoll {
 
             unsafe {
                 if libc::epoll_ctl(self.fd, libc::EPOLL_CTL_MOD, fd, &mut event) < 0 {
-                    return Err(io::Error::last_os_error());
+                    return Err(io::Error::last_os_error().into());
                 }
             }
             Ok(())
         }
 
-        pub fn delete(&self, fd: c_int) -> io::Result<()> {
+        pub fn delete(&self, fd: c_int) -> ChopinResult<()> {
             unsafe {
                 if libc::epoll_ctl(self.fd, libc::EPOLL_CTL_DEL, fd, ptr::null_mut()) < 0 {
                     let err = io::Error::last_os_error();
                     if err.raw_os_error() != Some(libc::ENOENT) {
-                        return Err(err);
+                        return Err(err.into());
                     }
                 }
             }
             Ok(())
         }
 
-        pub fn wait(&self, events: &mut [epoll_event], timeout_ms: i32) -> io::Result<usize> {
+        pub fn wait(&self, events: &mut [epoll_event], timeout_ms: i32) -> ChopinResult<usize> {
             unsafe {
                 let res = libc::epoll_wait(
                     self.fd,
@@ -344,7 +368,7 @@ mod linux_epoll {
                     if err.raw_os_error() == Some(libc::EINTR) {
                         return Ok(0);
                     }
-                    return Err(err);
+                    return Err(err.into());
                 }
 
                 Ok(res as usize)
@@ -368,7 +392,9 @@ pub use macos_epoll::*;
 #[cfg(target_os = "macos")]
 mod macos_epoll {
     use super::*;
-    use libc::{kevent, kqueue, EVFILT_READ, EVFILT_WRITE, EV_ADD, EV_CLEAR, EV_DELETE, EV_ENABLE, timespec};
+    use libc::{
+        EV_ADD, EV_CLEAR, EV_DELETE, EV_ENABLE, EVFILT_READ, EVFILT_WRITE, kevent, kqueue, timespec,
+    };
     use std::ptr;
 
     #[allow(non_camel_case_types)]
@@ -377,7 +403,7 @@ mod macos_epoll {
         pub events: u32,
         pub u64: u64,
     }
-    
+
     pub const EPOLLIN: i32 = 1;
     pub const EPOLLOUT: i32 = 4;
     pub const EPOLLET: i32 = 1 << 31;
@@ -387,29 +413,35 @@ mod macos_epoll {
     }
 
     impl Epoll {
-        pub fn new() -> io::Result<Self> {
+        pub fn new() -> ChopinResult<Self> {
             unsafe {
                 let fd = kqueue();
                 if fd < 0 {
-                    return Err(io::Error::last_os_error());
+                    return Err(io::Error::last_os_error().into());
                 }
                 Ok(Self { fd })
             }
         }
 
-        pub fn add(&self, fd: c_int, token: u64, interests: i32) -> io::Result<()> {
+        pub fn add(&self, fd: c_int, token: u64, interests: i32) -> ChopinResult<()> {
             self.modify_kqueue(fd, token, interests, EV_ADD | EV_ENABLE | EV_CLEAR)
         }
 
-        pub fn modify(&self, fd: c_int, token: u64, interests: i32) -> io::Result<()> {
+        pub fn modify(&self, fd: c_int, token: u64, interests: i32) -> ChopinResult<()> {
             self.modify_kqueue(fd, token, interests, EV_ADD | EV_ENABLE | EV_CLEAR)
         }
 
-        pub fn delete(&self, fd: c_int) -> io::Result<()> {
+        pub fn delete(&self, fd: c_int) -> ChopinResult<()> {
             self.modify_kqueue(fd, 0, EPOLLIN | EPOLLOUT, EV_DELETE)
         }
 
-        fn modify_kqueue(&self, fd: c_int, token: u64, interests: i32, action: u16) -> io::Result<()> {
+        fn modify_kqueue(
+            &self,
+            fd: c_int,
+            token: u64,
+            interests: i32,
+            action: u16,
+        ) -> ChopinResult<()> {
             let mut changes = Vec::new();
 
             if (interests & EPOLLIN) != 0 || action == EV_DELETE {
@@ -446,15 +478,15 @@ mod macos_epoll {
                 );
 
                 if res < 0 && action != EV_DELETE {
-                    return Err(io::Error::last_os_error());
+                    return Err(io::Error::last_os_error().into());
                 }
             }
             Ok(())
         }
 
-        pub fn wait(&self, events: &mut [epoll_event], timeout_ms: i32) -> io::Result<usize> {
+        pub fn wait(&self, events: &mut [epoll_event], timeout_ms: i32) -> ChopinResult<usize> {
             let mut kevents = vec![unsafe { std::mem::zeroed::<kevent>() }; events.len()];
-            
+
             let ts = if timeout_ms >= 0 {
                 Some(timespec {
                     tv_sec: (timeout_ms / 1000) as libc::time_t,
@@ -463,7 +495,7 @@ mod macos_epoll {
             } else {
                 None
             };
-            
+
             let ts_ptr = match &ts {
                 Some(t) => t as *const timespec,
                 None => ptr::null(),
@@ -484,7 +516,7 @@ mod macos_epoll {
                     if err.raw_os_error() == Some(libc::EINTR) {
                         return Ok(0);
                     }
-                    return Err(err);
+                    return Err(err.into());
                 }
 
                 let n = res as usize;
@@ -516,7 +548,7 @@ mod macos_epoll {
     }
 }
 
-pub fn read_nonblocking(fd: c_int, buf: &mut [u8]) -> io::Result<usize> {
+pub fn read_nonblocking(fd: c_int, buf: &mut [u8]) -> ChopinResult<usize> {
     unsafe {
         let res = libc::read(fd, buf.as_mut_ptr() as *mut c_void, buf.len());
         if res < 0 {
@@ -524,7 +556,7 @@ pub fn read_nonblocking(fd: c_int, buf: &mut [u8]) -> io::Result<usize> {
             if err.kind() == io::ErrorKind::WouldBlock {
                 Ok(0) // Need to wait for more data
             } else {
-                Err(err)
+                Err(err.into())
             }
         } else {
             // 0 bytes read on non-blocking means EOF (connection closed by peer)
@@ -533,7 +565,7 @@ pub fn read_nonblocking(fd: c_int, buf: &mut [u8]) -> io::Result<usize> {
     }
 }
 
-pub fn write_nonblocking(fd: c_int, buf: &[u8]) -> io::Result<usize> {
+pub fn write_nonblocking(fd: c_int, buf: &[u8]) -> ChopinResult<usize> {
     unsafe {
         let res = libc::write(fd, buf.as_ptr() as *const c_void, buf.len());
         if res < 0 {
@@ -541,7 +573,7 @@ pub fn write_nonblocking(fd: c_int, buf: &[u8]) -> io::Result<usize> {
             if err.kind() == io::ErrorKind::WouldBlock {
                 Ok(0)
             } else {
-                Err(err)
+                Err(err.into())
             }
         } else {
             Ok(res as usize)
@@ -550,22 +582,22 @@ pub fn write_nonblocking(fd: c_int, buf: &[u8]) -> io::Result<usize> {
 }
 
 /// Vectored write: write multiple buffers in a single syscall (scatter-gather I/O)
-pub fn writev_nonblocking(fd: c_int, bufs: &[&[u8]]) -> io::Result<usize> {
+pub fn writev_nonblocking(fd: c_int, bufs: &[&[u8]]) -> ChopinResult<usize> {
     if bufs.is_empty() {
         return Ok(0);
     }
-    
+
     // Build iovec array on stack (max 8 segments)
     let mut iovecs: [libc::iovec; 8] = unsafe { std::mem::zeroed() };
     let iov_count = bufs.len().min(8);
-    
+
     for i in 0..iov_count {
         iovecs[i] = libc::iovec {
             iov_base: bufs[i].as_ptr() as *mut c_void,
             iov_len: bufs[i].len(),
         };
     }
-    
+
     unsafe {
         let res = libc::writev(fd, iovecs.as_ptr(), iov_count as c_int);
         if res < 0 {
@@ -573,7 +605,7 @@ pub fn writev_nonblocking(fd: c_int, bufs: &[&[u8]]) -> io::Result<usize> {
             if err.kind() == io::ErrorKind::WouldBlock {
                 Ok(0)
             } else {
-                Err(err)
+                Err(err.into())
             }
         } else {
             Ok(res as usize)
@@ -584,11 +616,11 @@ pub fn writev_nonblocking(fd: c_int, bufs: &[&[u8]]) -> io::Result<usize> {
 // ---- Accept-Distribute Pipe Operations ----
 
 /// Create a non-blocking Unix pipe. Returns (read_fd, write_fd).
-pub fn create_pipe() -> io::Result<(c_int, c_int)> {
+pub fn create_pipe() -> ChopinResult<(c_int, c_int)> {
     let mut fds = [0 as c_int; 2];
     unsafe {
         if libc::pipe(fds.as_mut_ptr()) < 0 {
-            return Err(io::Error::last_os_error());
+            return Err(io::Error::last_os_error().into());
         }
         // Make read end non-blocking
         let flags = libc::fcntl(fds[0], libc::F_GETFL, 0);
@@ -596,19 +628,19 @@ pub fn create_pipe() -> io::Result<(c_int, c_int)> {
             let err = io::Error::last_os_error();
             libc::close(fds[0]);
             libc::close(fds[1]);
-            return Err(err);
+            return Err(err.into());
         }
     }
     Ok((fds[0], fds[1]))
 }
 
 /// Send a client FD over a pipe (blocking write of 4 bytes)
-pub fn send_fd_over_pipe(pipe_write_fd: c_int, client_fd: c_int) -> io::Result<()> {
+pub fn send_fd_over_pipe(pipe_write_fd: c_int, client_fd: c_int) -> ChopinResult<()> {
     let bytes = client_fd.to_ne_bytes();
     unsafe {
         let n = libc::write(pipe_write_fd, bytes.as_ptr() as *const c_void, 4);
         if n < 0 {
-            Err(io::Error::last_os_error())
+            Err(io::Error::last_os_error().into())
         } else {
             Ok(())
         }
@@ -616,7 +648,7 @@ pub fn send_fd_over_pipe(pipe_write_fd: c_int, client_fd: c_int) -> io::Result<(
 }
 
 /// Receive a client FD from a pipe (non-blocking read of 4 bytes)
-pub fn recv_fd_from_pipe(pipe_read_fd: c_int) -> io::Result<Option<c_int>> {
+pub fn recv_fd_from_pipe(pipe_read_fd: c_int) -> ChopinResult<Option<c_int>> {
     let mut buf = [0u8; 4];
     unsafe {
         let n = libc::read(pipe_read_fd, buf.as_mut_ptr() as *mut c_void, 4);
@@ -625,7 +657,7 @@ pub fn recv_fd_from_pipe(pipe_read_fd: c_int) -> io::Result<Option<c_int>> {
             if err.kind() == io::ErrorKind::WouldBlock {
                 Ok(None)
             } else {
-                Err(err)
+                Err(err.into())
             }
         } else if n == 4 {
             Ok(Some(c_int::from_ne_bytes(buf)))

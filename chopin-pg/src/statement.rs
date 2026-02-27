@@ -32,6 +32,12 @@ pub struct Statement {
     pub columns: Option<Vec<ColumnDesc>>,
 }
 
+impl Default for StatementCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StatementCache {
     pub fn new() -> Self {
         Self {
@@ -63,13 +69,22 @@ impl StatementCache {
     }
 
     /// Cache a statement after successful Parse + Describe.
-    pub fn insert(&mut self, sql: &str, name: String, param_count: usize, columns: Option<Vec<ColumnDesc>>) {
+    pub fn insert(
+        &mut self,
+        sql: &str,
+        name: String,
+        param_count: usize,
+        columns: Option<Vec<ColumnDesc>>,
+    ) {
         let hash = Self::hash_sql(sql);
-        self.cache.insert(hash, CachedStatement {
-            name,
-            param_count,
-            columns,
-        });
+        self.cache.insert(
+            hash,
+            CachedStatement {
+                name,
+                param_count,
+                columns,
+            },
+        );
     }
 
     /// Update the cached RowDescription for a statement.
@@ -83,6 +98,11 @@ impl StatementCache {
     /// Number of cached statements.
     pub fn len(&self) -> usize {
         self.cache.len()
+    }
+
+    /// Whether the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.cache.is_empty()
     }
 
     /// Clear all cached statements.

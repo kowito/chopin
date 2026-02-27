@@ -43,7 +43,11 @@ impl std::fmt::Display for PgError {
             PgError::Io(e) => write!(f, "I/O error: {}", e),
             PgError::Protocol(msg) => write!(f, "Protocol error: {}", msg),
             PgError::Auth(msg) => write!(f, "Auth error: {}", msg),
-            PgError::Server { severity, code, message } => {
+            PgError::Server {
+                severity,
+                code,
+                message,
+            } => {
                 write!(f, "PG {}: {} ({})", severity, message, code)
             }
             PgError::ConnectionClosed => write!(f, "Connection closed"),

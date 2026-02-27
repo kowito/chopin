@@ -1,4 +1,4 @@
-use crate::{FromRow, Model, PgError, PgResult, PgValue};
+use crate::{Model, OrmError, OrmResult, PgValue};
 use std::marker::PhantomData;
 
 pub struct QueryBuilder<M> {
@@ -8,6 +8,12 @@ pub struct QueryBuilder<M> {
     order_by: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+}
+
+impl<M: Model + Send + Sync> Default for QueryBuilder<M> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<M: Model + Send + Sync> QueryBuilder<M> {
@@ -46,7 +52,11 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
     }
 
     fn build_query(&self) -> String {
-        let mut query = format!("SELECT {} FROM {}", M::columns().join(", "), M::table_name());
+        let mut query = format!(
+            "SELECT {} FROM {}",
+            M::columns().join(", "),
+            M::table_name()
+        );
 
         if !self.filters.is_empty() {
             query.push_str(" WHERE ");
@@ -71,14 +81,14 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
         query
     }
 
-    pub fn all(self, executor: &mut impl crate::Executor) -> PgResult<Vec<M>> {
+    pub fn all(self, executor: &mut impl crate::Executor) -> OrmResult<Vec<M>> {
         let query = self.build_query();
 
         let params_ref: Vec<&dyn chopin_pg::types::ToParam> =
             self.params.iter().map(|p| p as _).collect();
-            
+
         log::debug!("Executing Query: {} | Params: {}", query, self.params.len());
-        
+
         let rows = executor.query(&query, &params_ref)?;
 
         let mut result = Vec::with_capacity(rows.len());
@@ -88,13 +98,13 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
         Ok(result)
     }
 
-    pub fn one(mut self, executor: &mut impl crate::Executor) -> PgResult<Option<M>> {
+    pub fn one(mut self, executor: &mut impl crate::Executor) -> OrmResult<Option<M>> {
         self.limit = Some(1);
         let mut all = self.all(executor)?;
         Ok(all.pop())
     }
 
-    pub fn count(self, executor: &mut impl crate::Executor) -> PgResult<i64> {
+    pub fn count(self, executor: &mut impl crate::Executor) -> OrmResult<i64> {
         let mut query = format!("SELECT COUNT(*) FROM {}", M::table_name());
 
         if !self.filters.is_empty() {
@@ -104,12 +114,18 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
 
         let params_ref: Vec<&dyn chopin_pg::types::ToParam> =
             self.params.iter().map(|p| p as _).collect();
-            
+
         log::debug!("Executing Count: {} | Params: {}", query, self.params.len());
-        
+
         let rows = executor.query(&query, &params_ref)?;
         if let Some(row) = rows.first() {
-            return row.get_i64(0)?.ok_or_else(|| PgError::Protocol("COUNT(*) returned null".to_string()));
+            let val: PgValue = row.get(0).map_err(OrmError::from)?;
+            return Ok(match val {
+                PgValue::Int8(v) => v,
+                PgValue::Int4(v) => v as i64,
+                PgValue::Text(s) => s.parse().unwrap_or(0),
+                _ => 0,
+            });
         }
         Ok(0)
     }
@@ -118,6 +134,7 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{FromRow, Model};
     use chopin_pg::Row;
 
     struct MockModel {
@@ -125,21 +142,33 @@ mod tests {
     }
 
     impl FromRow for MockModel {
-        fn from_row(_row: &Row) -> PgResult<Self> {
+        fn from_row(_row: &Row) -> OrmResult<Self> {
             Ok(Self { id: 0 })
         }
     }
 
     impl Model for MockModel {
-        fn table_name() -> &'static str { "mocks" }
-        fn primary_key_column() -> &'static str { "id" }
-        fn columns() -> &'static [&'static str] { &["id", "name"] }
-        fn primary_key_value(&self) -> PgValue { PgValue::Int4(self.id) }
-        fn set_primary_key(&mut self, val: PgValue) -> PgResult<()> {
-            if let PgValue::Int4(v) = val { self.id = v; }
+        fn table_name() -> &'static str {
+            "mocks"
+        }
+        fn primary_key_column() -> &'static str {
+            "id"
+        }
+        fn columns() -> &'static [&'static str] {
+            &["id", "name"]
+        }
+        fn primary_key_value(&self) -> PgValue {
+            PgValue::Int4(self.id)
+        }
+        fn set_primary_key(&mut self, val: PgValue) -> OrmResult<()> {
+            if let PgValue::Int4(v) = val {
+                self.id = v;
+            }
             Ok(())
         }
-        fn get_values(&self) -> Vec<PgValue> { vec![] }
+        fn get_values(&self) -> Vec<PgValue> {
+            vec![]
+        }
     }
 
     #[test]

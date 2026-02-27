@@ -2,7 +2,16 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Method {
-    Get, Post, Put, Delete, Patch, Head, Options, Trace, Connect, Unknown,
+    Get,
+    Post,
+    Put,
+    Delete,
+    Patch,
+    Head,
+    Options,
+    Trace,
+    Connect,
+    Unknown,
 }
 
 impl Method {
@@ -47,6 +56,10 @@ impl Body {
             Body::Bytes(b) => b.len(),
             Body::Stream(_) => 0, // Chunked has no predefined length
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn as_bytes(&self) -> &[u8] {

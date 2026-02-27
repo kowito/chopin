@@ -165,6 +165,10 @@ pub enum FormatCode {
 
 impl From<i16> for FormatCode {
     fn from(v: i16) -> Self {
-        if v == 1 { FormatCode::Binary } else { FormatCode::Text }
+        if v == 1 {
+            FormatCode::Binary
+        } else {
+            FormatCode::Text
+        }
     }
 }

@@ -17,7 +17,11 @@ impl ConnectionSlab {
             let mut conn = Conn::empty();
             // The fd field works as the `next` index pointer.
             // The last entry points to -1 (null)
-            conn.fd = if i == capacity - 1 { -1 } else { (i + 1) as i32 };
+            conn.fd = if i == capacity - 1 {
+                -1
+            } else {
+                (i + 1) as i32
+            };
             entries.push(conn);
         }
 
@@ -30,33 +34,33 @@ impl ConnectionSlab {
     }
 
     /// O(1) allocation: returns an index to the free connection.
-    /// Returns None if out of capacity.
+    /// Returns Err(ChopinError::SlabFull) if out of capacity.
     #[inline(always)]
-    pub fn allocate(&mut self, new_fd: i32) -> Option<usize> {
+    pub fn allocate(&mut self, new_fd: i32) -> crate::error::ChopinResult<usize> {
         if self.head_free == -1 {
-            return None; // Out of connections
+            return Err(crate::error::ChopinError::SlabFull); // Out of connections
         }
 
         let idx = self.head_free as usize;
         let conn = &mut self.entries[idx];
-        
+
         // Grab the next free offset
-        self.head_free = conn.fd; 
-        
+        self.head_free = conn.fd;
+
         // Setup connection specifically
         conn.fd = new_fd;
         conn.state = ConnState::Accepted;
         conn.parse_pos = 0;
         conn.write_pos = 0;
         conn.route_id = 0;
-        // Notice we do NOT clear read_buf/write_buf. 
+        // Notice we do NOT clear read_buf/write_buf.
         // We defer to state parsing tracking to never leak state, saving memset cycles.
 
         self.active_count += 1;
         if idx >= self.high_water {
             self.high_water = idx + 1;
         }
-        Some(idx)
+        Ok(idx)
     }
 
     /// O(1) deallocation: returns connection back to the free list.
@@ -85,7 +89,7 @@ impl ConnectionSlab {
     pub fn get_mut(&mut self, index: usize) -> Option<&mut Conn> {
         self.entries.get_mut(index)
     }
-    
+
     /// Access connection by index
     #[inline(always)]
     pub fn get(&self, index: usize) -> Option<&Conn> {
@@ -95,6 +99,11 @@ impl ConnectionSlab {
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.active_count
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.active_count == 0
     }
 
     #[inline(always)]
@@ -117,7 +126,7 @@ mod tests {
     #[test]
     fn test_slab_operations() {
         let mut slab = ConnectionSlab::new(10);
-        
+
         assert_eq!(slab.active_count, 0);
         assert_eq!(slab.capacity(), 10);
 
@@ -128,12 +137,12 @@ mod tests {
 
         let idx2 = slab.allocate(101).unwrap();
         assert_eq!(idx2, 1);
-        
+
         slab.free(idx1);
         assert_eq!(slab.active_count, 1);
-        
+
         // Notice we reused index 0 since it was pushed to the head of the free list
         let idx3 = slab.allocate(102).unwrap();
-        assert_eq!(idx3, 0); 
+        assert_eq!(idx3, 0);
     }
 }

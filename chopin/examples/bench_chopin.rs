@@ -1,5 +1,5 @@
 // examples/bench_chopin.rs
-use chopin::{Server, Router, Context, Response};
+use chopin::{Context, Response, Router, Server};
 
 #[derive(kowito_json::KJson, Default)]
 struct Message {
@@ -7,17 +7,17 @@ struct Message {
 }
 
 fn json_handler(ctx: Context) -> Response {
-    let msg = Message { message: "Hello, World!" };
-    ctx.respond_json(&msg)
-        .header("Server", "Chopin/Kowito")
+    let msg = Message {
+        message: "Hello, World!",
+    };
+    ctx.respond_json(&msg).header("Server", "Chopin/Kowito")
 }
 
 fn plain_handler(_ctx: Context) -> Response {
     let date = httpdate::fmt_http_date(std::time::SystemTime::now());
     let mut res = Response::ok("Hello, World!");
     res.content_type = "text/plain; charset=UTF-8";
-    res.header("Server", "Example")
-       .header("Date", date)
+    res.header("Server", "Example").header("Date", date)
 }
 
 fn main() {

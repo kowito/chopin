@@ -22,7 +22,7 @@ where
         let mut tape = [0u32; 1024]; // Stack-allocated tape
         let tokens = scanner.scan(&mut tape);
         if tokens == 0 && !ctx.req.body.is_empty() {
-             return Err(crate::http::Response::internal_error()); // Invalid JSON
+            return Err(crate::http::Response::internal_error()); // Invalid JSON
         }
 
         match serde_json::from_slice(ctx.req.body) {
@@ -41,7 +41,7 @@ where
     type Error = Response;
 
     fn from_request(ctx: &'a Context<'a>) -> Result<Self, Self::Error> {
-        let qs = ctx.req.query.unwrap_or("");
+        let _qs = ctx.req.query.unwrap_or("");
         // A minimal query string parser.
         // For production, we'd use `serde_urlencoded`. But kowito-json is mostly for JSON.
         // We can just manually parse if needed, but since we are demonstrating extractors:

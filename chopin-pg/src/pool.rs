@@ -3,7 +3,7 @@
 //! Each worker thread owns its own `PgPool` instance.
 //! No locks, no cross-thread synchronization.
 
-use crate::connection::{PgConnection, PgConfig};
+use crate::connection::{PgConfig, PgConnection};
 use crate::error::{PgError, PgResult};
 
 /// A simple worker-local connection pool.

@@ -1,6 +1,6 @@
-use chopin_orm::{Model, ExtractValue, FromRow};
-use chopin_pg::{PgConfig, PgPool, Row, PgValue, PgResult};
-use criterion::{criterion_group, criterion_main, Criterion, black_box};
+use chopin_orm::Model;
+use chopin_pg::{PgConfig, PgPool};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 #[derive(Model, Debug, Clone, PartialEq)]
 #[model(table_name = "bench_users")]
@@ -16,10 +16,8 @@ fn setup_db(count: i32) -> PgPool {
     let mut pool = PgPool::connect(config, 1).unwrap();
 
     let conn = pool.get().unwrap();
-    conn.execute(
-        "DROP TABLE IF EXISTS bench_users",
-        &[],
-    ).unwrap();
+    conn.execute("DROP TABLE IF EXISTS bench_users", &[])
+        .unwrap();
     conn.execute(
         "CREATE TABLE bench_users (
             id SERIAL PRIMARY KEY,
@@ -27,8 +25,9 @@ fn setup_db(count: i32) -> PgPool {
             age INT NOT NULL
         )",
         &[],
-    ).unwrap();
-    
+    )
+    .unwrap();
+
     // Batch insert for speed
     if count > 0 {
         // Simple batch insert logic for benchmarking setup
@@ -51,24 +50,27 @@ fn setup_db(count: i32) -> PgPool {
 
 fn bench_scale(c: &mut Criterion) {
     let scales = [1_000, 100_000]; // 1M might be too slow for immediate feedback, but user asked. 
-                                  // Let's see if we can include it.
-    
+    // Let's see if we can include it.
+
     for &count in &scales {
         let mut pool = setup_db(count);
         let group_name = format!("scale_{}", count);
         let mut group = c.benchmark_group(group_name);
-        
+
         group.bench_function("raw_pg", |b| {
             b.iter(|| {
                 let conn = pool.get().unwrap();
-                let rows = conn.query("SELECT id, name, age FROM bench_users", &[]).unwrap();
-                let users: Vec<BenchUser> = rows.into_iter().map(|row| {
-                    BenchUser {
+                let rows = conn
+                    .query("SELECT id, name, age FROM bench_users", &[])
+                    .unwrap();
+                let users: Vec<BenchUser> = rows
+                    .into_iter()
+                    .map(|row| BenchUser {
                         id: row.get_i32(0).unwrap().unwrap(),
                         name: row.get_str(1).unwrap().unwrap().to_string(),
                         age: row.get_i32(2).unwrap().unwrap(),
-                    }
-                }).collect();
+                    })
+                    .collect();
                 black_box(users);
             })
         });
@@ -79,7 +81,7 @@ fn bench_scale(c: &mut Criterion) {
                 black_box(users);
             })
         });
-        
+
         group.finish();
     }
 }
@@ -90,18 +92,21 @@ fn bench_1m(c: &mut Criterion) {
     let mut pool = setup_db(count);
     let mut group = c.benchmark_group("scale_1m");
     group.sample_size(10); // Standard 100 iterations on 1M rows is too slow
-    
+
     group.bench_function("raw_pg", |b| {
         b.iter(|| {
             let conn = pool.get().unwrap();
-            let rows = conn.query("SELECT id, name, age FROM bench_users", &[]).unwrap();
-            let users: Vec<BenchUser> = rows.into_iter().map(|row| {
-                BenchUser {
+            let rows = conn
+                .query("SELECT id, name, age FROM bench_users", &[])
+                .unwrap();
+            let users: Vec<BenchUser> = rows
+                .into_iter()
+                .map(|row| BenchUser {
                     id: row.get_i32(0).unwrap().unwrap(),
                     name: row.get_str(1).unwrap().unwrap().to_string(),
                     age: row.get_i32(2).unwrap().unwrap(),
-                }
-            }).collect();
+                })
+                .collect();
             black_box(users);
         })
     });
@@ -112,7 +117,7 @@ fn bench_1m(c: &mut Criterion) {
             black_box(users);
         })
     });
-    
+
     group.finish();
 }
 
