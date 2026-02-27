@@ -1,6 +1,6 @@
 # Chopin Architecture Documentation
 
-Chopin is a high-performance, Shared-Nothing HTTP framework built for maximum per-core throughput. It achieves **280k+ req/s** on a single core by bypassing heavyweight runtimes and minimizing cross-thread synchronization.
+Chopin is a high-performance, Shared-Nothing HTTP framework built for maximum per-core throughput. It achieves **280k+ req/s** on a single core and scales linearly across multiple cores by bypassing heavyweight runtimes and minimizing cross-thread synchronization.
 
 ## 🏛️ Core Design Principles
 
@@ -12,22 +12,20 @@ Chopin follows a "Shared-Nothing" model where each CPU core runs a completely in
 
 ### 2. Thread-per-Core Model
 - **Core Affinity**: Threads are pinned to logical cores using `core_affinity`.
-- **SO_REUSEPORT**: The OS kernel balances incoming connections across workers at the socket layer.
+- **SO_REUSEPORT**: The OS kernel balances incoming connections across workers at the socket layer. Each worker manages its own listen socket file descriptor.
 - **Native Async**: Uses platform-native event notification (`kqueue` on macOS, `epoll` on Linux) through low-level `libc` syscalls.
 
 ## 🧱 Component Overview
 
 ```mermaid
 graph TD
-    Client[HTTP Client] --> ListenSock[Single Listen Socket]
-    ListenSock --> Acceptor[Acceptor Thread]
-    Acceptor -->|"round-robin pipe"| Worker1[Worker 0]
-    Acceptor -->|"round-robin pipe"| Worker2[Worker 1]
-    Acceptor -->|"round-robin pipe"| WorkerN[Worker N]
+    Client[HTTP Client] --> ListenSock[SO_REUSEPORT Listeners]
+    ListenSock --> Worker1[Worker 0]
+    ListenSock --> Worker2[Worker 1]
+    ListenSock --> WorkerN[Worker N]
     
-    subgraph Worker["Worker Thread (Shared-Nothing)"]
-        Pipe[Pipe Read FD] --> Loop[Event Loop / kqueue]
-        Loop --> Slab[Connection Slab]
+    subgraph IndependentWorker["Worker Thread (Shared-Nothing)"]
+        Loop[Event Loop / kqueue] --> Slab[Connection Slab]
         Slab --> Parser[Zero-Alloc Parser]
         Parser --> Router[Radix Tree Router]
         Router --> Handler[Request Handler]
@@ -43,17 +41,16 @@ graph TD
     MetricsN --> Aggregator
 ```
 
-### 🔀 Accept-Distribute Model
-Unlike traditional `SO_REUSEPORT` (which suffers kernel contention on macOS), Chopin uses a dedicated **Acceptor Thread**:
-1. A single listen socket handles all `accept()` calls
-2. Accepted FDs are sent to workers via **Unix pipes** (round-robin)
-3. Each worker registers the pipe read-end in its kqueue loop
-4. Workers remain **100% independent** after receiving the FD — no shared state
+### ⚡ Shared-Nothing Model
+Chopin eliminates the kernel locking overhead typically found in multi-threaded servers:
+1. Every worker thread creates its own listening socket with `SO_REUSEPORT`.
+2. The kernel distributes incoming TCP connections directly to the worker's own `accept()` call.
+3. Workers remain **100% independent** — there is no inter-thread communication (no queues, no pipes, no locks) during request processing.
 
 ### 📋 Connection Slab (`src/slab.rs`)
-Chopin manages memory through a pre-allocated **Connection Slab**.
+Chopin manages memory through a pre-allocated **Connection Slab** per worker.
 - **O(1) Allocation**: Getting a handle for a new connection is a simple array index lookup.
-- **Fixed Size**: Memory usage is deterministic (100k slots by default).
+- **Fixed Size**: Memory usage is deterministic (100k slots by default per core).
 - **Zero Memset**: Buffers are reused without clearing; state tracking ensures no data leaches between requests.
 
 ### ⚡ Zero-Allocation Request Pipeline
@@ -70,14 +67,14 @@ Chopin manages memory through a pre-allocated **Connection Slab**.
 ### 2. Syscall Efficiency
 - **Non-Blocking I/O**: Direct interaction with `libc::read` and `libc::write`.
 - **Partial Writes**: The framework handles `EWOULDBLOCK` by tracking `write_pos` and resuming on the next `EPOLLOUT` event.
-- **Vectored I/O**: Supports `writev()` to send headers and body chunks without concatenating them into a single buffer.
+- **TCP_NODELAY**: Enabled on all connections to ensure immediate packet dispatch for low latency.
 
 ### 3. Metric Partitioning
 Metrics are partitioned per worker. An aggregator thread periodically sums these atomics to report global throughput, ensuring zero contention during the request loop.
 
 ## 🔄 Request Lifecycle
 
-1.  **Accept**: Worker is notified of a new connection; takes a slot from the `ConnectionSlab`.
+1.  **Accept**: Worker is notified of a new connection on its private listen FD; takes a slot from the `ConnectionSlab`.
 2.  **Read**: Bytes flow into `read_buf`.
 3.  **Parse**: `parse_request` tokenizes the buffer (zero allocation).
 4.  **Route**: `Router` matches the method/path and pulls parameters into a stack array.
