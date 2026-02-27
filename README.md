@@ -1,6 +1,4 @@
-# Chopin 🎼
-
-Chopin is an ultra-high-performance, **Shared-Nothing**, asynchronous HTTP framework written in Rust. It is designed to maximize per-core efficiency by eliminating cross-core contention and minimizing heap allocations.
+# Chopin 🎼 (Codename: Nocturne Op. 9 No. 2)
 
 At peak optimization, Chopin delivers **280,000+ req/s** on a single core, effectively outperforming standard frameworks like Hyper by **~40%** while maintaining significantly lower latency.
 
@@ -66,4 +64,4 @@ fn main() {
 *Chopin is **40-43% faster** than Hyper with **5.4x lower latency**.*
 
 ---
-"Simple as a melody, fast as a nocturne."
+"Simple as a melody, fast as a nocturne." - *nocturne-op9-no2*

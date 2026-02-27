@@ -1,4 +1,4 @@
-# Chopin Architecture Documentation
+# Chopin Architecture (Codename: nocturne-op9-no2)
 
 Chopin is a high-performance, Shared-Nothing HTTP framework built for maximum per-core throughput. It achieves **280k+ req/s** on a single core and scales linearly across multiple cores by bypassing heavyweight runtimes and minimizing cross-thread synchronization.
 
