@@ -56,7 +56,7 @@ fn stream_handler(_ctx: Context) -> Response {
     Response::stream(iter)
 }
 
-fn logger_mw(ctx: Context, next: fn(Context) -> Response) -> Response {
+fn logger_mw(ctx: Context, next: chopin::router::BoxedHandler) -> Response {
     let method = format!("{:?}", ctx.req.method);
     let path = ctx.req.path.to_string();
     let start = std::time::Instant::now();

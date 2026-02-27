@@ -1,10 +1,13 @@
 // src/router.rs
 use crate::http::{Context, MAX_PARAMS, Method, Response};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub type Handler = fn(Context) -> Response;
 
-pub type MiddlewareFn = fn(Context, Handler) -> Response;
+pub type BoxedHandler = Arc<dyn Fn(Context) -> Response + Send + Sync>;
+
+pub type MiddlewareFn = fn(Context, BoxedHandler) -> Response;
 
 /// Result of a successful route match.
 pub type RouteMatch<'a> = (&'a Handler, [(&'a str, &'a str); MAX_PARAMS], u8);
@@ -35,14 +38,14 @@ impl RouteNode {
 #[derive(Clone)]
 pub struct Router {
     pub root: RouteNode,
-    pub global_middleware: Option<MiddlewareFn>,
+    pub global_middleware: Vec<MiddlewareFn>,
 }
 
 impl Router {
     pub fn new() -> Self {
         Self {
             root: RouteNode::new(String::new()),
-            global_middleware: None,
+            global_middleware: Vec::new(),
         }
     }
 
@@ -187,7 +190,7 @@ impl Router {
 
     // Middleware methods
     pub fn wrap(&mut self, mw: MiddlewareFn) {
-        self.global_middleware = Some(mw);
+        self.global_middleware.push(mw);
     }
 
     // Convenience methods

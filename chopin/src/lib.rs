@@ -5,6 +5,7 @@ pub mod extract;
 pub mod http;
 pub mod json;
 pub mod metrics;
+pub mod multipart;
 pub mod parser;
 pub mod router;
 pub mod server;

@@ -13,7 +13,9 @@ struct Message {
     message: &'static str,
 }
 
-async fn handle(req: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+async fn handle(
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/json") => {
             let msg = Message {
@@ -23,8 +25,7 @@ async fn handle(req: Request<hyper::body::Incoming>) -> Result<Response<Full<Byt
             let mut res = Response::new(Full::new(Bytes::from(json)));
             res.headers_mut()
                 .insert("Content-Type", "application/json".parse().unwrap());
-            res.headers_mut()
-                .insert("Server", "Hyper".parse().unwrap());
+            res.headers_mut().insert("Server", "Hyper".parse().unwrap());
             Ok(res)
         }
         (&Method::GET, "/plain") => {
@@ -32,8 +33,7 @@ async fn handle(req: Request<hyper::body::Incoming>) -> Result<Response<Full<Byt
             let mut res = Response::new(Full::new(Bytes::from("Hello, World!")));
             res.headers_mut()
                 .insert("Content-Type", "text/plain; charset=UTF-8".parse().unwrap());
-            res.headers_mut()
-                .insert("Server", "Hyper".parse().unwrap());
+            res.headers_mut().insert("Server", "Hyper".parse().unwrap());
             res.headers_mut().insert("Date", date.parse().unwrap());
             Ok(res)
         }
@@ -60,7 +60,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let addr = SocketAddr::from(([0, 0, 0, 0], 8081));
         let listener = TcpListener::bind(addr).await?;
 
-        println!("Hyper server listening on http://{} with {} workers", addr, workers);
+        println!(
+            "Hyper server listening on http://{} with {} workers",
+            addr, workers
+        );
 
         loop {
             let (stream, _) = listener.accept().await?;

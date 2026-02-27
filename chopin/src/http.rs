@@ -134,6 +134,15 @@ impl Response {
         }
     }
 
+    pub fn bad_request() -> Self {
+        Self {
+            status: 400,
+            body: Body::Bytes(b"Bad Request".to_vec()),
+            content_type: "text/plain",
+            headers: Vec::new(),
+        }
+    }
+
     pub fn stream(iter: impl Iterator<Item = Vec<u8>> + Send + 'static) -> Self {
         Self {
             status: 200,
@@ -151,6 +160,35 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
+    pub fn get_param(&self, key: &str) -> Option<&'a str> {
+        for i in 0..self.param_count as usize {
+            if self.params[i].0 == key {
+                return Some(self.params[i].1);
+            }
+        }
+        None
+    }
+
+    pub fn get_header(&self, key: &str) -> Option<&'a str> {
+        for i in 0..self.req.header_count as usize {
+            if self.req.headers[i].0.eq_ignore_ascii_case(key) {
+                return Some(self.req.headers[i].1);
+            }
+        }
+        None
+    }
+
+    pub fn multipart(&self) -> Option<crate::multipart::Multipart<'a>> {
+        let ct = self.get_header("content-type")?;
+        if ct.starts_with("multipart/form-data")
+            && let Some(idx) = ct.find("boundary=")
+        {
+            let boundary = &ct[idx + 9..];
+            return Some(crate::multipart::Multipart::new(self.req.body, boundary));
+        }
+        None
+    }
+
     pub fn extract<T: crate::extract::FromRequest<'a>>(&'a self) -> Result<T, T::Error> {
         T::from_request(self)
     }
