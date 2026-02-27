@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use crate::worker::Worker;
 use crate::router::Router;
+use crate::syscalls;
 
 pub struct Server {
     host_port: String,
@@ -34,7 +35,7 @@ impl Server {
             shutdown_clone.store(true, Ordering::SeqCst);
         }).expect("Error setting Ctrl-C handler");
 
-
+        // ---- Per-Worker Metrics ----
         let mut worker_metrics = Vec::with_capacity(self.workers);
         for _ in 0..self.workers {
             worker_metrics.push(Arc::new(crate::metrics::WorkerMetrics::new()));
@@ -62,16 +63,26 @@ impl Server {
             }
         }).ok();
 
+        // ---- Create per-worker pipes ----
+        let mut pipe_write_fds = Vec::with_capacity(self.workers);
+        let mut pipe_read_fds = Vec::with_capacity(self.workers);
+
+        for _ in 0..self.workers {
+            let (read_fd, write_fd) = syscalls::create_pipe()?;
+            pipe_read_fds.push(read_fd);
+            pipe_write_fds.push(write_fd);
+        }
+
+        // ---- Spawn Worker Threads ----
         let mut handles = Vec::with_capacity(self.workers);
         println!("Starting {} workers on {}", self.workers, self.host_port);
 
         for i in 0..self.workers {
-            let core_id = core_ids.get(i % core_ids.len()).copied(); // Pin to core or wrap around
+            let core_id = core_ids.get(i % core_ids.len()).copied();
             let router_clone = router.clone();
-
-            let host_port = self.host_port.clone();
             let shutdown = shutdown_flag.clone();
             let metrics_worker = worker_metrics[i].clone();
+            let pipe_fd = pipe_read_fds[i];
 
             let handle = thread::Builder::new()
                 .name(format!("chopin-worker-{}", i))
@@ -86,15 +97,77 @@ impl Server {
                         println!("Worker {} started (no pinning available)", i);
                     }
 
-                    // Create and run the per-core worker loop
-                    let mut worker = Worker::new(i, host_port, router_clone, metrics_worker);
+                    // Workers receive FDs via pipe — no listen socket needed
+                    let mut worker = Worker::new(i, router_clone, metrics_worker, pipe_fd);
                     worker.run(shutdown);
                 })?;
 
             handles.push(handle);
         }
 
-        // Wait for all workers to finish
+        // ---- Spawn Acceptor Thread ----
+        let parts: Vec<&str> = self.host_port.split(':').collect();
+        let port: u16 = parts.get(1).unwrap_or(&"8080").parse().unwrap();
+        let host = parts.first().unwrap_or(&"0.0.0.0").to_string();
+        let shutdown_accept = shutdown_flag.clone();
+        let num_workers = self.workers;
+
+        let acceptor_handle = thread::Builder::new()
+            .name("chopin-acceptor".to_string())
+            .spawn(move || {
+                let listen_fd = match syscalls::create_listen_socket(&host, port) {
+                    Ok(fd) => fd,
+                    Err(e) => {
+                        eprintln!("Acceptor failed to bind: {}", e);
+                        return;
+                    }
+                };
+
+                println!("Acceptor listening on {}:{}", host, port);
+
+                // Use kqueue/epoll for the listen socket
+                let epoll = syscalls::Epoll::new().expect("Acceptor: failed to create epoll");
+                epoll.add(listen_fd, 0, syscalls::EPOLLIN).expect("Acceptor: failed to register listen fd");
+
+                let mut events = vec![syscalls::epoll_event { events: 0, u64: 0 }; 64];
+                let mut next_worker: usize = 0;
+
+                while !shutdown_accept.load(Ordering::Acquire) {
+                    let n = match epoll.wait(&mut events, 500) {
+                        Ok(n) => n,
+                        Err(_) => continue,
+                    };
+
+                    for _ev in 0..n {
+                        // Drain the accept queue
+                        loop {
+                            match syscalls::accept_connection(listen_fd) {
+                                Ok(Some(client_fd)) => {
+                                    // Round-robin to workers
+                                    let target = next_worker % num_workers;
+                                    next_worker = next_worker.wrapping_add(1);
+
+                                    if syscalls::send_fd_over_pipe(pipe_write_fds[target], client_fd).is_err() {
+                                        unsafe { libc::close(client_fd); }
+                                    }
+                                }
+                                Ok(None) => break,  // WouldBlock
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                }
+
+                // Cleanup
+                unsafe { libc::close(listen_fd); }
+                for fd in &pipe_write_fds {
+                    unsafe { libc::close(*fd); }
+                }
+                println!("Acceptor thread exiting.");
+            })?;
+
+        // Wait for all threads
+        let _ = acceptor_handle.join();
         for handle in handles {
             let _ = handle.join();
         }

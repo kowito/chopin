@@ -533,3 +533,57 @@ pub fn writev_nonblocking(fd: c_int, bufs: &[&[u8]]) -> io::Result<usize> {
         }
     }
 }
+
+// ---- Accept-Distribute Pipe Operations ----
+
+/// Create a non-blocking Unix pipe. Returns (read_fd, write_fd).
+pub fn create_pipe() -> io::Result<(c_int, c_int)> {
+    let mut fds = [0 as c_int; 2];
+    unsafe {
+        if libc::pipe(fds.as_mut_ptr()) < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Make read end non-blocking
+        let flags = libc::fcntl(fds[0], libc::F_GETFL, 0);
+        if flags < 0 || libc::fcntl(fds[0], libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            let err = io::Error::last_os_error();
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+            return Err(err);
+        }
+    }
+    Ok((fds[0], fds[1]))
+}
+
+/// Send a client FD over a pipe (blocking write of 4 bytes)
+pub fn send_fd_over_pipe(pipe_write_fd: c_int, client_fd: c_int) -> io::Result<()> {
+    let bytes = client_fd.to_ne_bytes();
+    unsafe {
+        let n = libc::write(pipe_write_fd, bytes.as_ptr() as *const c_void, 4);
+        if n < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Receive a client FD from a pipe (non-blocking read of 4 bytes)
+pub fn recv_fd_from_pipe(pipe_read_fd: c_int) -> io::Result<Option<c_int>> {
+    let mut buf = [0u8; 4];
+    unsafe {
+        let n = libc::read(pipe_read_fd, buf.as_mut_ptr() as *mut c_void, 4);
+        if n < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::WouldBlock {
+                Ok(None)
+            } else {
+                Err(err)
+            }
+        } else if n == 4 {
+            Ok(Some(c_int::from_ne_bytes(buf)))
+        } else {
+            Ok(None) // Partial read, unlikely with 4 bytes
+        }
+    }
+}

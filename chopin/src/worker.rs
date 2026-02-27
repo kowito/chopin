@@ -11,44 +11,33 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct Worker {
     id: usize,
-    host_port: String,
     router: Router,
     metrics: Arc<WorkerMetrics>,
+    pipe_fd: i32, // Read end of pipe from acceptor
 }
 
 impl Worker {
-    pub fn new(id: usize, host_port: String, router: Router, metrics: Arc<WorkerMetrics>) -> Self {
+    pub fn new(id: usize, router: Router, metrics: Arc<WorkerMetrics>, pipe_fd: i32) -> Self {
         Self {
             id,
-            host_port,
             router,
             metrics,
+            pipe_fd,
         }
     }
 
     pub fn run(&mut self, shutdown: Arc<AtomicBool>) {
-        // 1. Create SO_REUSEPORT socket
-        let parts: Vec<&str> = self.host_port.split(':').collect();
-        let port: u16 = parts.get(1).unwrap_or(&"8080").parse().unwrap();
-        let host = parts.get(0).unwrap_or(&"0.0.0.0");
-        
-        let listen_fd = match syscalls::create_listen_socket(host, port) {
-            Ok(fd) => fd,
-            Err(e) => {
-                eprintln!("Worker {} failed to bind: {}", self.id, e);
-                return;
-            }
-        };
-
-        // 2. Setup epoll instance
+        // 1. Setup epoll/kqueue instance
         let epoll = Epoll::new().expect("Failed to create epoll instance");
-        let listen_token = u64::MAX; // Use MAX for the listen socket
-        epoll.add(listen_fd, listen_token, EPOLLIN).expect("Failed to register listen socket");
 
-        // 3. Initialize Slab Allocator
+        // Register the pipe read FD to receive new connections from the acceptor
+        let pipe_token = u64::MAX;
+        epoll.add(self.pipe_fd, pipe_token, EPOLLIN).expect("Failed to register pipe fd");
+
+        // 2. Initialize Slab Allocator
         let mut slab = ConnectionSlab::new(100_000); // 100k connections per core capacity
 
-        println!("Worker {} entering main event loop.", self.id);
+        println!("Worker {} entering main event loop (pipe_fd={}).", self.id, self.pipe_fd);
 
         let mut events = vec![epoll_event { events: 0, u64: 0 }; 1024]; // Process up to 1024 events at once
         
@@ -89,14 +78,14 @@ impl Worker {
                 let is_read = (events[i].events & EPOLLIN as u32) != 0;
                 let is_write = (events[i].events & EPOLLOUT as u32) != 0;
 
-                if token == listen_token {
-                    // Accept loop: drain all pending accept queue entries (Edge Triggered)
+                if token == pipe_token {
+                    // Drain all FDs from the acceptor pipe
                     if shutdown.load(Ordering::Acquire) {
-                        continue; // Do not accept new connections during graceful shutdown
+                        continue;
                     }
-                    
+
                     loop {
-                        match syscalls::accept_connection(listen_fd) {
+                        match syscalls::recv_fd_from_pipe(self.pipe_fd) {
                             Ok(Some(client_fd)) => {
                                 // Add to slab
                                 if let Some(idx) = slab.allocate(client_fd) {
@@ -105,7 +94,6 @@ impl Worker {
                                         slab.free(idx);
                                         unsafe { libc::close(client_fd); }
                                     } else {
-                                        // Wait until EOF or read is available
                                         if let Some(conn) = slab.get_mut(idx) {
                                             conn.state = ConnState::Reading;
                                             conn.last_active = now;
@@ -114,13 +102,12 @@ impl Worker {
                                         }
                                     }
                                 } else {
-                                    // Out of capacity - backpressure.
-                                    // Drop the connection immediately
+                                    // Out of capacity - backpressure
                                     unsafe { libc::close(client_fd); }
                                 }
                             }
-                            Ok(None) => break, // WouldBlock, no more connections to accept right now
-                            Err(_) => break, // Connection reset / failed
+                            Ok(None) => break, // WouldBlock
+                            Err(_) => break,
                         }
                     }
                 } else {
@@ -134,16 +121,18 @@ impl Worker {
                             if let Some(conn) = slab.get_mut(idx) {
                                 match syscalls::read_nonblocking(fd, &mut conn.read_buf) {
                                     Ok(0) => {
-                                        // EOF, client closed
+                                        // EOF - client closed connection
                                         next_state = ConnState::Closing;
                                     }
                                     Ok(n) => {
                                         conn.parse_pos = n as u16;
-                                        conn.state = ConnState::Parsing;
                                         next_state = ConnState::Parsing;
                                     }
+                                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                        // Not ready, keep waiting
+                                    }
                                     Err(_) => {
-                                         next_state = ConnState::Closing;
+                                        next_state = ConnState::Closing;
                                     }
                                 }
                             }
@@ -151,8 +140,10 @@ impl Worker {
 
                         if next_state == ConnState::Parsing {
                             if let Some(conn) = slab.get_mut(idx) {
-                                let slice = &conn.read_buf[..conn.parse_pos as usize];
-                                match crate::parser::parse_request(slice) {
+                                let read_len = conn.parse_pos as usize;
+                                let buf = &conn.read_buf[..read_len];
+                                
+                                match crate::parser::parse_request(buf) {
                                     Ok((req, _consumed)) => {
                                         let mut ctx = crate::http::Context {
                                             req,
@@ -394,7 +385,7 @@ impl Worker {
         }
 
         println!("Worker {} exiting gracefully.", self.id);
-        unsafe { libc::close(listen_fd); }
+        unsafe { libc::close(self.pipe_fd); }
         for i in 0..slab.capacity() {
              if let Some(conn) = slab.get(i) {
                   if conn.state != ConnState::Free {

@@ -23,7 +23,13 @@ fn main() {
 
     // Disable print statements for benchmarking by removing the logger_mw
     // and using max workers for throughput.
+    let workers: usize = std::env::var("WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(num_cpus::get);
+
     Server::bind("0.0.0.0:8080")
+        .workers(workers)
         .serve(router)
         .unwrap();
 }

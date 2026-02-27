@@ -19,24 +19,36 @@ Chopin follows a "Shared-Nothing" model where each CPU core runs a completely in
 
 ```mermaid
 graph TD
-    Client[HTTP Client] --> Kernel[OS Kernel / SO_REUSEPORT]
-    Kernel --> Worker1[Worker Thread 1]
-    Kernel --> Worker2[Worker Thread 2]
+    Client[HTTP Client] --> ListenSock[Single Listen Socket]
+    ListenSock --> Acceptor[Acceptor Thread]
+    Acceptor -->|"round-robin pipe"| Worker1[Worker 0]
+    Acceptor -->|"round-robin pipe"| Worker2[Worker 1]
+    Acceptor -->|"round-robin pipe"| WorkerN[Worker N]
     
-    subgraph Worker[Worker Thread]
-        Loop[Event Loop / kqueue] --> Slab[Connection Slab]
+    subgraph Worker["Worker Thread (Shared-Nothing)"]
+        Pipe[Pipe Read FD] --> Loop[Event Loop / kqueue]
+        Loop --> Slab[Connection Slab]
         Slab --> Parser[Zero-Alloc Parser]
         Parser --> Router[Radix Tree Router]
         Router --> Handler[Request Handler]
         Handler --> Serializer[Raw Byte Serializer]
     end
     
-    Worker1 --> Metrics1[(Worker Metrics 1)]
-    Worker2 --> Metrics2[(Worker Metrics 2)]
+    Worker1 --> Metrics1[(Metrics 1)]
+    Worker2 --> Metrics2[(Metrics 2)]
+    WorkerN --> MetricsN[(Metrics N)]
     
-    Metrics1 --> Aggregator[Metrics Aggregator Thread]
+    Metrics1 --> Aggregator[Metrics Aggregator]
     Metrics2 --> Aggregator
+    MetricsN --> Aggregator
 ```
+
+### 🔀 Accept-Distribute Model
+Unlike traditional `SO_REUSEPORT` (which suffers kernel contention on macOS), Chopin uses a dedicated **Acceptor Thread**:
+1. A single listen socket handles all `accept()` calls
+2. Accepted FDs are sent to workers via **Unix pipes** (round-robin)
+3. Each worker registers the pipe read-end in its kqueue loop
+4. Workers remain **100% independent** after receiving the FD — no shared state
 
 ### 📋 Connection Slab (`src/slab.rs`)
 Chopin manages memory through a pre-allocated **Connection Slab**.
