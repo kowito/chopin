@@ -183,7 +183,21 @@ impl Worker {
                                         let response = match self.router.match_route(ctx.req.method, ctx.req.path) {
                                             Some((handler, params)) => {
                                                 ctx.params = params;
-                                                handler(ctx)
+                                                // Wrap handler execution in panic recovery
+                                                let mw = self.router.global_middleware;
+                                                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                                    if let Some(middleware) = mw {
+                                                        middleware(ctx, *handler)
+                                                    } else {
+                                                        handler(ctx)
+                                                    }
+                                                }));
+                                                match result {
+                                                    Ok(r) => r,
+                                                    Err(_) => {
+                                                        crate::http::Response::internal_error()
+                                                    }
+                                                }
                                             }
                                             None => {
                                                 crate::http::Response::not_found()
@@ -193,11 +207,34 @@ impl Worker {
                                         // Format response
                                         use std::io::Write;
                                         let mut cursor = std::io::Cursor::new(&mut conn.write_buf[..]);
-                                        let _ = write!(cursor, "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n", 
-                                            response.status, response.content_type, response.body.len(),
-                                            if keep_alive { "keep-alive" } else { "close" }
-                                        );
-                                        let _ = cursor.write_all(&response.body);
+                                        let is_chunked = matches!(response.body, crate::http::Body::Stream(_));
+                                        
+                                        if is_chunked {
+                                            let _ = write!(cursor, "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nTransfer-Encoding: chunked\r\nConnection: {}\r\n\r\n", 
+                                                response.status, response.content_type,
+                                                if keep_alive { "keep-alive" } else { "close" }
+                                            );
+                                        } else {
+                                            let _ = write!(cursor, "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n", 
+                                                response.status, response.content_type, response.body.len(),
+                                                if keep_alive { "keep-alive" } else { "close" }
+                                            );
+                                        }
+
+                                        match response.body {
+                                            crate::http::Body::Empty => {}
+                                            crate::http::Body::Bytes(b) => {
+                                                let _ = cursor.write_all(&b);
+                                            }
+                                            crate::http::Body::Stream(mut iter) => {
+                                                for chunk in iter.by_ref() {
+                                                    let _ = write!(cursor, "{:X}\r\n", chunk.len());
+                                                    let _ = cursor.write_all(&chunk);
+                                                    let _ = write!(cursor, "\r\n");
+                                                }
+                                                let _ = write!(cursor, "0\r\n\r\n");
+                                            }
+                                        }
                                         
                                         conn.parse_pos = cursor.position() as u16; // abuse parse_pos for write len
                                         

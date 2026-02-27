@@ -1,22 +1,29 @@
 // examples/hello_json.rs
-use chopin::{Server, Router};
-use chopin::http::{Context, Response};
-// use kowito_json::KJson;
+use chopin::{Server, Router, Context, Response, Json};
+use serde::{Serialize, Deserialize};
 
-// #[derive(KJson)]
-// struct HelloMessage {
-//     message: String,
-// }
+#[derive(Serialize)]
+struct HelloMessage {
+    message: &'static str,
+}
+
+#[derive(Deserialize, Debug)]
+struct UserPayload<'a> {
+    name: &'a str,
+    age: u32,
+}
 
 fn hello_json(_ctx: Context) -> Response {
-    // let msg = HelloMessage { message: "Hello, World!".to_string() };
-    
-    // We would serialize directly into the Response buf in a real zero-allocation app 
-    // but for now we allocate into a vec.
-    // let mut buf = Vec::new();
-    // kowito_json::serialize::write_value(&msg, &mut buf);
-    
     Response::json(br#"{"message":"Hello, World!"}"#)
+}
+
+fn create_user(ctx: Context) -> Response {
+    let Json(payload) = match ctx.extract::<Json<UserPayload>>() {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    
+    Response::ok(format!("Created user '{}' age {}", payload.name, payload.age))
 }
 
 fn hello_text(ctx: Context) -> Response {
@@ -31,10 +38,34 @@ fn hello_text(ctx: Context) -> Response {
     Response::ok(greeting)
 }
 
+fn panic_handler(_ctx: Context) -> Response {
+    panic!("This is a deliberate panic to test recovery!");
+}
+
+fn stream_handler(_ctx: Context) -> Response {
+    let iter = (0..5).map(|i| format!("Chunk {}\n", i).into_bytes());
+    Response::stream(iter)
+}
+
+fn logger_mw(ctx: Context, next: fn(Context) -> Response) -> Response {
+    let method = format!("{:?}", ctx.req.method);
+    let path = ctx.req.path.to_string();
+    let start = std::time::Instant::now();
+    
+    let res = next(ctx);
+    
+    println!("{} {} -> {} in {:?}", method, path, res.status, start.elapsed());
+    res
+}
+
 fn main() {
     let mut router = Router::new();
+    router.wrap(logger_mw);
     router.get("/hello", hello_json);
     router.get("/hello/:name", hello_text);
+    router.post("/users", create_user);
+    router.get("/stream", stream_handler);
+    router.get("/panic", panic_handler);
 
     println!("Starting Chopin on 0.0.0.0:8082...");
     Server::bind("0.0.0.0:8082")

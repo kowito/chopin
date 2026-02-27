@@ -4,6 +4,8 @@ use crate::http::{Method, Context, Response};
 
 pub type Handler = fn(Context) -> Response;
 
+pub type MiddlewareFn = fn(Context, Handler) -> Response;
+
 #[derive(Clone)]
 pub struct RouteNode {
     pub path: String,
@@ -30,12 +32,14 @@ impl RouteNode {
 #[derive(Clone)]
 pub struct Router {
     pub root: RouteNode,
+    pub global_middleware: Option<MiddlewareFn>,
 }
 
 impl Router {
     pub fn new() -> Self {
         Self {
             root: RouteNode::new(String::new()),
+            global_middleware: None,
         }
     }
 
@@ -141,6 +145,9 @@ impl Router {
         None
     }
     
+    // Middleware methods
+    pub fn wrap(&mut self, mw: MiddlewareFn) { self.global_middleware = Some(mw); }
+
     // Convenience methods
     pub fn get(&mut self, path: &str, handler: Handler) { self.add(Method::Get, path, handler); }
     pub fn post(&mut self, path: &str, handler: Handler) { self.add(Method::Post, path, handler); }

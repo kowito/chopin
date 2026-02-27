@@ -30,9 +30,33 @@ pub struct Request<'a> {
     pub body: &'a [u8],
 }
 
+pub enum Body {
+    Empty,
+    Bytes(Vec<u8>),
+    Stream(Box<dyn Iterator<Item = Vec<u8>> + Send>),
+}
+
+impl Body {
+    pub fn len(&self) -> usize {
+        match self {
+            Body::Empty => 0,
+            Body::Bytes(b) => b.len(),
+            Body::Stream(_) => 0, // Chunked has no predefined length
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Body::Empty => &[],
+            Body::Bytes(b) => b.as_slice(),
+            Body::Stream(_) => &[], // Streams must be polled/chunked iteratively
+        }
+    }
+}
+
 pub struct Response {
     pub status: u16,
-    pub body: Vec<u8>,
+    pub body: Body,
     pub content_type: &'static str,
 }
 
@@ -40,7 +64,7 @@ impl Response {
     pub fn ok(body: impl Into<Vec<u8>>) -> Self {
         Self {
             status: 200,
-            body: body.into(),
+            body: Body::Bytes(body.into()),
             content_type: "text/plain",
         }
     }
@@ -48,7 +72,7 @@ impl Response {
     pub fn json(body: impl Into<Vec<u8>>) -> Self {
         Self {
             status: 200,
-            body: body.into(),
+            body: Body::Bytes(body.into()),
             content_type: "application/json",
         }
     }
@@ -56,8 +80,24 @@ impl Response {
     pub fn not_found() -> Self {
         Self {
             status: 404,
-            body: b"Not Found".to_vec(),
+            body: Body::Bytes(b"Not Found".to_vec()),
             content_type: "text/plain",
+        }
+    }
+
+    pub fn internal_error() -> Self {
+        Self {
+            status: 500,
+            body: Body::Bytes(b"Internal Server Error".to_vec()),
+            content_type: "text/plain",
+        }
+    }
+
+    pub fn stream(iter: impl Iterator<Item = Vec<u8>> + Send + 'static) -> Self {
+        Self {
+            status: 200,
+            body: Body::Stream(Box::new(iter)),
+            content_type: "application/octet-stream",
         }
     }
 }
@@ -65,4 +105,10 @@ impl Response {
 pub struct Context<'a> {
     pub req: Request<'a>,
     pub params: HashMap<String, String>, // Dynamic route parameters
+}
+
+impl<'a> Context<'a> {
+    pub fn extract<T: crate::extract::FromRequest<'a>>(&'a self) -> Result<T, T::Error> {
+        T::from_request(self)
+    }
 }
