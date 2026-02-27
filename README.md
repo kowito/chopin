@@ -30,6 +30,30 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling poten
 - **Panic Resilience**: `catch_unwind` protection ensures a handler panic doesn't crash the worker thread.
 - **Production-Ready**: Default HTTP/1.1 keep-alive, graceful shutdown, and O(1) connection pruning.
 
+## 🛠️ Usage Example
+
+```rust
+use chopin::{Server, Router, Context, Response, KJson};
+
+#[derive(KJson, Default)]
+struct User {
+    id: u64,
+    username: String,
+}
+
+fn user_handler(ctx: Context) -> Response {
+    let user = User { id: 1, username: "kowito".into() };
+    ctx.respond_json(&user) // Turbo-charged Schema-JIT serialization
+}
+
+fn main() {
+    let mut router = Router::new();
+    router.get("/user", user_handler);
+    
+    Server::bind("0.0.0.0:8080").serve(router).unwrap();
+}
+```
+
 ## 📊 Performance Benchmark (macOS Apple Silicon)
 
 | Framework | Endpoint | Throughput | Latency (Avg) |

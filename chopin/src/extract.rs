@@ -18,7 +18,7 @@ where
 
     fn from_request(ctx: &'a Context<'a>) -> Result<Self, Self::Error> {
         // Use kowito-json's fast scanner for validation before deserializing
-        let scanner = kowito_json::scanner::Scanner::new(ctx.req.body);
+        let scanner = crate::json::Scanner::new(ctx.req.body);
         let mut tape = [0u32; 1024]; // Stack-allocated tape
         let tokens = scanner.scan(&mut tape);
         if tokens == 0 && !ctx.req.body.is_empty() {

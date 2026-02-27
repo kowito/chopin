@@ -141,4 +141,8 @@ impl<'a> Context<'a> {
     pub fn extract<T: crate::extract::FromRequest<'a>>(&'a self) -> Result<T, T::Error> {
         T::from_request(self)
     }
+
+    pub fn respond_json<T: crate::json::Serialize>(&self, val: &T) -> Response {
+        Response::json_fast(val)
+    }
 }

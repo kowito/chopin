@@ -6,9 +6,9 @@ struct Message {
     message: &'static str,
 }
 
-fn json_handler(_ctx: Context) -> Response {
+fn json_handler(ctx: Context) -> Response {
     let msg = Message { message: "Hello, World!" };
-    Response::json_fast(&msg)
+    ctx.respond_json(&msg)
         .header("Server", "Chopin/Kowito")
 }
 
