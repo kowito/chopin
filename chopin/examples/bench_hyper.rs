@@ -11,23 +11,25 @@ use tokio::net::TcpListener;
 async fn handle(req: Request<impl hyper::body::Body>) -> Result<Response<Full<Bytes>>, Infallible> {
     match req.uri().path() {
         "/json" => {
+            let date = httpdate::fmt_http_date(std::time::SystemTime::now());
             let body = Full::new(Bytes::from(r#"{"message":"Hello, World!"}"#));
             let res = Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
                 .header("Server", "Example")
-                .header("Date", "Wed, 17 Apr 2013 12:00:00 GMT")
+                .header("Date", date)
                 .body(body)
                 .unwrap();
             Ok(res)
         }
         "/plain" => {
+            let date = httpdate::fmt_http_date(std::time::SystemTime::now());
             let body = Full::new(Bytes::from("Hello, World!"));
             let res = Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/plain; charset=UTF-8")
                 .header("Server", "Example")
-                .header("Date", "Wed, 17 Apr 2013 12:00:00 GMT")
+                .header("Date", date)
                 .body(body)
                 .unwrap();
             Ok(res)

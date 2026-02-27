@@ -2,16 +2,18 @@
 use chopin::{Server, Router, Context, Response};
 
 fn json_handler(_ctx: Context) -> Response {
+    let date = httpdate::fmt_http_date(std::time::SystemTime::now());
     Response::json(br#"{"message":"Hello, World!"}"#)
         .header("Server", "Example")
-        .header("Date", "Wed, 17 Apr 2013 12:00:00 GMT")
+        .header("Date", date)
 }
 
 fn plain_handler(_ctx: Context) -> Response {
+    let date = httpdate::fmt_http_date(std::time::SystemTime::now());
     let mut res = Response::ok("Hello, World!");
     res.content_type = "text/plain; charset=UTF-8";
     res.header("Server", "Example")
-       .header("Date", "Wed, 17 Apr 2013 12:00:00 GMT")
+       .header("Date", date)
 }
 
 fn main() {
