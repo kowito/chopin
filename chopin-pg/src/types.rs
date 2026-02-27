@@ -153,6 +153,12 @@ impl<T: ToParam> ToParam for Option<T> {
     }
 }
 
+impl ToParam for PgValue {
+    fn to_param(&self) -> PgValue {
+        self.clone()
+    }
+}
+
 /// Decode PostgreSQL hex-format bytea (\\x prefix).
 fn decode_bytea_hex(s: &str) -> Vec<u8> {
     if let Some(hex) = s.strip_prefix("\\x") {
