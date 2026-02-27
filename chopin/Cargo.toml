@@ -18,3 +18,7 @@ hyper = { version = "1.4.1", features = ["full"] }
 tokio = { version = "1.40.0", features = ["full"] }
 http-body-util = "0.1.2"
 hyper-util = { version = "0.1.7", features = ["full"] }
+chopin-pg = { path = "../chopin-pg" }
+chopin-orm = { path = "../chopin-orm" }
+kowito-json = { path = "../../kowito-json" }
+lazy_static = "1.4.0"

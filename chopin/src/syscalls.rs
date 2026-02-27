@@ -1,19 +1,30 @@
 // src/syscalls.rs
 use crate::error::ChopinResult;
-use libc::{c_int, c_void, sockaddr, sockaddr_in, socklen_t};
+use libc::{c_int, c_void, socklen_t};
 use std::io;
 use std::mem;
-use std::net::Ipv4Addr;
 use std::ptr;
 
 // ---- Socket Operations ----
 
 /// Create a non-blocking TCP server socket with SO_REUSEPORT (crucial for per-core binding)
 pub fn create_listen_socket(host: &str, port: u16) -> ChopinResult<c_int> {
+    let addr_str = format!("{}:{}", host, port);
+    let addr: std::net::SocketAddr = addr_str
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+
+    let is_ipv6 = matches!(addr, std::net::SocketAddr::V6(_));
+    let domain = if is_ipv6 {
+        libc::AF_INET6
+    } else {
+        libc::AF_INET
+    };
+
     #[cfg(target_os = "linux")]
     unsafe {
         // 1. Create socket
-        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_NONBLOCK, 0);
+        let fd = libc::socket(domain, libc::SOCK_STREAM | libc::SOCK_NONBLOCK, 0);
         if fd < 0 {
             return Err(io::Error::last_os_error().into());
         }
@@ -34,39 +45,48 @@ pub fn create_listen_socket(host: &str, port: u16) -> ChopinResult<c_int> {
         }
 
         // 3. Bind
-        let ip: Ipv4Addr = host
-            .parse()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        #[cfg(target_os = "macos")]
-        let addr = sockaddr_in {
-            sin_len: mem::size_of::<sockaddr_in>() as u8,
-            sin_family: libc::AF_INET as libc::sa_family_t,
-            sin_port: port.to_be(),
-            sin_addr: libc::in_addr {
-                s_addr: u32::from(ip).to_be(),
-            },
-            sin_zero: [0; 8],
-        };
-
-        #[cfg(not(target_os = "macos"))]
-        let addr = sockaddr_in {
-            sin_family: libc::AF_INET as libc::sa_family_t,
-            sin_port: port.to_be(),
-            sin_addr: libc::in_addr {
-                s_addr: u32::from(ip).to_be(),
-            },
-            sin_zero: [0; 8],
-        };
-
-        if libc::bind(
-            fd,
-            &addr as *const _ as *const sockaddr,
-            mem::size_of_val(&addr) as socklen_t,
-        ) < 0
-        {
-            let err = io::Error::last_os_error();
-            libc::close(fd);
-            return Err(err.into());
+        match addr {
+            std::net::SocketAddr::V4(a) => {
+                let sin = libc::sockaddr_in {
+                    sin_family: libc::AF_INET as libc::sa_family_t,
+                    sin_port: a.port().to_be(),
+                    sin_addr: libc::in_addr {
+                        s_addr: u32::from_ne_bytes(a.ip().octets()),
+                    },
+                    sin_zero: [0; 8],
+                };
+                if libc::bind(
+                    fd,
+                    &sin as *const _ as *const libc::sockaddr,
+                    mem::size_of_val(&sin) as socklen_t,
+                ) < 0
+                {
+                    let err = io::Error::last_os_error();
+                    libc::close(fd);
+                    return Err(err.into());
+                }
+            }
+            std::net::SocketAddr::V6(a) => {
+                let sin6 = libc::sockaddr_in6 {
+                    sin6_family: libc::AF_INET6 as libc::sa_family_t,
+                    sin6_port: a.port().to_be(),
+                    sin6_flowinfo: a.flowinfo(),
+                    sin6_addr: libc::in6_addr {
+                        s6_addr: a.ip().octets(),
+                    },
+                    sin6_scope_id: a.scope_id(),
+                };
+                if libc::bind(
+                    fd,
+                    &sin6 as *const _ as *const libc::sockaddr,
+                    mem::size_of_val(&sin6) as socklen_t,
+                ) < 0
+                {
+                    let err = io::Error::last_os_error();
+                    libc::close(fd);
+                    return Err(err.into());
+                }
+            }
         }
 
         // 4. Listen
@@ -83,7 +103,7 @@ pub fn create_listen_socket(host: &str, port: u16) -> ChopinResult<c_int> {
     #[cfg(target_os = "macos")]
     unsafe {
         // 1. Create socket
-        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        let fd = libc::socket(domain, libc::SOCK_STREAM, 0);
         if fd < 0 {
             return Err(io::Error::last_os_error().into());
         }
@@ -112,28 +132,50 @@ pub fn create_listen_socket(host: &str, port: u16) -> ChopinResult<c_int> {
         }
 
         // 3. Bind
-        let ip: Ipv4Addr = host
-            .parse()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        let addr = sockaddr_in {
-            sin_len: mem::size_of::<sockaddr_in>() as u8,
-            sin_family: libc::AF_INET as libc::sa_family_t,
-            sin_port: port.to_be(),
-            sin_addr: libc::in_addr {
-                s_addr: u32::from(ip).to_be(),
-            },
-            sin_zero: [0; 8],
-        };
-
-        if libc::bind(
-            fd,
-            &addr as *const _ as *const sockaddr,
-            mem::size_of_val(&addr) as socklen_t,
-        ) < 0
-        {
-            let err = io::Error::last_os_error();
-            libc::close(fd);
-            return Err(err.into());
+        match addr {
+            std::net::SocketAddr::V4(a) => {
+                let sin = libc::sockaddr_in {
+                    sin_len: mem::size_of::<libc::sockaddr_in>() as u8,
+                    sin_family: libc::AF_INET as libc::sa_family_t,
+                    sin_port: a.port().to_be(),
+                    sin_addr: libc::in_addr {
+                        s_addr: u32::from_ne_bytes(a.ip().octets()),
+                    },
+                    sin_zero: [0; 8],
+                };
+                if libc::bind(
+                    fd,
+                    &sin as *const _ as *const libc::sockaddr,
+                    mem::size_of_val(&sin) as socklen_t,
+                ) < 0
+                {
+                    let err = io::Error::last_os_error();
+                    libc::close(fd);
+                    return Err(err.into());
+                }
+            }
+            std::net::SocketAddr::V6(a) => {
+                let sin6 = libc::sockaddr_in6 {
+                    sin6_len: mem::size_of::<libc::sockaddr_in6>() as u8,
+                    sin6_family: libc::AF_INET6 as libc::sa_family_t,
+                    sin6_port: a.port().to_be(),
+                    sin6_flowinfo: a.flowinfo(),
+                    sin6_addr: libc::in6_addr {
+                        s6_addr: a.ip().octets(),
+                    },
+                    sin6_scope_id: a.scope_id(),
+                };
+                if libc::bind(
+                    fd,
+                    &sin6 as *const _ as *const libc::sockaddr,
+                    mem::size_of_val(&sin6) as socklen_t,
+                ) < 0
+                {
+                    let err = io::Error::last_os_error();
+                    libc::close(fd);
+                    return Err(err.into());
+                }
+            }
         }
 
         // 4. Listen
@@ -147,64 +189,114 @@ pub fn create_listen_socket(host: &str, port: u16) -> ChopinResult<c_int> {
     }
 }
 
+/// Create a maximally-optimized TCP listener with SO_REUSEPORT.
+///
+/// Platform optimizations:
+/// - **Both**: SO_REUSEADDR, SO_REUSEPORT, TCP_NODELAY (inherited by accepted sockets)
+/// - **Linux**: SOCK_NONBLOCK (atomic), TCP_DEFER_ACCEPT, TCP_FASTOPEN
+/// - **macOS**: SO_NOSIGPIPE, TCP_FASTOPEN
 pub fn create_listen_socket_reuseport(host: &str, port: u16) -> ChopinResult<c_int> {
+    let addr_str = format!("{}:{}", host, port);
+    let addr: std::net::SocketAddr = addr_str
+        .parse()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Invalid address"))?;
+
+    let is_ipv6 = matches!(addr, std::net::SocketAddr::V6(_));
+    let domain = if is_ipv6 { libc::AF_INET6 } else { libc::AF_INET };
+
+    #[cfg(target_os = "linux")]
     unsafe {
-        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        // 1. Atomic non-blocking socket (saves 2 fcntl syscalls vs macOS path)
+        let fd = libc::socket(domain, libc::SOCK_STREAM | libc::SOCK_NONBLOCK, 0);
         if fd < 0 {
             return Err(io::Error::last_os_error().into());
         }
 
-        // Set non-blocking
-        let flags = libc::fcntl(fd, libc::F_GETFL, 0);
-        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-
         let one: c_int = 1;
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_REUSEADDR,
-            &one as *const _ as *const c_void,
-            mem::size_of_val(&one) as socklen_t,
-        );
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_REUSEPORT,
-            &one as *const _ as *const c_void,
-            mem::size_of_val(&one) as socklen_t,
-        );
 
-        let addr_str = format!("{}:{}", host, port);
-        let addr: std::net::SocketAddr = addr_str
-            .parse()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Invalid address"))?;
-
-        match addr {
-            std::net::SocketAddr::V4(a) => {
-                let sin = libc::sockaddr_in {
-                    sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,
-                    sin_family: libc::AF_INET as libc::sa_family_t,
-                    sin_port: a.port().to_be(),
-                    sin_addr: libc::in_addr {
-                        s_addr: u32::from_ne_bytes(a.ip().octets()),
-                    },
-                    sin_zero: [0; 8],
-                };
-
-                if libc::bind(
-                    fd,
-                    &sin as *const _ as *const libc::sockaddr,
-                    std::mem::size_of_val(&sin) as libc::socklen_t,
-                ) < 0
-                {
-                    let err = io::Error::last_os_error();
-                    libc::close(fd);
-                    return Err(err.into());
-                }
-            }
-            _ => panic!("IPv6 not supported"),
+        // 2. SO_REUSEADDR + SO_REUSEPORT for per-worker binding
+        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR,
+            &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t);
+        if libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEPORT,
+            &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t) < 0 {
+            let err = io::Error::last_os_error();
+            libc::close(fd);
+            return Err(err.into());
         }
 
+        // 3. TCP_NODELAY on listener — inherited by all accepted sockets (eliminates per-accept setsockopt)
+        libc::setsockopt(fd, libc::IPPROTO_TCP, libc::TCP_NODELAY,
+            &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t);
+
+        // 4. TCP_DEFER_ACCEPT — kernel holds connection until data arrives (reduces idle accept wakeups)
+        let defer_secs: c_int = 1;
+        libc::setsockopt(fd, libc::IPPROTO_TCP, libc::TCP_DEFER_ACCEPT,
+            &defer_secs as *const _ as *const c_void, mem::size_of_val(&defer_secs) as socklen_t);
+
+        // 5. TCP_FASTOPEN — enable TFO with a queue of 256 pending connections
+        let tfo_queue: c_int = 256;
+        libc::setsockopt(fd, libc::IPPROTO_TCP, libc::TCP_FASTOPEN,
+            &tfo_queue as *const _ as *const c_void, mem::size_of_val(&tfo_queue) as socklen_t);
+
+        // 6. Bind
+        bind_addr(fd, &addr)?;
+
+        // 7. Listen with aggressive backlog
+        if libc::listen(fd, 8192) < 0 {
+            let err = io::Error::last_os_error();
+            libc::close(fd);
+            return Err(err.into());
+        }
+
+        Ok(fd)
+    }
+
+    #[cfg(target_os = "macos")]
+    unsafe {
+        // 1. Create socket
+        let fd = libc::socket(domain, libc::SOCK_STREAM, 0);
+        if fd < 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+
+        // 2. Set non-blocking (macOS lacks SOCK_NONBLOCK)
+        let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+        if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            let err = io::Error::last_os_error();
+            libc::close(fd);
+            return Err(err.into());
+        }
+
+        let one: c_int = 1;
+
+        // 3. SO_REUSEADDR + SO_REUSEPORT
+        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR,
+            &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t);
+        if libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEPORT,
+            &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t) < 0 {
+            let err = io::Error::last_os_error();
+            libc::close(fd);
+            return Err(err.into());
+        }
+
+        // 4. SO_NOSIGPIPE — prevent SIGPIPE on broken connections (macOS has no MSG_NOSIGNAL)
+        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_NOSIGPIPE,
+            &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t);
+
+        // 5. TCP_NODELAY on listener — inherited by accepted sockets
+        libc::setsockopt(fd, libc::IPPROTO_TCP, libc::TCP_NODELAY,
+            &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t);
+
+        // 6. TCP_FASTOPEN (macOS uses connectx-style TFO, value 0x105)
+        const TCP_FASTOPEN_MACOS: c_int = 0x105;
+        let tfo_enable: c_int = 1;
+        libc::setsockopt(fd, libc::IPPROTO_TCP, TCP_FASTOPEN_MACOS,
+            &tfo_enable as *const _ as *const c_void, mem::size_of_val(&tfo_enable) as socklen_t);
+
+        // 7. Bind
+        bind_addr(fd, &addr)?;
+
+        // 8. Listen
         if libc::listen(fd, libc::SOMAXCONN) < 0 {
             let err = io::Error::last_os_error();
             libc::close(fd);
@@ -214,6 +306,68 @@ pub fn create_listen_socket_reuseport(host: &str, port: u16) -> ChopinResult<c_i
         Ok(fd)
     }
 }
+
+/// Bind a socket to an address (shared between platforms).
+fn bind_addr(fd: c_int, addr: &std::net::SocketAddr) -> ChopinResult<()> {
+    unsafe {
+        match addr {
+            std::net::SocketAddr::V4(a) => {
+                #[cfg(target_os = "macos")]
+                let sin = libc::sockaddr_in {
+                    sin_len: mem::size_of::<libc::sockaddr_in>() as u8,
+                    sin_family: libc::AF_INET as libc::sa_family_t,
+                    sin_port: a.port().to_be(),
+                    sin_addr: libc::in_addr {
+                        s_addr: u32::from_ne_bytes(a.ip().octets()),
+                    },
+                    sin_zero: [0; 8],
+                };
+                #[cfg(target_os = "linux")]
+                let sin = libc::sockaddr_in {
+                    sin_family: libc::AF_INET as libc::sa_family_t,
+                    sin_port: a.port().to_be(),
+                    sin_addr: libc::in_addr {
+                        s_addr: u32::from_ne_bytes(a.ip().octets()),
+                    },
+                    sin_zero: [0; 8],
+                };
+                if libc::bind(fd, &sin as *const _ as *const libc::sockaddr,
+                    mem::size_of_val(&sin) as socklen_t) < 0 {
+                    let err = io::Error::last_os_error();
+                    libc::close(fd);
+                    return Err(err.into());
+                }
+            }
+            std::net::SocketAddr::V6(a) => {
+                #[cfg(target_os = "macos")]
+                let sin6 = libc::sockaddr_in6 {
+                    sin6_len: mem::size_of::<libc::sockaddr_in6>() as u8,
+                    sin6_family: libc::AF_INET6 as libc::sa_family_t,
+                    sin6_port: a.port().to_be(),
+                    sin6_flowinfo: a.flowinfo(),
+                    sin6_addr: libc::in6_addr { s6_addr: a.ip().octets() },
+                    sin6_scope_id: a.scope_id(),
+                };
+                #[cfg(target_os = "linux")]
+                let sin6 = libc::sockaddr_in6 {
+                    sin6_family: libc::AF_INET6 as libc::sa_family_t,
+                    sin6_port: a.port().to_be(),
+                    sin6_flowinfo: a.flowinfo(),
+                    sin6_addr: libc::in6_addr { s6_addr: a.ip().octets() },
+                    sin6_scope_id: a.scope_id(),
+                };
+                if libc::bind(fd, &sin6 as *const _ as *const libc::sockaddr,
+                    mem::size_of_val(&sin6) as socklen_t) < 0 {
+                    let err = io::Error::last_os_error();
+                    libc::close(fd);
+                    return Err(err.into());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 
 /// Accept a non-blocking connection
 pub fn accept_connection(listen_fd: c_int) -> ChopinResult<Option<c_int>> {
@@ -234,15 +388,7 @@ pub fn accept_connection(listen_fd: c_int) -> ChopinResult<Option<c_int>> {
                 Err(err.into())
             }
         } else {
-            // Disable Nagle's algorithm for lower latency
-            let optval: c_int = 1;
-            libc::setsockopt(
-                fd,
-                libc::IPPROTO_TCP,
-                libc::TCP_NODELAY,
-                &optval as *const _ as *const c_void,
-                mem::size_of_val(&optval) as socklen_t,
-            );
+            // TCP_NODELAY is inherited from the listener socket
             Ok(Some(fd))
         }
     }
@@ -261,7 +407,7 @@ pub fn accept_connection(listen_fd: c_int) -> ChopinResult<Option<c_int>> {
                 Err(err.into())
             }
         } else {
-            // Set O_NONBLOCK manually since macos lacks accept4
+            // Set O_NONBLOCK manually since macOS lacks accept4
             let flags = libc::fcntl(fd, libc::F_GETFL, 0);
             if flags < 0 {
                 let err = io::Error::last_os_error();
@@ -274,15 +420,12 @@ pub fn accept_connection(listen_fd: c_int) -> ChopinResult<Option<c_int>> {
                 return Err(err.into());
             }
 
-            // Disable Nagle's algorithm for lower latency
-            let optval: c_int = 1;
-            libc::setsockopt(
-                fd,
-                libc::IPPROTO_TCP,
-                libc::TCP_NODELAY,
-                &optval as *const _ as *const c_void,
-                mem::size_of_val(&optval) as socklen_t,
-            );
+            // SO_NOSIGPIPE on accepted socket (macOS has no MSG_NOSIGNAL)
+            let one: c_int = 1;
+            libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_NOSIGPIPE,
+                &one as *const _ as *const c_void, mem::size_of_val(&one) as socklen_t);
+
+            // TCP_NODELAY is inherited from the listener socket
             Ok(Some(fd))
         }
     }
@@ -442,28 +585,31 @@ mod macos_epoll {
             interests: i32,
             action: u16,
         ) -> ChopinResult<()> {
-            let mut changes = Vec::new();
+            let mut changes = [unsafe { std::mem::zeroed::<kevent>() }; 2];
+            let mut n = 0;
 
             if (interests & EPOLLIN) != 0 || action == EV_DELETE {
-                changes.push(kevent {
+                changes[n] = kevent {
                     ident: fd as usize,
                     filter: EVFILT_READ,
                     flags: action,
                     fflags: 0,
                     data: 0,
                     udata: token as *mut c_void,
-                });
+                };
+                n += 1;
             }
 
             if (interests & EPOLLOUT) != 0 || action == EV_DELETE {
-                changes.push(kevent {
+                changes[n] = kevent {
                     ident: fd as usize,
                     filter: EVFILT_WRITE,
                     flags: action,
                     fflags: 0,
                     data: 0,
                     udata: token as *mut c_void,
-                });
+                };
+                n += 1;
             }
 
             unsafe {
@@ -471,7 +617,7 @@ mod macos_epoll {
                 let res = libc::kevent(
                     self.fd,
                     changes.as_ptr(),
-                    changes.len() as c_int,
+                    n as c_int,
                     ptr::null_mut(),
                     0,
                     ptr::null(),
@@ -485,7 +631,9 @@ mod macos_epoll {
         }
 
         pub fn wait(&self, events: &mut [epoll_event], timeout_ms: i32) -> ChopinResult<usize> {
-            let mut kevents = vec![unsafe { std::mem::zeroed::<kevent>() }; events.len()];
+            const MAX_BATCH: usize = 128; // Stack-allocated buffer for kevents
+            let mut kevents = [unsafe { std::mem::zeroed::<kevent>() }; MAX_BATCH];
+            let batch_size = events.len().min(MAX_BATCH);
 
             let ts = if timeout_ms >= 0 {
                 Some(timespec {
@@ -507,7 +655,7 @@ mod macos_epoll {
                     ptr::null(),
                     0,
                     kevents.as_mut_ptr(),
-                    kevents.len() as c_int,
+                    batch_size as c_int,
                     ts_ptr,
                 );
 

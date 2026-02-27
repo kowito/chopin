@@ -1,7 +1,7 @@
 // src/server.rs
 use crate::error::ChopinError;
 use crate::router::Router;
-use crate::syscalls;
+use crate::syscalls::{self};
 use crate::worker::Worker;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +28,15 @@ impl Server {
     pub fn serve(self, router: Router) -> crate::error::ChopinResult<()> {
         let core_ids = core_affinity::get_core_ids().unwrap_or_default();
         let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+        let shutdown_signal = shutdown_flag.clone();
+        ctrlc::set_handler(move || {
+            println!(
+                "\n[Chopin] Received shutdown signal. Draining active connections neutrally..."
+            );
+            shutdown_signal.store(true, Ordering::Release);
+        })
+        .expect("Error setting Ctrl-C handler");
 
         let mut worker_metrics = Vec::with_capacity(self.workers);
         for _ in 0..self.workers {
@@ -62,17 +71,19 @@ impl Server {
         let Parts { host, port } = parse_host_port(&self.host_port)?;
 
         println!(
-            "Starting {} workers with SO_REUSEPORT (Independent Listeners)",
+            "Starting {} workers with SO_REUSEPORT (Linear Scaling)",
             self.workers
         );
 
-        let mut handles = Vec::with_capacity(self.workers);
-        for (i, metrics_worker) in worker_metrics.iter().enumerate().take(self.workers) {
+        let mut handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(self.workers);
+        for i in 0..self.workers {
             let core_id = core_ids.get(i % core_ids.len()).copied();
             let router_clone = router.clone();
             let shutdown = shutdown_flag.clone();
-            let metrics_worker = metrics_worker.clone();
+            let metrics_worker = worker_metrics[i].clone();
+
             let host_clone = host.clone();
+            let port_clone = port;
 
             let handle = thread::Builder::new()
                 .name(format!("chopin-worker-{}", i))
@@ -81,21 +92,20 @@ impl Server {
                         core_affinity::set_for_current(id);
                     }
 
-                    // Create its own listener with REUSEPORT
-                    let listen_fd =
-                        match syscalls::create_listen_socket_reuseport(&host_clone, port) {
-                            Ok(fd) => fd,
-                            Err(e) => {
-                                eprintln!("Worker {} failed to bind socket: {}", i, e);
-                                return;
+                    // Create dedicated SO_REUSEPORT listener for this worker
+                    match syscalls::create_listen_socket_reuseport(&host_clone, port_clone) {
+                        Ok(listen_fd) => {
+                            let mut worker = Worker::new(i, router_clone, metrics_worker, listen_fd);
+                            if let Err(e) = worker.run(shutdown) {
+                                eprintln!("Worker {} exited with error: {}", i, e);
                             }
-                        };
-                    let mut worker = Worker::new(i, router_clone, metrics_worker, listen_fd);
-                    if let Err(e) = worker.run(shutdown) {
-                        eprintln!("Worker {} exited with error: {}", i, e);
-                    }
-                    unsafe {
-                        libc::close(listen_fd);
+                            unsafe {
+                                libc::close(listen_fd);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Worker {} failed to create SO_REUSEPORT socket: {}", i, e);
+                        }
                     }
                 })
                 .map_err(ChopinError::from)?;

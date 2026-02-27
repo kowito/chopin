@@ -14,7 +14,7 @@ pub struct Worker {
     id: usize,
     router: Router,
     metrics: Arc<WorkerMetrics>,
-    listen_fd: i32, // Shared listen socket
+    listen_fd: i32, // Dedicated SO_REUSEPORT listener
 }
 
 impl Worker {
@@ -34,7 +34,7 @@ impl Worker {
             e
         })?;
 
-        // Register the shared listen socket
+        // Register the listen fd
         let listen_token = u64::MAX;
         if let Err(e) = epoll.add(self.listen_fd, listen_token, EPOLLIN) {
             eprintln!("Worker {} failed to register listen fd: {}", self.id, e);
@@ -61,7 +61,11 @@ impl Worker {
         let mut last_prune = now;
         let mut iter_count: u32 = 0;
 
-        while !shutdown.load(Ordering::Acquire) {
+        loop {
+            let is_shutting_down = shutdown.load(Ordering::Acquire);
+            if is_shutting_down && slab.is_empty() {
+                break;
+            }
             iter_count = iter_count.wrapping_add(1);
 
             // Only update time and prune every 1024 iterations or after wait
@@ -87,25 +91,15 @@ impl Worker {
                 let is_write = (event.events & EPOLLOUT as u32) != 0;
 
                 if token == listen_token {
-                    // Shared accept loop
-                    if shutdown.load(Ordering::Acquire) {
+                    // Direct accept (SO_REUSEPORT)
+                    if is_shutting_down {
                         continue;
                     }
 
                     loop {
                         match syscalls::accept_connection(self.listen_fd) {
                             Ok(Some(client_fd)) => {
-                                // Enable TCP_NODELAY
-                                unsafe {
-                                    let one: libc::c_int = 1;
-                                    libc::setsockopt(
-                                        client_fd,
-                                        libc::IPPROTO_TCP,
-                                        libc::TCP_NODELAY,
-                                        &one as *const _ as *const libc::c_void,
-                                        std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-                                    );
-                                }
+                                // TCP_NODELAY + SO_NOSIGPIPE are inherited from the listener
                                 // Add to slab
                                 if let Ok(idx) = slab.allocate(client_fd) {
                                     // Register with epoll
@@ -129,7 +123,7 @@ impl Worker {
                                     }
                                 }
                             }
-                            Ok(None) => break, // WouldBlock (another worker likely took it)
+                            Ok(None) => break, // WouldBlock
                             Err(_) => break,
                         }
                     }
@@ -141,23 +135,36 @@ impl Worker {
                         let mut next_state = conn_ref.state;
 
                         if is_read && let Some(conn) = slab.get_mut(idx) {
-                            match syscalls::read_nonblocking(fd, &mut conn.read_buf) {
-                                Ok(0) => {
-                                    // EOF - client closed connection
-                                    next_state = ConnState::Closing;
+                            let read_start = conn.parse_pos as usize;
+                            if read_start < conn.read_buf.len() {
+                                match syscalls::read_nonblocking(
+                                    fd,
+                                    &mut conn.read_buf[read_start..],
+                                ) {
+                                    Ok(0) => {
+                                        // EOF - client closed connection (if no data read)
+                                        if read_start == 0 {
+                                            next_state = ConnState::Closing;
+                                        } else {
+                                            next_state = ConnState::Parsing;
+                                        }
+                                    }
+                                    Ok(n) => {
+                                        conn.parse_pos += n as u16;
+                                        next_state = ConnState::Parsing;
+                                    }
+                                    Err(ChopinError::Io(ref e))
+                                        if e.kind() == std::io::ErrorKind::WouldBlock =>
+                                    {
+                                        // Not ready, keep waiting
+                                    }
+                                    Err(_) => {
+                                        next_state = ConnState::Closing;
+                                    }
                                 }
-                                Ok(n) => {
-                                    conn.parse_pos = n as u16;
-                                    next_state = ConnState::Parsing;
-                                }
-                                Err(ChopinError::Io(ref e))
-                                    if e.kind() == std::io::ErrorKind::WouldBlock =>
-                                {
-                                    // Not ready, keep waiting
-                                }
-                                Err(_) => {
-                                    next_state = ConnState::Closing;
-                                }
+                            } else {
+                                // Buffer too full, can't read more without blowing up
+                                next_state = ConnState::Closing;
                             }
                         }
 
@@ -165,7 +172,7 @@ impl Worker {
                             && let Some(conn) = slab.get_mut(idx)
                         {
                             let read_len = conn.parse_pos as usize;
-                            let buf = &conn.read_buf[..read_len];
+                            let buf = &mut conn.read_buf[..read_len];
 
                             match crate::parser::parse_request(buf) {
                                 Ok((req, _consumed)) => {
@@ -175,24 +182,27 @@ impl Worker {
                                         param_count: 0,
                                     };
 
-                                    // HTTP/1.1 defaults to keep-alive per RFC 7230
                                     let mut keep_alive = true;
-                                    for i in 0..ctx.req.header_count as usize {
-                                        let (k, v) = ctx.req.headers[i];
-                                        if k.eq_ignore_ascii_case("Connection")
-                                            && v.eq_ignore_ascii_case("close")
-                                        {
+                                    if is_shutting_down {
+                                        keep_alive = false; // Drain
+                                    } else {
+                                        for i in 0..ctx.req.header_count as usize {
+                                            let (k, v) = ctx.req.headers[i];
+                                            if k.eq_ignore_ascii_case("Connection")
+                                                && v.eq_ignore_ascii_case("close")
+                                            {
+                                                keep_alive = false;
+                                            }
+                                        }
+
+                                        // Hard cap on keep alive requests per connection
+                                        if conn.requests_served >= 10_000 {
                                             keep_alive = false;
                                         }
                                     }
 
                                     self.metrics.inc_req();
                                     conn.requests_served += 1;
-
-                                    // Hard cap on keep alive requests per connection
-                                    if conn.requests_served >= 10_000 {
-                                        keep_alive = false;
-                                    }
 
                                     let response = match self
                                         .router
@@ -201,13 +211,30 @@ impl Worker {
                                         Some((handler, params, param_count)) => {
                                             ctx.params = params;
                                             ctx.param_count = param_count;
-                                            let mw = self.router.global_middleware;
+
+                                            // Extract the handler and the middleware stack
+                                            let handler_ptr = *handler;
+                                            let mw_stack = self.router.global_middleware.clone();
+
                                             let result = std::panic::catch_unwind(
                                                 std::panic::AssertUnwindSafe(|| {
-                                                    if let Some(middleware) = mw {
-                                                        middleware(ctx, *handler)
+                                                    if mw_stack.is_empty() {
+                                                        handler_ptr(ctx)
                                                     } else {
-                                                        handler(ctx)
+                                                        // Base execution
+                                                        let mut current_handler: crate::router::BoxedHandler =
+                                                            std::sync::Arc::new(handler_ptr);
+
+                                                        // Wrap middlewares from last to first
+                                                        for mw in mw_stack.into_iter().rev() {
+                                                            let next = current_handler;
+                                                            current_handler =
+                                                                std::sync::Arc::new(move |ctx| {
+                                                                    mw(ctx, next.clone())
+                                                                });
+                                                        }
+
+                                                        current_handler(ctx)
                                                     }
                                                 }),
                                             );
@@ -385,9 +412,7 @@ impl Worker {
                                         self.metrics.add_bytes(n);
                                         conn.write_pos += n as u16;
                                         if conn.write_pos as usize >= write_total {
-                                            if conn.route_id == 1
-                                                && !shutdown.load(Ordering::Acquire)
-                                            {
+                                            if conn.route_id == 1 && !is_shutting_down {
                                                 conn.state = ConnState::Reading;
                                                 conn.parse_pos = 0;
                                                 conn.write_pos = 0;
