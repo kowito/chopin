@@ -76,11 +76,11 @@ impl Server {
         );
 
         let mut handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(self.workers);
-        for i in 0..self.workers {
+        for (i, metrics_worker) in worker_metrics.iter().enumerate().take(self.workers) {
             let core_id = core_ids.get(i % core_ids.len()).copied();
             let router_clone = router.clone();
             let shutdown = shutdown_flag.clone();
-            let metrics_worker = worker_metrics[i].clone();
+            let metrics_worker = metrics_worker.clone();
 
             let host_clone = host.clone();
             let port_clone = port;
@@ -95,7 +95,8 @@ impl Server {
                     // Create dedicated SO_REUSEPORT listener for this worker
                     match syscalls::create_listen_socket_reuseport(&host_clone, port_clone) {
                         Ok(listen_fd) => {
-                            let mut worker = Worker::new(i, router_clone, metrics_worker, listen_fd);
+                            let mut worker =
+                                Worker::new(i, router_clone, metrics_worker, listen_fd);
                             if let Err(e) = worker.run(shutdown) {
                                 eprintln!("Worker {} exited with error: {}", i, e);
                             }
