@@ -64,10 +64,14 @@ Chopin manages memory through a pre-allocated **Connection Slab** per worker.
 - **Stack Arrays**: Headers and route parameters use fixed-size stack arrays instead of `Vec` or `HashMap`.
 - **64-Byte Alignment**: Essential structures like `Conn` and `WorkerMetrics` are `#[repr(align(64))]` to prevent **False Sharing**.
 
-### 2. Syscall Efficiency
-- **Non-Blocking I/O**: Direct interaction with `libc::read` and `libc::write`.
-- **Partial Writes**: The framework handles `EWOULDBLOCK` by tracking `write_pos` and resuming on the next `EPOLLOUT` event.
-- **TCP_NODELAY**: Enabled on all connections to ensure immediate packet dispatch for low latency.
+### 2. Syscall Efficiency & Zero-Allocation Hot-Paths
+Chopin minimizes syscall overhead and memory pressure:
+- **Zero-Alloc kqueue/epoll**: Registers events using stack-allocated arrays, eliminating heap fragmentation in the event loop.
+- **TCP_NODELAY Inheritance**: `TCP_NODELAY` is set on the **listener** and inherited by all accepted sockets, saving one `setsockopt` syscall per connection.
+- **Platform Optimizations**:
+    - **Linux**: Uses `SOCK_NONBLOCK` (atomic socket creation), `TCP_DEFER_ACCEPT` (holds connection until data arrives), and `TCP_FASTOPEN`.
+    - **macOS**: Uses `SO_NOSIGPIPE` and `TCP_FASTOPEN`.
+- **Atomic Socket Creation**: On Linux, `socket` + `SOCK_NONBLOCK` + `SOCK_CLOEXEC` reduces the need for multiple `fcntl` calls.
 
 ### 3. Metric Partitioning
 Metrics are partitioned per worker. An aggregator thread periodically sums these atomics to report global throughput, ensuring zero contention during the request loop.

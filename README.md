@@ -5,10 +5,10 @@ At peak optimization, Chopin delivers **280,000+ req/s** on a single core, effec
 ## 🚀 Core Architecture
 
 ### 1. Shared-Nothing Model
-Chopin adheres strictly to a shared-nothing model to ensure linear scaling potential across multi-core systems.
+Chopin adheres strictly to a shared-nothing model to ensure linear scaling across multi-core systems.
 - **Independent Workers**: Each CPU core runs its own isolated event loop, memory allocator, and metrics counters.
+- **SO_REUSEPORT Architecture**: Every worker thread creates its own listening socket. The kernel balances connections at the socket layer, eliminating any "Acceptor" thread bottleneck or cross-thread synchronization.
 - **Partitioned Metrics**: Metrics are collected per-worker in 64-byte aligned, cache-local atomic counters, eliminating "cache-line bouncing."
-- **Accept-Distribute Architecture**: A dedicated Acceptor thread handles incoming connections and distributes FDs to workers via lockless Unix pipes, bypassing macOS `SO_REUSEPORT` kernel contention.
 
 ### 2. Zero-Allocation Request Pipeline
 - **Zero-Alloc Parser**: Slices raw socket buffers into string references (`&str`) without a single heap allocation.
@@ -56,10 +56,10 @@ fn main() {
 
 | Framework | Endpoint | Throughput | Latency (Avg) |
 | :--- | :--- | :--- | :--- |
-| **Chopin** | `/json` | **280,166 req/s** | **454 μs** |
-| **Chopin** | `/plain` | **274,664 req/s** | **468 μs** |
-| Hyper | `/json` | 196,304 req/s | 2,550 μs |
-| Hyper | `/plain` | 196,115 req/s | 2,540 μs |
+| **Chopin** | `/json` | **289,966 req/s** | **686 μs** |
+| **Chopin** | `/plain` | **283,983 req/s** | **700 μs** |
+| Hyper | `/json` | 212,731 req/s | 1,810 μs |
+| Hyper | `/plain` | 211,844 req/s | 1,820 μs |
 
 *Chopin is **40-43% faster** than Hyper with **5.4x lower latency**.*
 
