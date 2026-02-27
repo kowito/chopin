@@ -1,0 +1,4 @@
+# Internal Code Name: nocturne-op9-no2
+[workspace]
+members = ["chopin", "chopin-pg", "chopin-orm", "chopin-orm-macro"]
+resolver = "3"

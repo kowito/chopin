@@ -1,0 +1,17 @@
+[package]
+name = "chopin-orm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chopin-pg = { path = "../chopin-pg" }
+chopin-orm-macro = { path = "../chopin-orm-macro" }
+async-trait = "0.1.86"
+log = "0.4"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "orm_bench"
+harness = false
