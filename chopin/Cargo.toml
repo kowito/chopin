@@ -1,0 +1,12 @@
+[package]
+name = "chopin"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+core_affinity = "0.8.3"
+ctrlc = "3.4.5"
+kowito-json = { version = "0.2.8", path = "../../kowito-json" }
+libc = "0.2.180"
+num_cpus = "1.17.0"
+serde = { version = "1.0.228", features = ["derive"] }

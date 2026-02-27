@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["amx","avx2","generic","neon","sve2"],"struct":["Scanner"]};
