@@ -210,16 +210,21 @@ impl Worker {
                                         let is_chunked = matches!(response.body, crate::http::Body::Stream(_));
                                         
                                         if is_chunked {
-                                            let _ = write!(cursor, "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nTransfer-Encoding: chunked\r\nConnection: {}\r\n\r\n", 
+                                            let _ = write!(cursor, "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nTransfer-Encoding: chunked\r\nConnection: {}\r\n", 
                                                 response.status, response.content_type,
                                                 if keep_alive { "keep-alive" } else { "close" }
                                             );
                                         } else {
-                                            let _ = write!(cursor, "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n", 
+                                            let _ = write!(cursor, "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: {}\r\n", 
                                                 response.status, response.content_type, response.body.len(),
                                                 if keep_alive { "keep-alive" } else { "close" }
                                             );
                                         }
+                                        
+                                        for (k, v) in &response.headers {
+                                            let _ = write!(cursor, "{}: {}\r\n", k, v);
+                                        }
+                                        let _ = write!(cursor, "\r\n");
 
                                         match response.body {
                                             crate::http::Body::Empty => {}

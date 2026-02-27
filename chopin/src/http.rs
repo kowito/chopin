@@ -58,14 +58,29 @@ pub struct Response {
     pub status: u16,
     pub body: Body,
     pub content_type: &'static str,
+    pub headers: Vec<(&'static str, String)>,
 }
 
 impl Response {
+    pub fn new(status: u16) -> Self {
+        Self {
+            status,
+            body: Body::Empty,
+            content_type: "text/plain",
+            headers: Vec::new(),
+        }
+    }
+
+    pub fn header(mut self, key: &'static str, value: impl Into<String>) -> Self {
+        self.headers.push((key, value.into()));
+        self
+    }
     pub fn ok(body: impl Into<Vec<u8>>) -> Self {
         Self {
             status: 200,
             body: Body::Bytes(body.into()),
             content_type: "text/plain",
+            headers: Vec::new(),
         }
     }
 
@@ -74,6 +89,7 @@ impl Response {
             status: 200,
             body: Body::Bytes(body.into()),
             content_type: "application/json",
+            headers: Vec::new(),
         }
     }
 
@@ -82,6 +98,7 @@ impl Response {
             status: 404,
             body: Body::Bytes(b"Not Found".to_vec()),
             content_type: "text/plain",
+            headers: Vec::new(),
         }
     }
 
@@ -90,6 +107,7 @@ impl Response {
             status: 500,
             body: Body::Bytes(b"Internal Server Error".to_vec()),
             content_type: "text/plain",
+            headers: Vec::new(),
         }
     }
 
@@ -98,6 +116,7 @@ impl Response {
             status: 200,
             body: Body::Stream(Box::new(iter)),
             content_type: "application/octet-stream",
+            headers: Vec::new(),
         }
     }
 }
