@@ -29,13 +29,13 @@ env:
 jobs:
   test:
     name: Test & Check
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.bump_type == 'none'
     steps:
       - uses: actions/checkout@v4
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
       
       - name: Cache cargo registry
         uses: actions/cache@v3
@@ -69,14 +69,14 @@ jobs:
 
   publish:
     name: Publish to crates.io
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     needs: test
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
       
       - name: Check CARGO_TOKEN is set
         run: |
@@ -105,7 +105,7 @@ jobs:
 
   bump-version:
     name: Version Bump & Release
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.bump_type != 'none'
     permissions:
       contents: write
@@ -116,7 +116,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
       
       - name: Get current version
         id: current_version
