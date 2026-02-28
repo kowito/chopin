@@ -1,8 +1,0 @@
-/target/
-*.rs.bk
-Cargo.lock
-.env
-.DS_Store
-*.db
-*.db-shm
-*.db-wal
