@@ -88,11 +88,20 @@ jobs:
       - name: Publish chopin-core
         run: cargo publish -p chopin-core --token ${{ secrets.CARGO_TOKEN }} || true
       
+      - name: Publish chopin-pg
+        run: cargo publish -p chopin-pg --token ${{ secrets.CARGO_TOKEN }} || true
+      
       - name: Wait for crates.io indexing
         run: sleep 60
       
-      - name: Publish chopin-cli
-        run: cargo publish -p chopin-cli --token ${{ secrets.CARGO_TOKEN }} || true
+      - name: Publish chopin-orm
+        run: cargo publish -p chopin-orm --token ${{ secrets.CARGO_TOKEN }} || true
+
+      - name: Wait for crates.io indexing
+        run: sleep 60
+      
+      - name: Publish chopin-orm-macro
+        run: cargo publish -p chopin-orm-macro --token ${{ secrets.CARGO_TOKEN }} || true
 
   bump-version:
     name: Version Bump & Release
@@ -154,15 +163,12 @@ jobs:
           git push origin main || true
           git push origin "v${{ steps.new_version.outputs.new_version }}" || true
       
-      - name: Publish chopin-core to crates.io
-        run: cargo publish -p chopin-core
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
-      
-      - name: Wait before next publish
-        run: sleep 30
-      
-      - name: Publish chopin-cli to crates.io
-        run: cargo publish -p chopin-cli || true
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
+      - name: Publish all crates to crates.io
+        run: |
+          cargo publish -p chopin-core --token ${{ secrets.CARGO_TOKEN }} || true
+          sleep 60
+          cargo publish -p chopin-pg --token ${{ secrets.CARGO_TOKEN }} || true
+          sleep 60
+          cargo publish -p chopin-orm-macro --token ${{ secrets.CARGO_TOKEN }} || true
+          sleep 60
+          cargo publish -p chopin-orm --token ${{ secrets.CARGO_TOKEN }} || true
