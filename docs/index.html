@@ -25,10 +25,6 @@
 
 <body class="line-numbers">
 
-    <!-- Background Elements -->
-    <div class="glow-orb orb-1"></div>
-    <div class="glow-orb orb-2"></div>
-
     <!-- Mobile Header -->
     <header class="mobile-header">
         <div class="logo">
@@ -83,7 +79,7 @@
                     <img src="https://img.shields.io/crates/d/chopin-core.svg" alt="Downloads">
                 </div>
 
-                <h1 class="gradient-text">High-fidelity engineering<br>for the modern virtuoso.</h1>
+                <h1>High-fidelity engineering for the modern virtuoso.</h1>
                 <p class="subtitle">At peak optimization, Chopin delivers <strong>280,000+ req/s</strong> on a single
                     core, effectively outperforming standard frameworks like Hyper by <strong>~40%</strong> while
                     maintaining significantly lower latency.</p>
@@ -108,7 +104,7 @@
 
             <!-- Architecture Section -->
             <section id="architecture">
-                <h2><i class='bx bx-chip gradient-icon'></i> Core Architecture</h2>
+                <h2>Core Architecture</h2>
                 <div class="feature-grid">
                     <div class="feature-card glass-panel">
                         <div class="feature-icon"><i class='bx bx-share-alt'></i></div>
@@ -132,7 +128,8 @@
                             <li><i class='bx bx-check'></i> <strong>Stack-Allocated Hot-Paths:</strong> HTTP headers
                                 stored in fixed-size arrays.</li>
                             <li><i class='bx bx-check'></i> <strong>Raw Byte Serialization:</strong> Inline
-                                <code>itoa</code> formatting removes <code>std::fmt</code> overhead.</li>
+                                <code>itoa</code> formatting removes <code>std::fmt</code> overhead.
+                            </li>
                         </ul>
                     </div>
 
@@ -155,7 +152,7 @@
 
             <!-- Performance Section -->
             <section id="performance">
-                <h2><i class='bx bx-line-chart gradient-icon'></i> Performance Benchmark</h2>
+                <h2>Performance Benchmark</h2>
                 <p>Results below represent single-core performance on macOS Apple Silicon. Chopin is <strong>40-43%
                         faster</strong> than Hyper with <strong>5.4x lower latency</strong>.</p>
 
@@ -204,7 +201,7 @@
 
             <!-- Installation Section -->
             <section id="installation">
-                <h2><i class='bx bx-cloud-download gradient-icon'></i> Installation</h2>
+                <h2>Installation</h2>
                 <p>Chopin is modular. Install the core engine to get started, and add the database or ORM crates as
                     needed.</p>
 
@@ -224,7 +221,7 @@ kowito-json = "0.2.8"    # Schema-JIT SIMD JSON parser
 
             <!-- Quick Start Section -->
             <section id="quick-start">
-                <h2><i class='bx bx-play-circle gradient-icon'></i> Quick Start</h2>
+                <h2>Quick Start</h2>
                 <p>A minimal "Hello World" server using <code>chopin-core</code>.</p>
 
                 <div class="code-block glass-panel">
@@ -248,7 +245,7 @@ fn main() {
 
             <!-- Routing User Manual -->
             <section id="routing">
-                <h2><i class='bx bx-trip gradient-icon'></i> Routing</h2>
+                <h2>Routing</h2>
                 <p>The Chopin Radix Router provides $O(K)$ path matching (where $K$ is path length) with zero-cost
                     parameter extraction. It supports exact paths, named parameters, and wildcard catch-alls.</p>
 
@@ -270,7 +267,7 @@ router.get("/static/*path", static_file_handler);</code></pre>
 
             <!-- Extractors User Manual -->
             <section id="extractors">
-                <h2><i class='bx bx-data gradient-icon'></i> Extractors & JSON</h2>
+                <h2>Extractors & JSON</h2>
                 <p>Chopin relies on <code>kowito-json</code> for "Schema-JIT" serialization. Because it generates the
                     JSON serialization logic at compile time, JSON payload encoding operates at memory bandwidth speeds.
                 </p>
@@ -306,7 +303,7 @@ fn user_handler(ctx: Context) -> Response {
 
             <!-- ORM User Manual -->
             <section id="orm">
-                <h2><i class='bx bx-server gradient-icon'></i> PostgreSQL & ORM</h2>
+                <h2>PostgreSQL & ORM</h2>
                 <p>The <code>chopin-pg</code> and <code>chopin-orm</code> crates provide a fast, zero-allocation
                     database interaction layer mapping directly to Rust structs, avoiding reflection entirely.</p>
 
