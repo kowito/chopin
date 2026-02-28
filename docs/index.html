@@ -1,24 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chopin 🎼 | High-fidelity Rust HTTP Engine</title>
-    <meta name="description" content="At peak optimization, Chopin delivers 280,000+ req/s on a single core, outperforming standard frameworks while maintaining significantly lower latency.">
+    <meta name="description"
+        content="At peak optimization, Chopin delivers 280,000+ req/s on a single core, outperforming standard frameworks while maintaining significantly lower latency.">
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;600;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;600;800&family=Fira+Code:wght@400;500&display=swap"
+        rel="stylesheet">
     <!-- Prism Syntax Highlighting -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet" />
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css"
+        rel="stylesheet" />
     <!-- Icons -->
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
     <!-- Custom CSS -->
     <link rel="stylesheet" href="styles.css">
 </head>
+
 <body class="line-numbers">
-    
+
     <!-- Background Elements -->
     <div class="glow-orb orb-1"></div>
     <div class="glow-orb orb-2"></div>
@@ -26,7 +32,7 @@
     <!-- Mobile Header -->
     <header class="mobile-header">
         <div class="logo">
-            <i class='bx bx-music' ></i> Chopin
+            <i class='bx bx-music'></i> Chopin
         </div>
         <button id="menu-toggle" aria-label="Toggle Menu">
             <i class='bx bx-menu'></i>
@@ -38,48 +44,55 @@
         <nav class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <div class="logo">
-                    <i class='bx bx-music' ></i> Chopin 🎼
+                    <i class='bx bx-music'></i> Chopin 🎼
                 </div>
             </div>
-            
+
             <ul class="nav-links">
                 <li class="nav-label">Introduction</li>
                 <li><a href="#hero" class="active"><i class='bx bx-home-alt'></i> Overview</a></li>
                 <li><a href="#architecture"><i class='bx bxl-graphql'></i> Architecture</a></li>
                 <li><a href="#performance"><i class='bx bx-stats'></i> Performance</a></li>
-                
+
                 <li class="nav-label">Getting Started</li>
                 <li><a href="#installation"><i class='bx bx-download'></i> Installation</a></li>
                 <li><a href="#quick-start"><i class='bx bx-rocket'></i> Quick Start</a></li>
-                
+
                 <li class="nav-label">User Manual</li>
                 <li><a href="#routing"><i class='bx bx-directions'></i> Routing</a></li>
                 <li><a href="#extractors"><i class='bx bx-layer'></i> Extractors & JSON</a></li>
                 <li><a href="#orm"><i class='bx bx-data'></i> PostgreSQL & ORM</a></li>
-                
+
                 <li class="nav-label">Community</li>
-                <li><a href="https://github.com/kowito/chopin" target="_blank"><i class='bx bxl-github' ></i> GitHub</a></li>
-                <li><a href="https://crates.io/crates/chopin-core" target="_blank"><i class='bx bx-box'></i> Crates.io</a></li>
+                <li><a href="https://github.com/kowito/chopin" target="_blank"><i class='bx bxl-github'></i> GitHub</a>
+                </li>
+                <li><a href="https://crates.io/crates/chopin-core" target="_blank"><i class='bx bx-box'></i>
+                        Crates.io</a></li>
             </ul>
         </nav>
 
         <!-- Main Content Area -->
         <main class="content-area">
-            
+
             <!-- Hero Section -->
             <section id="hero" class="hero-section">
                 <div class="badge-container">
-                    <img src="https://github.com/kowito/chopin/actions/workflows/CI.yml/badge.svg?branch=main" alt="Build Status">
+                    <img src="https://github.com/kowito/chopin/actions/workflows/CI.yml/badge.svg?branch=main"
+                        alt="Build Status">
                     <img src="https://img.shields.io/crates/v/chopin-core" alt="Crates.io">
                     <img src="https://img.shields.io/crates/d/chopin-core.svg" alt="Downloads">
                 </div>
-                
+
                 <h1 class="gradient-text">High-fidelity engineering<br>for the modern virtuoso.</h1>
-                <p class="subtitle">At peak optimization, Chopin delivers <strong>280,000+ req/s</strong> on a single core, effectively outperforming standard frameworks like Hyper by <strong>~40%</strong> while maintaining significantly lower latency.</p>
-                
+                <p class="subtitle">At peak optimization, Chopin delivers <strong>280,000+ req/s</strong> on a single
+                    core, effectively outperforming standard frameworks like Hyper by <strong>~40%</strong> while
+                    maintaining significantly lower latency.</p>
+
                 <div class="action-buttons">
-                    <a href="#installation" class="btn btn-primary">Get Started <i class='bx bx-right-arrow-alt'></i></a>
-                    <a href="https://github.com/kowito/chopin" class="btn btn-secondary"><i class='bx bxl-github' ></i> Star on GitHub</a>
+                    <a href="#installation" class="btn btn-primary">Get Started <i
+                            class='bx bx-right-arrow-alt'></i></a>
+                    <a href="https://github.com/kowito/chopin" class="btn btn-secondary"><i class='bx bxl-github'></i>
+                        Star on GitHub</a>
                 </div>
 
                 <div class="command-box">
@@ -100,30 +113,39 @@
                     <div class="feature-card glass-panel">
                         <div class="feature-icon"><i class='bx bx-share-alt'></i></div>
                         <h3>Shared-Nothing Model</h3>
-                        <p>Strict shared-nothing model ensures linear scaling across multi-core systems. Each CPU core runs its own isolated event loop, memory allocator, and metrics counters.</p>
+                        <p>Strict shared-nothing model ensures linear scaling across multi-core systems. Each CPU core
+                            runs its own isolated event loop, memory allocator, and metrics counters.</p>
                         <ul class="feature-list">
-                            <li><i class='bx bx-check'></i> <strong>SO_REUSEPORT:</strong> Kernel balances connections, eliminating "Acceptor" thread bottlenecks.</li>
-                            <li><i class='bx bx-check'></i> <strong>Partitioned Metrics:</strong> Cache-local atomic counters prevent cache-line bouncing.</li>
+                            <li><i class='bx bx-check'></i> <strong>SO_REUSEPORT:</strong> Kernel balances connections,
+                                eliminating "Acceptor" thread bottlenecks.</li>
+                            <li><i class='bx bx-check'></i> <strong>Partitioned Metrics:</strong> Cache-local atomic
+                                counters prevent cache-line bouncing.</li>
                         </ul>
                     </div>
-                    
+
                     <div class="feature-card glass-panel">
                         <div class="feature-icon"><i class='bx bx-water'></i></div>
                         <h3>Zero-Allocation Pipeline</h3>
-                        <p>Radical memory efficiency with a pipeline that slices raw socket buffers into string references without a single heap allocation.</p>
+                        <p>Radical memory efficiency with a pipeline that slices raw socket buffers into string
+                            references without a single heap allocation.</p>
                         <ul class="feature-list">
-                            <li><i class='bx bx-check'></i> <strong>Stack-Allocated Hot-Paths:</strong> HTTP headers stored in fixed-size arrays.</li>
-                            <li><i class='bx bx-check'></i> <strong>Raw Byte Serialization:</strong> Inline <code>itoa</code> formatting removes <code>std::fmt</code> overhead.</li>
+                            <li><i class='bx bx-check'></i> <strong>Stack-Allocated Hot-Paths:</strong> HTTP headers
+                                stored in fixed-size arrays.</li>
+                            <li><i class='bx bx-check'></i> <strong>Raw Byte Serialization:</strong> Inline
+                                <code>itoa</code> formatting removes <code>std::fmt</code> overhead.</li>
                         </ul>
                     </div>
-                    
+
                     <div class="feature-card glass-panel">
                         <div class="feature-icon"><i class='bx bx-bolt-circle'></i></div>
                         <h3>Native Asynchronous Core</h3>
-                        <p>Platform native asynchronous I/O with direct interaction with the underlying OS kernels for maximum efficiency.</p>
+                        <p>Platform native asynchronous I/O with direct interaction with the underlying OS kernels for
+                            maximum efficiency.</p>
                         <ul class="feature-list">
-                            <li><i class='bx bx-check'></i> <strong>Platform Native:</strong> Direct <code>kqueue</code> (macOS) and <code>epoll</code> (Linux) usage.</li>
-                            <li><i class='bx bx-check'></i> <strong>Connection Slab:</strong> Custom O(1) connection state management.</li>
+                            <li><i class='bx bx-check'></i> <strong>Platform Native:</strong> Direct <code>kqueue</code>
+                                (macOS) and <code>epoll</code> (Linux) usage.</li>
+                            <li><i class='bx bx-check'></i> <strong>Connection Slab:</strong> Custom O(1) connection
+                                state management.</li>
                         </ul>
                     </div>
                 </div>
@@ -134,8 +156,9 @@
             <!-- Performance Section -->
             <section id="performance">
                 <h2><i class='bx bx-line-chart gradient-icon'></i> Performance Benchmark</h2>
-                <p>Results below represent single-core performance on macOS Apple Silicon. Chopin is <strong>40-43% faster</strong> than Hyper with <strong>5.4x lower latency</strong>.</p>
-                
+                <p>Results below represent single-core performance on macOS Apple Silicon. Chopin is <strong>40-43%
+                        faster</strong> than Hyper with <strong>5.4x lower latency</strong>.</p>
+
                 <div class="table-wrapper glass-panel">
                     <table>
                         <thead>
@@ -182,8 +205,9 @@
             <!-- Installation Section -->
             <section id="installation">
                 <h2><i class='bx bx-cloud-download gradient-icon'></i> Installation</h2>
-                <p>Chopin is modular. Install the core engine to get started, and add the database or ORM crates as needed.</p>
-                
+                <p>Chopin is modular. Install the core engine to get started, and add the database or ORM crates as
+                    needed.</p>
+
                 <div class="code-block glass-panel">
                     <pre><code class="language-toml">[dependencies]
 chopin-core = "0.5"
@@ -202,7 +226,7 @@ kowito-json = "0.2.8"    # Schema-JIT SIMD JSON parser
             <section id="quick-start">
                 <h2><i class='bx bx-play-circle gradient-icon'></i> Quick Start</h2>
                 <p>A minimal "Hello World" server using <code>chopin-core</code>.</p>
-                
+
                 <div class="code-block glass-panel">
                     <pre><code class="language-rust">use chopin::{Server, Router, Context, Response};
 
@@ -225,8 +249,9 @@ fn main() {
             <!-- Routing User Manual -->
             <section id="routing">
                 <h2><i class='bx bx-trip gradient-icon'></i> Routing</h2>
-                <p>The Chopin Radix Router provides $O(K)$ path matching (where $K$ is path length) with zero-cost parameter extraction. It supports exact paths, named parameters, and wildcard catch-alls.</p>
-                
+                <p>The Chopin Radix Router provides $O(K)$ path matching (where $K$ is path length) with zero-cost
+                    parameter extraction. It supports exact paths, named parameters, and wildcard catch-alls.</p>
+
                 <div class="code-block glass-panel">
                     <pre><code class="language-rust">let mut router = Router::new();
 
@@ -246,8 +271,10 @@ router.get("/static/*path", static_file_handler);</code></pre>
             <!-- Extractors User Manual -->
             <section id="extractors">
                 <h2><i class='bx bx-data gradient-icon'></i> Extractors & JSON</h2>
-                <p>Chopin relies on <code>kowito-json</code> for "Schema-JIT" serialization. Because it generates the JSON serialization logic at compile time, JSON payload encoding operates at memory bandwidth speeds.</p>
-                
+                <p>Chopin relies on <code>kowito-json</code> for "Schema-JIT" serialization. Because it generates the
+                    JSON serialization logic at compile time, JSON payload encoding operates at memory bandwidth speeds.
+                </p>
+
                 <div class="code-block glass-panel">
                     <pre><code class="language-rust">use chopin::{Server, Router, Context, Response};
 use kowito_json::KJson; // High-performance schema-based JSON
@@ -270,8 +297,9 @@ fn user_handler(ctx: Context) -> Response {
     ctx.respond_json(&user) 
 }</code></pre>
                 </div>
-                
-                <p>You can also ergonomically extract data from incoming requests if you build custom extractors bridging with <code>Context</code>.</p>
+
+                <p>You can also ergonomically extract data from incoming requests if you build custom extractors
+                    bridging with <code>Context</code>.</p>
             </section>
 
             <hr class="section-divider">
@@ -279,8 +307,9 @@ fn user_handler(ctx: Context) -> Response {
             <!-- ORM User Manual -->
             <section id="orm">
                 <h2><i class='bx bx-server gradient-icon'></i> PostgreSQL & ORM</h2>
-                <p>The <code>chopin-pg</code> and <code>chopin-orm</code> crates provide a fast, zero-allocation database interaction layer mapping directly to Rust structs, avoiding reflection entirely.</p>
-                
+                <p>The <code>chopin-pg</code> and <code>chopin-orm</code> crates provide a fast, zero-allocation
+                    database interaction layer mapping directly to Rust structs, avoiding reflection entirely.</p>
+
                 <div class="code-block glass-panel">
                     <pre><code class="language-rust">use chopin_orm::Model;
 use chopin_pg::Pool;
@@ -304,8 +333,9 @@ async fn fetch_user(pool: &Pool) {
             </section>
 
             <footer class="site-footer">
-                <p>Built with precision by <a href="https://github.com/kowito" target="_blank">Kowito</a> &copy; 2026.</p>
-                <p>Licensed under the WTFPL License.</p>
+                <p>Built with precision by <a href="https://github.com/kowito" target="_blank">Kowito</a> &copy; 2026.
+                </p>
+                <p>Licensed under the MIT License.</p>
             </footer>
 
         </main>
@@ -315,7 +345,9 @@ async fn fetch_user(pool: &Pool) {
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-rust.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-toml.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+    <script
+        src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
     <script src="script.js"></script>
 </body>
+
 </html>

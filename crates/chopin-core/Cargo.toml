@@ -2,6 +2,7 @@
 name = "chopin-core"
 version = "0.5.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 core_affinity = "0.8.3"

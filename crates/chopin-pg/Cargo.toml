@@ -2,6 +2,7 @@
 name = "chopin-pg"
 version = "0.5.0"
 edition = "2024"
+license = "MIT"
 description = "Zero-copy PostgreSQL driver for the Chopin thread-per-core architecture"
 
 [dependencies]
