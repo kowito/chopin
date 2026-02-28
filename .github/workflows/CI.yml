@@ -36,6 +36,8 @@ jobs:
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
       
       - name: Cache cargo registry
         uses: actions/cache@v3
@@ -78,6 +80,8 @@ jobs:
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
       
       - name: Check CARGO_TOKEN is set
         run: |
