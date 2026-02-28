@@ -574,11 +574,10 @@ impl PgConnection {
                             );
                         }
                     }
-                    BackendTag::NoData => {
-                        if is_new {
-                            self.stmt_cache.insert(sql, stmt_name.to_string(), 0, None);
-                        }
+                    BackendTag::NoData if is_new => {
+                        self.stmt_cache.insert(sql, stmt_name.to_string(), 0, None);
                     }
+                    BackendTag::NoData => {}
                     BackendTag::BindComplete => {}
                     BackendTag::DataRow => {
                         let raw_values = codec::parse_data_row(body);
