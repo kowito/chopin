@@ -1,5 +1,5 @@
 // examples/hello_json.rs
-use chopin::{Context, Json, Response, Router, Server};
+use chopin_core::{Context, Json, Response, Router, Server};
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
@@ -36,7 +36,7 @@ fn hello_text(ctx: Context) -> Response {
         .req
         .headers
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("User-Agent"))
+        .find(|(k, _): &&(&str, &str)| k.eq_ignore_ascii_case("User-Agent"))
         .map(|(_, v)| *v)
         .unwrap_or("Unknown");
 
@@ -56,7 +56,7 @@ fn stream_handler(_ctx: Context) -> Response {
     Response::stream(iter)
 }
 
-fn logger_mw(ctx: Context, next: chopin::router::BoxedHandler) -> Response {
+fn logger_mw(ctx: Context, next: chopin_core::router::BoxedHandler) -> Response {
     let method = format!("{:?}", ctx.req.method);
     let path = ctx.req.path.to_string();
     let start = std::time::Instant::now();

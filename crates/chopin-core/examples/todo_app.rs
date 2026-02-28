@@ -1,4 +1,4 @@
-use chopin::{Context, Response, Router, Server};
+use chopin_core::{Context, Response, Router, Server};
 use chopin_orm::Model;
 use chopin_pg::{PgConfig, PgPool};
 use kowito_json::KJson;
@@ -97,7 +97,7 @@ fn get_todo(ctx: Context) -> Response {
     }
 }
 
-fn logging_middleware(ctx: Context, next: chopin::router::BoxedHandler) -> Response {
+fn logging_middleware(ctx: Context, next: chopin_core::router::BoxedHandler) -> Response {
     let method = format!("{:?}", ctx.req.method);
     let path = ctx.req.path.to_string();
 

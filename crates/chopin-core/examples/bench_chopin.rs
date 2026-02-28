@@ -1,5 +1,5 @@
 // examples/bench_chopin.rs
-use chopin::{Context, Response, Router, Server};
+use chopin_core::{Context, Response, Router, Server};
 
 #[derive(kowito_json::KJson, Default)]
 struct Message {

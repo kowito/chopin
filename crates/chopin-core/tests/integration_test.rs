@@ -1,4 +1,4 @@
-use chopin::{Method, Response, Router, Server};
+use chopin_core::{Context, Method, Response, Router, Server};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::thread;
@@ -8,22 +8,24 @@ fn setup_test_server() {
     let mut router = Router::new();
 
     // Simple GET
-    router.add(Method::Get, "/hello", |_ctx| Response::ok("Hello, World!"));
+    router.add(Method::Get, "/hello", |_: Context| {
+        Response::ok("Hello, World!")
+    });
 
     // Echo param
-    router.add(Method::Get, "/echo/:msg", |ctx| {
+    router.add(Method::Get, "/echo/:msg", |ctx: Context| {
         let msg = ctx.get_param("msg").unwrap_or("missing");
         Response::ok(format!("Echo: {}", msg))
     });
 
     // Chunked response
-    router.add(Method::Get, "/stream", |_ctx| {
+    router.add(Method::Get, "/stream", |_: Context| {
         let items = vec![b"chunk1".to_vec(), b"chunk2".to_vec()];
         Response::stream(items.into_iter())
     });
 
     // Chunked request
-    router.add(Method::Post, "/upload", |ctx| {
+    router.add(Method::Post, "/upload", |ctx: Context| {
         Response::ok(format!("Received {} bytes", ctx.req.body.len()))
     });
 
