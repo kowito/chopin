@@ -15,34 +15,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const CT_TEXT_PLAIN: &[u8] = b"Content-Type: text/plain\r\n";
 const CT_APP_JSON: &[u8] = b"Content-Type: application/json\r\n";
 
-/// Length of the pre-baked 200 response prefix:
-/// "HTTP/1.1 200 OK\r\nDate: <29>\r\nServer: chopin\r\n" = 70 bytes.
-const PREFIX_200_LEN: usize = b"HTTP/1.1 200 OK\r\n".len()
-    + b"Date: ".len()
-    + 29 // cached HTTP date
-    + b"\r\n".len()
-    + b"Server: chopin\r\n".len();
-
-/// Rebuild the cached response prefix for 200 OK responses.
-/// Called once per second when the date changes.
-#[inline]
-fn rebuild_prefix_200(buf: &mut [u8; PREFIX_200_LEN], date: &[u8; 29]) {
-    const A: usize = 0;
-    const STATUS: &[u8] = b"HTTP/1.1 200 OK\r\n";
-    const B: usize = A + STATUS.len(); // 17
-    const DATE_PFX: &[u8] = b"Date: ";
-    const C: usize = B + DATE_PFX.len(); // 23
-    const D: usize = C + 29; // 52 (date)
-    const CRLF: &[u8] = b"\r\n";
-    const E: usize = D + CRLF.len(); // 54
-    const SERVER: &[u8] = b"Server: chopin\r\n";
-
-    buf[A..B].copy_from_slice(STATUS);
-    buf[B..C].copy_from_slice(DATE_PFX);
-    buf[C..D].copy_from_slice(date);
-    buf[D..E].copy_from_slice(CRLF);
-    buf[E..E + SERVER.len()].copy_from_slice(SERVER);
-}
+/// Pre-baked 200 OK response prefix: status line + Server header.
+const STATUS_200_PREFIX: &[u8] = b"HTTP/1.1 200 OK\r\nServer: chopin\r\n";
 
 /// Format an HTTP status line into a fixed 40-byte buffer. Returns the slice length.
 #[inline(always)]
@@ -95,69 +69,6 @@ fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
     i
 }
 
-/// Format the current time as an HTTP-date (RFC 7231 §7.1.1.2) directly
-/// into a 29-byte stack buffer with **zero heap allocation**.
-///
-/// Output: `"Thu, 01 Jan 1970 00:00:00 GMT"` (exactly 29 bytes, always).
-///
-/// Uses the Howard Hinnant civil_from_days algorithm for calendar conversion.
-#[inline(always)]
-fn format_http_date(buf: &mut [u8; 29], ts: u64) {
-    // Day-of-week names (epoch = Thursday, index 0)
-    static WDAY: [[u8; 3]; 7] = [
-        *b"Thu", *b"Fri", *b"Sat", *b"Sun", *b"Mon", *b"Tue", *b"Wed",
-    ];
-    static MON: [[u8; 3]; 12] = [
-        *b"Jan", *b"Feb", *b"Mar", *b"Apr", *b"May", *b"Jun", *b"Jul", *b"Aug", *b"Sep", *b"Oct",
-        *b"Nov", *b"Dec",
-    ];
-
-    let total_days = (ts / 86400) as u32;
-    let wday = (total_days % 7) as usize;
-
-    let tod = (ts % 86400) as u32;
-    let hh = tod / 3600;
-    let mm = (tod % 3600) / 60;
-    let ss = tod % 60;
-
-    // Civil date from days since epoch (Hinnant algorithm)
-    let z = total_days + 719_468;
-    let era = z / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-
-    // "Thu, 01 Jan 1970 00:00:00 GMT"  (29 bytes)
-    buf[0..3].copy_from_slice(&WDAY[wday]);
-    buf[3] = b',';
-    buf[4] = b' ';
-    buf[5] = b'0' + (d / 10) as u8;
-    buf[6] = b'0' + (d % 10) as u8;
-    buf[7] = b' ';
-    buf[8..11].copy_from_slice(&MON[(m - 1) as usize]);
-    buf[11] = b' ';
-    buf[12] = b'0' + (y / 1000 % 10) as u8;
-    buf[13] = b'0' + (y / 100 % 10) as u8;
-    buf[14] = b'0' + (y / 10 % 10) as u8;
-    buf[15] = b'0' + (y % 10) as u8;
-    buf[16] = b' ';
-    buf[17] = b'0' + (hh / 10) as u8;
-    buf[18] = b'0' + (hh % 10) as u8;
-    buf[19] = b':';
-    buf[20] = b'0' + (mm / 10) as u8;
-    buf[21] = b'0' + (mm % 10) as u8;
-    buf[22] = b':';
-    buf[23] = b'0' + (ss / 10) as u8;
-    buf[24] = b'0' + (ss % 10) as u8;
-    buf[25] = b' ';
-    buf[26..29].copy_from_slice(b"GMT");
-}
-
 pub struct Worker {
     #[allow(dead_code)]
     id: usize,
@@ -203,16 +114,6 @@ impl Worker {
         let mut timer_wheel = TimerWheel::new(now);
         let mut iter_count: u32 = 0;
 
-        // Cached HTTP-date: refreshed once per second, shared across all responses
-        let mut cached_date = [0u8; 29];
-        format_http_date(&mut cached_date, now as u64);
-        let mut cached_date_sec: u32 = now;
-
-        // Pre-baked 200 response prefix: "HTTP/1.1 200 OK\r\nDate: <date>\r\nServer: chopin\r\n"
-        // Refreshed alongside cached_date once per second. Reduces 5 w!() calls to 1.
-        let mut prefix_200 = [0u8; PREFIX_200_LEN];
-        rebuild_prefix_200(&mut prefix_200, &cached_date);
-
         loop {
             let is_shutting_down = shutdown.load(Ordering::Acquire);
             if is_shutting_down && slab.is_empty() {
@@ -230,13 +131,6 @@ impl Worker {
                 if now - last_prune >= 1 {
                     self.prune_connections_wheel(&mut slab, &epoll, &mut timer_wheel, now);
                     last_prune = now;
-                }
-
-                // Refresh cached HTTP-date and 200 prefix once per second
-                if now != cached_date_sec {
-                    format_http_date(&mut cached_date, now as u64);
-                    cached_date_sec = now;
-                    rebuild_prefix_200(&mut prefix_200, &cached_date);
                 }
             }
 
@@ -523,17 +417,14 @@ impl Worker {
                                                 };
                                             }
 
-                                            // Pre-baked 200 OK prefix: status+date+server in one copy
+                                            // Pre-baked 200 OK prefix: status + server in one copy
                                             if response.status == 200 {
-                                                w!(&prefix_200);
+                                                w!(STATUS_200_PREFIX);
                                             } else {
                                                 let mut sl_buf = [0u8; 40];
                                                 let sl_len =
                                                     status_line(response.status, &mut sl_buf);
                                                 w!(&sl_buf[..sl_len]);
-                                                w!(b"Date: ");
-                                                w!(&cached_date);
-                                                w!(b"\r\n");
                                                 w!(b"Server: chopin\r\n");
                                             }
 
@@ -824,34 +715,5 @@ impl Worker {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Verify our zero-alloc date formatter matches httpdate crate output.
-    #[test]
-    fn test_format_http_date_matches_httpdate() {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let mut buf = [0u8; 29];
-        format_http_date(&mut buf, ts);
-        let ours = std::str::from_utf8(&buf).expect("valid utf-8");
-
-        let expected = httpdate::fmt_http_date(SystemTime::now());
-
-        // Both should produce the same second (allow 1-second skew)
-        assert_eq!(ours.len(), 29, "HTTP date must be exactly 29 bytes");
-        // The date portion (first 26 bytes) must match since we're within the same second
-        // (in rare cases of second boundary, at least the prefix matches)
-        assert_eq!(
-            &ours[..26],
-            &expected[..26],
-            "Date mismatch: ours={ours} expected={expected}"
-        );
     }
 }
