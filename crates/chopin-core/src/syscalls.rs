@@ -511,7 +511,7 @@ pub use linux_epoll::*;
 #[cfg(target_os = "linux")]
 mod linux_epoll {
     use super::*;
-    use libc::{EPOLLET, EPOLLIN, EPOLLOUT, epoll_event};
+    pub use libc::{EPOLLET, EPOLLIN, EPOLLOUT, epoll_event};
 
     pub struct Epoll {
         pub fd: c_int,

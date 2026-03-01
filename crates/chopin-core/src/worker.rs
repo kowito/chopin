@@ -79,25 +79,16 @@ impl Worker {
 
     pub fn run(&mut self, shutdown: Arc<AtomicBool>) -> ChopinResult<()> {
         // 1. Setup epoll/kqueue instance
-        let epoll = Epoll::new().map_err(|e| {
-            eprintln!("Worker {} failed to create epoll instance: {}", self.id, e);
-            e
-        })?;
+        let epoll = Epoll::new()?;
 
         // Register the listen fd
         let listen_token = u64::MAX;
-        if let Err(e) = epoll.add(self.listen_fd, listen_token, EPOLLIN) {
-            eprintln!("Worker {} failed to register listen fd: {}", self.id, e);
+        if let Err(_e) = epoll.add(self.listen_fd, listen_token, EPOLLIN) {
             return Ok(());
         }
 
         // 2. Initialize Slab Allocator
         let mut slab = ConnectionSlab::new(100_000); // 100k connections per core capacity
-
-        println!(
-            "Worker {} entering main event loop (listen_fd={}).",
-            self.id, self.listen_fd
-        );
 
         let mut events = vec![epoll_event { events: 0, u64: 0 }; 1024]; // Process up to 1024 events at once
 
@@ -110,34 +101,6 @@ impl Worker {
             .as_secs() as u32;
         let mut last_prune = now;
         let mut iter_count: u32 = 0;
-
-        // Pre-formatted Date header (RFC 7231 §7.1.1.2). Refresh every second.
-        let mut date_header: [u8; 64] = [0u8; 64];
-        let mut date_header_len: usize = 0;
-        let mut last_date_update: u32;
-
-        let update_date_header =
-            |date_header: &mut [u8; 64], date_header_len: &mut usize, now_secs: u32| {
-                let sys = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(now_secs as u64);
-                let formatted = httpdate::fmt_http_date(sys);
-                let prefix = b"Date: ";
-                let suffix = b"\r\n";
-                let formatted_bytes = formatted.as_bytes();
-                let total = prefix.len() + formatted_bytes.len() + suffix.len();
-                if total <= 64 {
-                    date_header[..prefix.len()].copy_from_slice(prefix);
-                    date_header[prefix.len()..prefix.len() + formatted_bytes.len()]
-                        .copy_from_slice(formatted_bytes);
-                    date_header[prefix.len() + formatted_bytes.len()
-                        ..prefix.len() + formatted_bytes.len() + suffix.len()]
-                        .copy_from_slice(suffix);
-                    *date_header_len = total;
-                }
-            };
-
-        update_date_header(&mut date_header, &mut date_header_len, now);
-        last_date_update = now;
-
         loop {
             let is_shutting_down = shutdown.load(Ordering::Acquire);
             if is_shutting_down && slab.is_empty() {
@@ -145,16 +108,13 @@ impl Worker {
             }
             iter_count = iter_count.wrapping_add(1);
 
-            // Only update time and prune every 1024 iterations or after wait
-            if iter_count.is_multiple_of(1024) {
+            // Update time and prune every 1024 iterations
+            if iter_count % 1024 == 0 {
                 now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map_err(|_| ChopinError::Other("Clock went backwards".to_string()))?
                     .as_secs() as u32;
-                if now - last_date_update >= 1 {
-                    update_date_header(&mut date_header, &mut date_header_len, now);
-                    last_date_update = now;
-                }
+
                 if now - last_prune >= 1 {
                     self.prune_connections(&mut slab, &epoll, now);
                     last_prune = now;
@@ -359,7 +319,11 @@ impl Worker {
                                     w!(&sl_buf[..sl_len]);
 
                                     // Date header (RFC 7231 §7.1.1.2)
-                                    w!(&date_header[..date_header_len]);
+                                    let now_sys = SystemTime::now();
+                                    let formatted_date = httpdate::fmt_http_date(now_sys);
+                                    w!(b"Date: ");
+                                    w!(formatted_date.as_bytes());
+                                    w!(b"\r\n");
 
                                     // Server header
                                     w!(b"Server: chopin\r\n");
@@ -543,7 +507,6 @@ impl Worker {
             }
         }
 
-        println!("Worker {} exiting gracefully.", self.id);
         for i in 0..slab.capacity() {
             if let Some(conn) = slab.get(i)
                 && conn.state != ConnState::Free

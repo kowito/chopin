@@ -61,9 +61,6 @@ impl Server {
 
         let shutdown_signal = shutdown_flag.clone();
         ctrlc::set_handler(move || {
-            println!(
-                "\n[Chopin] Received shutdown signal. Draining active connections neutrally..."
-            );
             shutdown_signal.store(true, Ordering::Release);
         })
         .map_err(|e| ChopinError::Other(format!("Failed to set Ctrl-C handler: {e}")))?;
@@ -76,34 +73,8 @@ impl Server {
         let metrics_clones = worker_metrics.clone();
         let shutdown_metrics = shutdown_flag.clone();
 
-        thread::Builder::new()
-            .name("chopin-metrics".to_string())
-            .spawn(move || {
-                while !shutdown_metrics.load(Ordering::Acquire) {
-                    thread::sleep(std::time::Duration::from_secs(5));
-                    if shutdown_metrics.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let mut total_reqs = 0;
-                    let mut total_active = 0;
-                    for m in &metrics_clones {
-                        total_reqs += m.req_count.load(Ordering::Relaxed);
-                        total_active += m.active_conns.load(Ordering::Relaxed);
-                    }
-                    println!(
-                        "[Metrics] Active Connections: {} | Total Requests: {}",
-                        total_active, total_reqs
-                    );
-                }
-            })
-            .ok();
 
         let Parts { host, port } = parse_host_port(&self.host_port)?;
-
-        println!(
-            "Starting {} workers with SO_REUSEPORT (Linear Scaling)",
-            self.workers
-        );
 
         let mut handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(self.workers);
         for (i, metrics_worker) in worker_metrics.iter().enumerate().take(self.workers) {
@@ -127,15 +98,15 @@ impl Server {
                         Ok(listen_fd) => {
                             let mut worker =
                                 Worker::new(i, router_clone, metrics_worker, listen_fd);
-                            if let Err(e) = worker.run(shutdown) {
-                                eprintln!("Worker {} exited with error: {}", i, e);
+                            if let Err(_e) = worker.run(shutdown) {
+                                // Error suppressed in production
                             }
                             unsafe {
                                 libc::close(listen_fd);
                             }
                         }
-                        Err(e) => {
-                            eprintln!("Worker {} failed to create SO_REUSEPORT socket: {}", i, e);
+                        Err(_e) => {
+                            // Error suppressed in production
                         }
                     }
                 })

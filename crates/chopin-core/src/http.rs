@@ -247,11 +247,11 @@ impl<'a> Context<'a> {
     /// Returns `None` if the `Content-Type` header is not `multipart/form-data`.
     pub fn multipart(&self) -> Option<crate::multipart::Multipart<'a>> {
         let ct = self.header("content-type")?;
-        if ct.starts_with("multipart/form-data")
-            && let Some(idx) = ct.find("boundary=")
-        {
-            let boundary = &ct[idx + 9..];
-            return Some(crate::multipart::Multipart::new(self.req.body, boundary));
+        if ct.starts_with("multipart/form-data") {
+            if let Some(idx) = ct.find("boundary=") {
+                let boundary = &ct[idx + 9..];
+                return Some(crate::multipart::Multipart::new(self.req.body, boundary));
+            }
         }
         None
     }

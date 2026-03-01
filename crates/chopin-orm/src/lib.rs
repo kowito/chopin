@@ -123,12 +123,6 @@ pub trait Model: FromRow + Sized + Send + Sync {
         let params: Vec<&dyn chopin_pg::types::ToParam> =
             final_values.iter().map(|v| v as _).collect();
 
-        log::debug!(
-            "Executing Insert: {} | Params: {}",
-            query,
-            final_values.len()
-        );
-
         // We know we inserted one row, get returning pk.
         let rows = executor.query(&query, &params)?;
         if let Some(row) = rows.first() {
@@ -178,12 +172,6 @@ pub trait Model: FromRow + Sized + Send + Sync {
         let params: Vec<&dyn chopin_pg::types::ToParam> =
             final_values.iter().map(|v| v as _).collect();
 
-        log::debug!(
-            "Executing Upsert: {} | Params: {}",
-            query,
-            final_values.len()
-        );
-
         // We know we inserted/updated one row, get returning pk.
         let rows = executor.query(&query, &params)?;
         if let Some(row) = rows.first() {
@@ -227,7 +215,6 @@ pub trait Model: FromRow + Sized + Send + Sync {
         values.push(pk_val); // Put PK at the end (for WHERE clause)
 
         let params: Vec<&dyn chopin_pg::types::ToParam> = values.iter().map(|v| v as _).collect();
-        log::debug!("Executing Update: {} | Params: {}", query, values.len());
         executor.execute(&query, &params)?;
         Ok(())
     }
@@ -242,7 +229,6 @@ pub trait Model: FromRow + Sized + Send + Sync {
 
         let pk = self.primary_key_value();
 
-        log::debug!("Executing Delete: {} | Params: 1", query);
 
         executor.execute(&query, &[&pk])?;
         Ok(())

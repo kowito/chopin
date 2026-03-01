@@ -87,8 +87,6 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
         let params_ref: Vec<&dyn chopin_pg::types::ToParam> =
             self.params.iter().map(|p| p as _).collect();
 
-        log::debug!("Executing Query: {} | Params: {}", query, self.params.len());
-
         let rows = executor.query(&query, &params_ref)?;
 
         let mut result = Vec::with_capacity(rows.len());
@@ -114,8 +112,6 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
 
         let params_ref: Vec<&dyn chopin_pg::types::ToParam> =
             self.params.iter().map(|p| p as _).collect();
-
-        log::debug!("Executing Count: {} | Params: {}", query, self.params.len());
 
         let rows = executor.query(&query, &params_ref)?;
         if let Some(row) = rows.first() {

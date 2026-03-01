@@ -160,10 +160,8 @@ impl Router {
 
         // Try exact match first
         for child in &node.children {
-            if !child.is_param
-                && !child.is_wildcard
-                && child.path == segment
-                && let Some(handler) = self.match_recursive(
+            if !child.is_param && !child.is_wildcard && child.path == segment {
+                if let Some(handler) = self.match_recursive(
                     child,
                     method,
                     segments,
@@ -171,9 +169,9 @@ impl Router {
                     params,
                     param_count,
                     middleware,
-                )
-            {
-                return Some(handler);
+                ) {
+                    return Some(handler);
+                }
             }
         }
 
@@ -181,11 +179,11 @@ impl Router {
         for child in &node.children {
             if child.is_param {
                 let old_count = *param_count;
-                if (*param_count as usize) < MAX_PARAMS
-                    && let Some(ref name) = child.param_name
-                {
-                    params[*param_count as usize] = (name.as_str(), segment);
-                    *param_count += 1;
+                if (*param_count as usize) < MAX_PARAMS {
+                    if let Some(ref name) = child.param_name {
+                        params[*param_count as usize] = (name.as_str(), segment);
+                        *param_count += 1;
+                    }
                 }
                 if let Some(handler) = self.match_recursive(
                     child,
@@ -206,11 +204,11 @@ impl Router {
         // Try wildcard match
         for child in &node.children {
             if child.is_wildcard {
-                if (*param_count as usize) < MAX_PARAMS
-                    && let Some(ref name) = child.param_name
-                {
-                    params[*param_count as usize] = (name.as_str(), segment);
-                    *param_count += 1;
+                if (*param_count as usize) < MAX_PARAMS {
+                    if let Some(ref name) = child.param_name {
+                        params[*param_count as usize] = (name.as_str(), segment);
+                        *param_count += 1;
+                    }
                 }
                 if let Some(h) = child.handlers.get(&method) {
                     middleware.extend_from_slice(&child.middleware);
