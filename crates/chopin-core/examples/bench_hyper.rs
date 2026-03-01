@@ -13,6 +13,8 @@ struct Message {
     message: &'static str,
 }
 
+const PLAIN_BYTES: Bytes = Bytes::from_static(b"Hello, World!");
+
 async fn handle(
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
@@ -26,15 +28,15 @@ async fn handle(
             res.headers_mut()
                 .insert("Content-Type", "application/json".parse().unwrap());
             res.headers_mut().insert("Server", "Hyper".parse().unwrap());
+            res.headers_mut().insert("Date", httpdate::fmt_http_date(std::time::SystemTime::now()).parse().unwrap());
             Ok(res)
         }
         (&Method::GET, "/plain") => {
-            let date = httpdate::fmt_http_date(std::time::SystemTime::now());
-            let mut res = Response::new(Full::new(Bytes::from("Hello, World!")));
+            let mut res = Response::new(Full::new(PLAIN_BYTES.clone()));
             res.headers_mut()
                 .insert("Content-Type", "text/plain; charset=UTF-8".parse().unwrap());
             res.headers_mut().insert("Server", "Hyper".parse().unwrap());
-            res.headers_mut().insert("Date", date.parse().unwrap());
+            res.headers_mut().insert("Date", httpdate::fmt_http_date(std::time::SystemTime::now()).parse().unwrap());
             Ok(res)
         }
         _ => {
@@ -74,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     .serve_connection(io, service_fn(handle))
                     .await
                 {
-                    eprintln!("Error serving connection: {:?}", err);
+                    // eprintln!("Error serving connection: {:?}", err);
                 }
             });
         }

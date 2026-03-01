@@ -10,66 +10,45 @@ use crate::metrics::WorkerMetrics;
 use crate::router::Router;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Write `src` into `buf[pos..]`, advancing `pos`. Returns `false` on overflow.
-#[inline(always)]
-fn buf_write(buf: &mut [u8], pos: &mut usize, src: &[u8]) -> bool {
-    let end = *pos + src.len();
-    if end > buf.len() {
-        return false;
-    }
-    buf[*pos..end].copy_from_slice(src);
-    *pos = end;
-    true
-}
-
 /// Format an HTTP status line into a fixed 40-byte buffer. Returns the slice length.
 fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
-    let phrase: &[u8] = match status {
-        100 => b"Continue",
-        101 => b"Switching Protocols",
-        200 => b"OK",
-        201 => b"Created",
-        202 => b"Accepted",
-        204 => b"No Content",
-        206 => b"Partial Content",
-        301 => b"Moved Permanently",
-        302 => b"Found",
-        304 => b"Not Modified",
-        400 => b"Bad Request",
-        401 => b"Unauthorized",
-        403 => b"Forbidden",
-        404 => b"Not Found",
-        405 => b"Method Not Allowed",
-        408 => b"Request Timeout",
-        409 => b"Conflict",
-        410 => b"Gone",
-        413 => b"Content Too Large",
-        415 => b"Unsupported Media Type",
-        422 => b"Unprocessable Entity",
-        429 => b"Too Many Requests",
-        500 => b"Internal Server Error",
-        501 => b"Not Implemented",
-        502 => b"Bad Gateway",
-        503 => b"Service Unavailable",
-        504 => b"Gateway Timeout",
-        _ => b"Unknown",
+    let (phrase, code_bytes): (&[u8], &[u8]) = match status {
+        100 => (b"Continue",           b"100"),
+        101 => (b"Switching Protocols", b"101"),
+        200 => (b"OK",                 b"200"),
+        201 => (b"Created",            b"201"),
+        202 => (b"Accepted",           b"202"),
+        204 => (b"No Content",         b"204"),
+        206 => (b"Partial Content",    b"206"),
+        301 => (b"Moved Permanently",  b"301"),
+        302 => (b"Found",              b"302"),
+        304 => (b"Not Modified",       b"304"),
+        400 => (b"Bad Request",        b"400"),
+        401 => (b"Unauthorized",       b"401"),
+        403 => (b"Forbidden",          b"403"),
+        404 => (b"Not Found",          b"404"),
+        405 => (b"Method Not Allowed", b"405"),
+        408 => (b"Request Timeout",    b"408"),
+        409 => (b"Conflict",           b"409"),
+        410 => (b"Gone",               b"410"),
+        413 => (b"Content Too Large",  b"413"),
+        415 => (b"Unsupported Media Type", b"415"),
+        422 => (b"Unprocessable Entity", b"422"),
+        429 => (b"Too Many Requests",  b"429"),
+        500 => (b"Internal Server Error", b"500"),
+        501 => (b"Not Implemented",    b"501"),
+        502 => (b"Bad Gateway",        b"502"),
+        503 => (b"Service Unavailable", b"503"),
+        504 => (b"Gateway Timeout",    b"504"),
+        _ =>   (b"Unknown",            b"000"),
     };
-    // "HTTP/1.1 XYZ Phrase\r\n" — write inline using writeln!()
-    // Encode status as three ASCII digits
-    let h = (status / 100) as u8 + b'0';
-    let t = ((status / 10) % 10) as u8 + b'0';
-    let u = (status % 10) as u8 + b'0';
 
     let prefix = b"HTTP/1.1 ";
     let mut i = 0;
     out[i..i + prefix.len()].copy_from_slice(prefix);
     i += prefix.len();
-    out[i] = h;
-    i += 1;
-    out[i] = t;
-    i += 1;
-    out[i] = u;
-    i += 1;
+    out[i..i + 3].copy_from_slice(code_bytes);
+    i += 3;
     out[i] = b' ';
     i += 1;
     out[i..i + phrase.len()].copy_from_slice(phrase);
@@ -361,8 +340,15 @@ impl Worker {
 
                                     macro_rules! w {
                                         ($src:expr) => {
-                                            if !buf_write(buf, &mut pos, $src) {
-                                                overflow = true;
+                                            if !overflow {
+                                                let c = $src;
+                                                let end = pos + c.len();
+                                                if let Some(slice) = buf.get_mut(pos..end) {
+                                                    slice.copy_from_slice(c);
+                                                    pos = end;
+                                                } else {
+                                                    overflow = true;
+                                                }
                                             }
                                         };
                                     }
