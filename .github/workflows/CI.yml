@@ -74,7 +74,7 @@ jobs:
       - name: Get current version
         id: current_version
         run: |
-          VERSION=$(grep '^version = ' crates/chopin-core/Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          VERSION=$(grep '^version =' Cargo.toml | head -1 | cut -d '"' -f 2)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
       
       - name: Determine bump type
@@ -111,13 +111,12 @@ jobs:
           NEW_VER=${{ steps.new_version.outputs.new_version }}
           echo "Updating workspace to $NEW_VER"
           
-          # Use a platform-agnostic way to update the root Cargo.toml
+          # Fix for macOS sed: -i '' is required
           # 1. Update the package version
-          sed -i "s/^version = \".*\"/version = \"$NEW_VER\"/" Cargo.toml
+          sed -i '' "s/^version = \".*\"/version = \"$NEW_VER\"/" Cargo.toml
           
-          # 2. Update workspace dependencies to match
-          # This specifically targets lines in [workspace.dependencies] that have path = "crates/..."
-          sed -i "s/version = \".*\", path = \"crates/version = \"$NEW_VER\", path = \"crates/g" Cargo.toml
+          # 2. Update workspace dependencies
+          sed -i '' "s/version = \".*\", path = \"crates/version = \"$NEW_VER\", path = \"crates/g" Cargo.toml
       
       - name: Update Cargo.lock
         run: cargo update --workspace
