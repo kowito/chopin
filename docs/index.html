@@ -53,6 +53,8 @@
                 <li class="nav-label">Getting Started</li>
                 <li><a href="#installation"><i class='bx bx-download'></i> Installation</a></li>
                 <li><a href="#quick-start"><i class='bx bx-rocket'></i> Quick Start</a></li>
+                <li><a href="DEVELOPER_GUIDE.md" target="_blank"><i class='bx bx-book-open'></i> Developer Guide</a>
+                </li>
 
                 <li class="nav-label">User Manual</li>
                 <li><a href="#cli"><i class='bx bx-terminal'></i> CLI Reference</a></li>
@@ -396,6 +398,17 @@ kowito-json = "0.2.8"    # Schema-JIT SIMD JSON parser
             <!-- Quick Start Section -->
             <section id="quick-start">
                 <h2>Quick Start</h2>
+
+                <div class="glass-panel"
+                    style="padding: 1.5rem 2rem; margin-bottom: 2rem; border-left: 4px solid var(--brand-blue);">
+                    <h3 style="margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <i class='bx bx-book-reader'></i> Looking for a full tutorial?
+                    </h3>
+                    <p style="margin-bottom: 0;">Check out our comprehensive step-by-step <a href="DEVELOPER_GUIDE.md"
+                            target="_blank" style="color: var(--brand-blue); text-decoration: underline;">API Developer
+                            Guide</a> to learn everything from basic routing to advanced DB connection pooling.</p>
+                </div>
+
                 <p>Modern Chopin uses attribute macros for routing and implicit discovery.</p>
 
                 <div class="code-block glass-panel">
@@ -553,7 +566,8 @@ fn main() {
                     <h3>The Thread-Local Pattern</h3>
                     <p>The most efficient way to access your database in a Chopin handler is via
                         <code>thread_local!</code>. This ensures zero allocation for handle retrieval during the request
-                        lifecycle.</p>
+                        lifecycle.
+                    </p>
                     <div class="code-block">
                         <pre><code class="language-rust">use chopin_pg::{PgPool, PgConfig};
 use std::cell::RefCell;
