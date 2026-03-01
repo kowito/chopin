@@ -1,6 +1,6 @@
 # Chopin Architecture (Codename: nocturne-op9-no2)
 
-Chopin is a high-performance, Shared-Nothing HTTP framework built for maximum per-core throughput. It achieves **280k+ req/s** on a single core and scales linearly across multiple cores by bypassing heavyweight runtimes and minimizing cross-thread synchronization.
+Chopin is a high-performance, Shared-Nothing HTTP framework built for maximum per-core throughput. It achieves industry-leading efficiency and scales linearly across multiple cores by bypassing heavyweight runtimes and minimizing cross-thread synchronization.
 
 ## 🏛️ Core Design Principles
 
@@ -47,16 +47,16 @@ Chopin eliminates the kernel locking overhead typically found in multi-threaded 
 2. The kernel distributes incoming TCP connections directly to the worker's own `accept()` call.
 3. Workers remain **100% independent** — there is no inter-thread communication (no queues, no pipes, no locks) during request processing.
 
-### 📋 Connection Slab (`src/slab.rs`)
+### 📋 Connection Slab (`crates/chopin-core/src/slab.rs`)
 Chopin manages memory through a pre-allocated **Connection Slab** per worker.
 - **O(1) Allocation**: Getting a handle for a new connection is a simple array index lookup.
 - **Fixed Size**: Memory usage is deterministic (100k slots by default per core).
 - **Zero Memset**: Buffers are reused without clearing; state tracking ensures no data leaches between requests.
 
 ### ⚡ Zero-Allocation Request Pipeline
-1.  **Parser (`src/parser.rs`)**: Slices the raw TCP buffer into standard HTTP fields. Uses `&str` slices instead of `String` allocations.
-2.  **Router (`src/router.rs`)**: A Radix Tree (Prefix Tree) for O(path-length) routing. Route parameters are stored on a fixed-size stack array during matching.
-3.  **Serializer (`src/worker.rs`)**: Responses are written directly into the `write_buf` using raw byte copies (`copy_from_slice`). It avoids the overhead of `std::fmt` and vtable dispatches.
+1.  **Parser (`crates/chopin-core/src/parser.rs`)**: Slices the raw TCP buffer into standard HTTP fields. Uses `&str` slices instead of `String` allocations.
+2.  **Router (`crates/chopin-core/src/router.rs`)**: A Radix Tree (Prefix Tree) for O(path-length) routing. Route parameters are stored on a fixed-size stack array during matching.
+3.  **Serializer (`crates/chopin-core/src/worker.rs`)**: Responses are written directly into the `write_buf` using raw byte copies (`copy_from_slice`). It avoids the overhead of `std::fmt` and vtable dispatches.
 
 ## 🚀 Performance Optimizations
 

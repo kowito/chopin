@@ -4,12 +4,20 @@ This report details the performance comparison between Chopin v0.5.2 and Hyper v
 
 ## Performance Comparison
 
-| Scenario | Framework | Requests/sec | Avg Latency | Max Latency |
+| Scenario | Framework | Relative Throughput | Avg Latency | Max Latency |
 | :--- | :--- | :--- | :--- | :--- |
-| **Plain Text** | **Chopin** | **183,196** | **1.25ms** | **37.83ms** |
-| | Hyper | 161,197 | 1.45ms | 68.27ms |
-| **JSON** | **Chopin** | **217,357** | **0.98ms** | **25.05ms** |
-| | Hyper | 161,463 | 1.45ms | 67.39ms |
+| **Plain Text** | **Chopin** | **100%** | **1.25ms** | **37.83ms** |
+| | Hyper | 88% | 1.45ms | 68.27ms |
+| **JSON** | **Chopin** | **100%** | **0.98ms** | **25.05ms** |
+| | Hyper | 74% | 1.45ms | 67.39ms |
+
+
+### 📊 Performance Visualization (JSON Throughput)
+
+```text
+Chopin  [██████████████████████████████] 100% (Baseline)
+Hyper   [██████████████████████        ]  74%
+```
 
 ## Analysis
 
@@ -18,6 +26,14 @@ Chopin demonstrates superior scaling on multi-core systems. By utilizing `SO_REU
 
 ### JSON Serialization
 The performance gap in JSON matches the throughput lead, as Chopin's `kowito-json` Schema-JIT engine serializes payloads at near-memory bandwidth speeds without the overhead of standard reflection-based serializers.
+
+### 🐧 Platform-Specific Optimizations
+
+Chopin's throughput lead is sustained by deep OS-level optimizations:
+- **Linux**: Atomic `SOCK_NONBLOCK`, `TCP_DEFER_ACCEPT` (holds connection until data arrives), and `TCP_FASTOPEN` (TFO).
+- **macOS**: `SO_NOSIGPIPE` and `TCP_FASTOPEN`.
+- **Edge-Triggered I/O**: High-performance event notification using `epoll` (ET) on Linux and `kqueue` on macOS.
+- **Syscall Minimization**: `TCP_NODELAY` is set on the listener and inherited, saving one `setsockopt` syscall per connection.
 
 ## Environment Details
 - **Architecture**: Apple Silicon (M-series)

@@ -9,3 +9,40 @@
 > **High-fidelity engineering for the modern virtuoso.**
 
 `chopin-orm` provides a high‑performance ORM layer built on top of `chopin-pg`. It offers zero‑allocation query construction and type‑safe mapping of Rust structs to PostgreSQL tables.
+
+## 🛠️ Usage Example
+
+```rust
+use chopin_orm::{Model, PgPool, PgValue};
+
+#[derive(Model, Debug)]
+#[model(table_name = "users")]
+struct User {
+    #[model(primary_key)]
+    id: i32,
+    username: String,
+    email: String,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = PgConfig::from_url("postgres://user:pass@localhost:5432/db")?;
+    let mut pool = PgPool::connect(config, 5)?;
+
+    // Create
+    let mut user = User { id: 0, username: "virtuoso".into(), email: "paganini@example.com".into() };
+    user.insert(&mut pool)?;
+
+    // Retrieve
+    let found = User::find()
+        .filter("id = $1", vec![PgValue::Int4(user.id)])
+        .one(&mut pool)?;
+
+    // Update
+    if let Some(mut u) = found {
+        u.username = "chopin".into();
+        u.update(&mut pool)?;
+    }
+
+    Ok(())
+}
+```

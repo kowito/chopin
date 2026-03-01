@@ -11,7 +11,7 @@
 
 > **High-fidelity engineering for the modern virtuoso.**
 
-At peak optimization, Chopin delivers **280,000+ req/s** on a single core, effectively outperforming standard frameworks like Hyper by **~40%** while maintaining significantly lower latency.
+At peak optimization, Chopin delivers industry-leading throughput, effectively outperforming standard frameworks like Hyper by **~40%** while maintaining significantly lower latency.
 
 ## 🚀 Core Architecture
 
@@ -36,6 +36,8 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 
 - **Radix Router**: Supports static paths, labeled parameters (`:id`), and wildcards (`*path`).
 - **Declarative Extractors**: Ergonomic `FromRequest` trait for automatic `Json<T>` or `Query<X>` extraction.
+- **Database (PostgreSQL)**: `chopin-pg` (low-level driver) and `chopin-orm` (zero-allocation ORM) with per-worker connection pooling.
+- **Authentication**: `chopin-auth` provides JWT, password hashing, and role-based access control.
 - **Panic Resilience**: `catch_unwind` protection ensures a handler panic doesn't crash the worker thread.
 - **Production-Ready**: Default HTTP/1.1 keep-alive, graceful shutdown, and O(1) connection pruning.
 
@@ -75,16 +77,28 @@ chopin openapi      # Generate spec
 
 ## 📊 Performance Benchmark (macOS Apple Silicon)
 
-| Framework | Endpoint | Throughput | Latency (Avg) |
+| Framework | Endpoint | Relative Throughput | Latency (Avg) |
 | :--- | :--- | :--- | :--- |
-| **Chopin** | `/json` | **289,966 req/s** | **686 μs** |
-| **Chopin** | `/plain` | **283,983 req/s** | **700 μs** |
-| Actix Web | `/json` | 264,120 req/s | 812 μs |
-| Axum | `/json` | 242,500 req/s | 945 μs |
-| Hyper | `/json` | 212,731 req/s | 1,810 μs |
-| Hyper | `/plain` | 211,844 req/s | 1,820 μs |
+| **Chopin** | `/json` | **100%** | **686 μs** |
+| **Chopin** | `/plain` | **100%** | **700 μs** |
+| Actix Web | `/json` | 91% | 812 μs |
+| Axum | `/json` | 84% | 945 μs |
+| Hyper | `/json` | 73% | 1,810 μs |
+| Hyper | `/plain` | 73% | 1,820 μs |
 
-*Chopin is **10-15% faster** than Actix/Axum and **40% faster** than Hyper with significantly lower latency.*
+### 📊 Performance Visualization
+
+```text
+Throughput Comparison (Single-Core)
+-------------------------------------------------------
+Chopin     [██████████████████████████████] 100% (Baseline)
+Actix Web  [███████████████████████████   ]  91%
+Axum       [█████████████████████████     ]  84%
+Hyper      [██████████████████████        ]  73%
+-------------------------------------------------------
+```
+
+*Chopin is **10-15% faster** than Actix/Axum and **~40% faster** than Hyper with significantly lower latency.*
 
 ---
 "Simple as a melody, fast as a nocturne." - *nocturne-op9-no2*
