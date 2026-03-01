@@ -29,7 +29,10 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(num_cpus::get);
 
-    println!("Chopin server listening on 0.0.0.0:8080 with {} workers", workers);
+    println!(
+        "Chopin server listening on 0.0.0.0:8080 with {} workers",
+        workers
+    );
 
     Server::bind("0.0.0.0:8080")
         .workers(workers)

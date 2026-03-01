@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chopin-macros",
  "chopin-orm",
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-orm"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "async-trait",
  "chopin-orm-macro",
@@ -274,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-orm-macro"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-pg"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "libc",
  "monoio",

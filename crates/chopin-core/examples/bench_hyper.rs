@@ -28,7 +28,12 @@ async fn handle(
             res.headers_mut()
                 .insert("Content-Type", "application/json".parse().unwrap());
             res.headers_mut().insert("Server", "Hyper".parse().unwrap());
-            res.headers_mut().insert("Date", httpdate::fmt_http_date(std::time::SystemTime::now()).parse().unwrap());
+            res.headers_mut().insert(
+                "Date",
+                httpdate::fmt_http_date(std::time::SystemTime::now())
+                    .parse()
+                    .unwrap(),
+            );
             Ok(res)
         }
         (&Method::GET, "/plain") => {
@@ -36,7 +41,12 @@ async fn handle(
             res.headers_mut()
                 .insert("Content-Type", "text/plain; charset=UTF-8".parse().unwrap());
             res.headers_mut().insert("Server", "Hyper".parse().unwrap());
-            res.headers_mut().insert("Date", httpdate::fmt_http_date(std::time::SystemTime::now()).parse().unwrap());
+            res.headers_mut().insert(
+                "Date",
+                httpdate::fmt_http_date(std::time::SystemTime::now())
+                    .parse()
+                    .unwrap(),
+            );
             Ok(res)
         }
         _ => {
@@ -72,11 +82,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let io = TokioIo::new(stream);
 
             tokio::task::spawn(async move {
-                if let Err(err) = http1::Builder::new()
+                if let Err(_err) = http1::Builder::new()
                     .serve_connection(io, service_fn(handle))
                     .await
                 {
-                    // eprintln!("Error serving connection: {:?}", err);
+                    // eprintln!("Error serving connection: {:?}", _err);
                 }
             });
         }
