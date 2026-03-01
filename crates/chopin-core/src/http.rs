@@ -174,6 +174,17 @@ impl Response {
         }
     }
 
+    /// 200 OK with a zero-copy static plain-text body.
+    /// Avoids heap allocation — ideal for fixed responses like TFB plaintext.
+    pub fn text_static(body: &'static [u8]) -> Self {
+        Self {
+            status: 200,
+            body: Body::Static(body),
+            content_type: "text/plain",
+            headers: Vec::new(),
+        }
+    }
+
     /// 200 OK with a pre-serialized JSON byte body.
     /// Use `Response::json()` when you have a typed value to serialize.
     pub fn json_bytes(body: impl Into<Vec<u8>>) -> Self {

@@ -15,7 +15,7 @@ fn json(_ctx: Context) -> Response {
 
 #[get("/plaintext")]
 fn plaintext(_ctx: Context) -> Response {
-    Response::text(b"Hello, World!".to_vec())
+    Response::text_static(b"Hello, World!")
 }
 
 fn main() {

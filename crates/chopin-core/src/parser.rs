@@ -11,6 +11,7 @@ pub enum ParseError {
 
 /// Parses an HTTP request out of the given buffer.
 /// Returns the parsed Request and the total number of bytes consumed (length of headers + body).
+#[inline]
 pub fn parse_request(buf_mut: &mut [u8]) -> Result<(Request<'_>, usize), ParseError> {
     let ptr = buf_mut.as_mut_ptr();
     let len = buf_mut.len();

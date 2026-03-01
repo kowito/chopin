@@ -11,7 +11,11 @@ use crate::metrics::WorkerMetrics;
 use crate::router::Router;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Pre-baked status line for 200 OK (the overwhelming majority in TFB).
+const STATUS_200_OK: &[u8] = b"HTTP/1.1 200 OK\r\n";
+
 /// Format an HTTP status line into a fixed 40-byte buffer. Returns the slice length.
+#[inline]
 fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
     let (phrase, code_bytes): (&[u8], &[u8]) = match status {
         100 => (b"Continue", b"100"),
@@ -68,7 +72,7 @@ fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
 ///
 /// Uses the Howard Hinnant civil_from_days algorithm for calendar conversion.
 #[inline]
-fn format_http_date(buf: &mut [u8; 29]) {
+fn format_http_date(buf: &mut [u8; 29], ts: u64) {
     // Day-of-week names (epoch = Thursday, index 0)
     static WDAY: [[u8; 3]; 7] = [
         *b"Thu", *b"Fri", *b"Sat", *b"Sun", *b"Mon", *b"Tue", *b"Wed",
@@ -77,11 +81,6 @@ fn format_http_date(buf: &mut [u8; 29]) {
         *b"Jan", *b"Feb", *b"Mar", *b"Apr", *b"May", *b"Jun", *b"Jul", *b"Aug", *b"Sep", *b"Oct",
         *b"Nov", *b"Dec",
     ];
-
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
 
     let total_days = (ts / 86400) as u32;
     let wday = (total_days % 7) as usize;
@@ -173,6 +172,12 @@ impl Worker {
         let mut last_prune = now;
         let mut timer_wheel = TimerWheel::new(now);
         let mut iter_count: u32 = 0;
+
+        // Cached HTTP-date: refreshed once per second, shared across all responses
+        let mut cached_date = [0u8; 29];
+        format_http_date(&mut cached_date, now as u64);
+        let mut cached_date_sec: u32 = now;
+
         loop {
             let is_shutting_down = shutdown.load(Ordering::Acquire);
             if is_shutting_down && slab.is_empty() {
@@ -190,6 +195,12 @@ impl Worker {
                 if now - last_prune >= 1 {
                     self.prune_connections_wheel(&mut slab, &epoll, &mut timer_wheel, now);
                     last_prune = now;
+                }
+
+                // Refresh cached HTTP-date once per second
+                if now != cached_date_sec {
+                    format_http_date(&mut cached_date, now as u64);
+                    cached_date_sec = now;
                 }
             }
 
@@ -289,6 +300,8 @@ impl Worker {
                         'pipeline: loop {
                             // Inner loop: drain all complete requests from read_buf,
                             // serialising each response into write_buf.
+                            // Track read_offset for deferred compaction (single memcpy at end).
+                            let mut read_offset: usize = 0;
                             while next_state == ConnState::Parsing {
                                 if let Some(conn) = slab.get_mut(idx) {
                                     let rl = conn.read_len as usize;
@@ -304,7 +317,7 @@ impl Worker {
                                         break;
                                     }
 
-                                    let buf = &mut conn.read_buf[..rl];
+                                    let buf = &mut conn.read_buf[read_offset..read_offset + rl];
                                     match crate::parser::parse_request(buf) {
                                         Ok((req, consumed)) => {
                                             let mut ctx = crate::http::Context {
@@ -354,6 +367,7 @@ impl Worker {
                                                     let global_mw = &self.router.global_middleware;
                                                     let total_mw = global_mw.len() + route_mw_count;
 
+                                                    #[cfg(feature = "catch-panic")]
                                                     let result = std::panic::catch_unwind(
                                                         std::panic::AssertUnwindSafe(|| {
                                                             if total_mw == 0 {
@@ -397,12 +411,43 @@ impl Worker {
                                                             }
                                                         }),
                                                     );
-                                                    match result {
+                                                    #[cfg(feature = "catch-panic")]
+                                                    let response = match result {
                                                         Ok(r) => r,
                                                         Err(_) => {
                                                             crate::http::Response::server_error()
                                                         }
-                                                    }
+                                                    };
+
+                                                    #[cfg(not(feature = "catch-panic"))]
+                                                    let response = if total_mw == 0 {
+                                                        handler_ptr(ctx)
+                                                    } else {
+                                                        let mut current_handler: crate::router::BoxedHandler =
+                                                            std::sync::Arc::new(handler_ptr);
+                                                        for i in (0..route_mw_count).rev() {
+                                                            if let Some(mw) = route_middleware[i] {
+                                                                let next = current_handler;
+                                                                current_handler =
+                                                                    std::sync::Arc::new(
+                                                                        move |ctx| {
+                                                                            mw(ctx, next.clone())
+                                                                        },
+                                                                    );
+                                                            }
+                                                        }
+                                                        for mw in global_mw.iter().rev() {
+                                                            let mw = *mw;
+                                                            let next = current_handler;
+                                                            current_handler =
+                                                                std::sync::Arc::new(move |ctx| {
+                                                                    mw(ctx, next.clone())
+                                                                });
+                                                        }
+                                                        current_handler(ctx)
+                                                    };
+
+                                                    response
                                                 }
                                                 None => crate::http::Response::not_found(),
                                             };
@@ -430,14 +475,19 @@ impl Worker {
                                                 };
                                             }
 
-                                            let mut sl_buf = [0u8; 40];
-                                            let sl_len = status_line(response.status, &mut sl_buf);
-                                            w!(&sl_buf[..sl_len]);
+                                            // Pre-baked 200 OK status line (hot path)
+                                            if response.status == 200 {
+                                                w!(STATUS_200_OK);
+                                            } else {
+                                                let mut sl_buf = [0u8; 40];
+                                                let sl_len =
+                                                    status_line(response.status, &mut sl_buf);
+                                                w!(&sl_buf[..sl_len]);
+                                            }
 
-                                            let mut date_buf = [0u8; 29];
-                                            format_http_date(&mut date_buf);
+                                            // Cached HTTP-date (refreshed once per second)
                                             w!(b"Date: ");
-                                            w!(&date_buf);
+                                            w!(&cached_date);
                                             w!(b"\r\n");
 
                                             w!(b"Server: chopin\r\n");
@@ -553,10 +603,8 @@ impl Worker {
                                             // Done using wbuf — NLL releases the borrow.
                                             conn.write_len = (wstart + pos) as u16;
 
-                                            // Compact read_buf: shift unconsumed bytes
-                                            if consumed < rl {
-                                                conn.read_buf.copy_within(consumed..rl, 0);
-                                            }
+                                            // Deferred compaction: track offset, compact once at end
+                                            read_offset += consumed;
                                             conn.read_len = (rl - consumed) as u16;
 
                                             // Sticky keep-alive flag
@@ -593,6 +641,17 @@ impl Worker {
                                     break;
                                 }
                             } // end inner while (pipeline parse loop)
+
+                            // Deferred compaction: single memcpy after all pipelined parses
+                            if read_offset > 0
+                                && let Some(conn) = slab.get_mut(idx)
+                            {
+                                let remaining = conn.read_len as usize;
+                                if remaining > 0 {
+                                    conn.read_buf
+                                        .copy_within(read_offset..read_offset + remaining, 0);
+                                }
+                            }
 
                             // ── Write ──
                             if (next_state == ConnState::Writing || is_write)
@@ -723,8 +782,12 @@ mod tests {
     /// Verify our zero-alloc date formatter matches httpdate crate output.
     #[test]
     fn test_format_http_date_matches_httpdate() {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let mut buf = [0u8; 29];
-        format_http_date(&mut buf);
+        format_http_date(&mut buf, ts);
         let ours = std::str::from_utf8(&buf).expect("valid utf-8");
 
         let expected = httpdate::fmt_http_date(SystemTime::now());

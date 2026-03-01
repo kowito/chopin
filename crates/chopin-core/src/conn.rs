@@ -1,7 +1,7 @@
 // src/conn.rs
 
-pub const READ_BUF_SIZE: usize = 4096;
-pub const WRITE_BUF_SIZE: usize = 4096;
+pub const READ_BUF_SIZE: usize = 8192;
+pub const WRITE_BUF_SIZE: usize = 16384;
 
 /// Connection flags (bit field)
 pub const CONN_KEEP_ALIVE: u8 = 1;

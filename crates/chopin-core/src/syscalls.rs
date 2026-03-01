@@ -774,7 +774,8 @@ pub fn read_nonblocking(fd: c_int, buf: &mut [u8]) -> ChopinResult<usize> {
         if res < 0 {
             let err = io::Error::last_os_error();
             if err.kind() == io::ErrorKind::WouldBlock {
-                Ok(0) // Need to wait for more data
+                // Propagate as error so caller can distinguish from EOF (Ok(0))
+                Err(err.into())
             } else {
                 Err(err.into())
             }

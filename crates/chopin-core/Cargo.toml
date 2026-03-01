@@ -8,6 +8,10 @@ repository.workspace = true
 homepage.workspace = true
 description = "The extremely fast, zero-overhead HTTP engine for the Chopin framework."
 
+[features]
+default = ["catch-panic"]
+catch-panic = []
+
 [dependencies]
 core_affinity = "0.8.3"
 ctrlc = "3.4.5"
@@ -17,12 +21,12 @@ num_cpus = "1.17.0"
 serde = { workspace = true }
 serde_urlencoded = "0.7"
 serde_json = { workspace = true }
-httpdate = "1.0.3"
 inventory = "0.3.22"
 chopin-macros = { workspace = true }
 memchr = "2.8.0"
 
 [dev-dependencies]
+httpdate = "1.0.3"
 hyper = { version = "1.4.1", features = ["full"] }
 tokio = { version = "1.40.0", features = ["full"] }
 http-body-util = "0.1.2"
