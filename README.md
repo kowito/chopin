@@ -38,26 +38,36 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 
 ## 🛠️ Usage Example
 
+Chopin uses attribute-based route discovery for a clean, declarative experience.
+
 ```rust
-use chopin::{Server, Router, Context, Response, KJson};
+use chopin_core::Chopin;
+use chopin_macros::get;
 
-#[derive(KJson, Default)]
-struct User {
-    id: u64,
-    username: String,
-}
-
+#[get("/user")]
 fn user_handler(ctx: Context) -> Response {
     let user = User { id: 1, username: "kowito".into() };
-    ctx.respond_json(&user) // Turbo-charged Schema-JIT serialization
+    ctx.respond_json(&user)
 }
 
 fn main() {
-    let mut router = Router::new();
-    router.get("/user", user_handler);
-    
-    Server::bind("0.0.0.0:8080").serve(router).unwrap();
+    Chopin::new()
+        .mount_all_routes()
+        .serve("0.0.0.0:8080")
+        .unwrap();
 }
+```
+
+## 🎹 CLI at a Glance
+
+The `chopin` CLI handles everything from project scaffolding to production deployment.
+
+```bash
+cargo install chopin-cli
+chopin new my_app
+chopin dev          # Hot-reload development
+chopin check        # Architectural linter
+chopin openapi      # Generate spec
 ```
 
 ## 📊 Performance Benchmark (macOS Apple Silicon)

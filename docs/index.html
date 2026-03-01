@@ -55,7 +55,8 @@
                 <li><a href="#quick-start"><i class='bx bx-rocket'></i> Quick Start</a></li>
 
                 <li class="nav-label">User Manual</li>
-                <li><a href="#routing"><i class='bx bx-directions'></i> Routing</a></li>
+                <li><a href="#cli"><i class='bx bx-terminal'></i> CLI Reference</a></li>
+                <li><a href="#routing"><i class='bx bx-directions'></i> Routing & Macros</a></li>
                 <li><a href="#extractors"><i class='bx bx-layer'></i> Extractors & JSON</a></li>
                 <li><a href="#orm"><i class='bx bx-data'></i> PostgreSQL & ORM</a></li>
 
@@ -93,7 +94,7 @@
 
                 <div class="command-box">
                     <span class="prompt">$</span>
-                    <code id="install-cmd">cargo add chopin-core</code>
+                    <code id="install-cmd">chopin new my_project</code>
                     <button class="copy-btn" data-clipboard-target="#install-cmd" aria-label="Copy to clipboard">
                         <i class='bx bx-copy'></i>
                     </button>
@@ -199,17 +200,19 @@
 
             <hr class="section-divider">
 
-            <!-- Installation Section -->
+            <!-- Installation & CLI Section -->
             <section id="installation">
                 <h2>Installation</h2>
-                <p>Chopin is modular. Install the core engine to get started, and add the database or ORM crates as
-                    needed.</p>
+                <p>The easiest way to start is using the <strong>Chopin CLI</strong>. Install it via cargo:</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-bash">cargo install chopin-cli</code></pre>
+                </div>
 
+                <p>Or add individual crates to your <code>Cargo.toml</code>:</p>
                 <div class="code-block glass-panel">
                     <pre><code class="language-toml">[dependencies]
 chopin-core = "0.5"
-
-# Optional modules:
+chopin-macros = "0.1"    # For attribute routing
 chopin-pg = "0.5"        # High-performance PostgreSQL driver
 chopin-orm = "0.5"       # Zero-allocation ORM layer
 kowito-json = "0.2.8"    # Schema-JIT SIMD JSON parser
@@ -219,24 +222,78 @@ kowito-json = "0.2.8"    # Schema-JIT SIMD JSON parser
 
             <hr class="section-divider">
 
+            <!-- CLI Reference Section -->
+            <section id="cli">
+                <h2>CLI Reference</h2>
+                <p>The <code>chopin</code> CLI provides a full suite of tools for rapid development.</p>
+                <div class="table-wrapper glass-panel">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Command</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>chopin new &lt;name&gt;</code></td>
+                                <td>Create a new Chopin project scaffold.</td>
+                            </tr>
+                            <tr>
+                                <td><code>chopin dev</code></td>
+                                <td>Start the development server with hot-reload.</td>
+                            </tr>
+                            <tr>
+                                <td><code>chopin generate app &lt;name&gt;</code></td>
+                                <td>Scaffold a new module (models, handlers, errors).</td>
+                            </tr>
+                            <tr>
+                                <td><code>chopin generate handler &lt;app&gt; &lt;name&gt;</code></td>
+                                <td>Add a new handler to an existing app.</td>
+                            </tr>
+                            <tr>
+                                <td><code>chopin check</code></td>
+                                <td>Run the architectural linter to ensure best practices.</td>
+                            </tr>
+                            <tr>
+                                <td><code>chopin deploy docker</code></td>
+                                <td>Generate a production-optimized Dockerfile.</td>
+                            </tr>
+                            <tr>
+                                <td><code>chopin openapi</code></td>
+                                <td>Generate OpenAPI 3.0 specs from your routes.</td>
+                            </tr>
+                            <tr>
+                                <td><code>chopin db shell</code></td>
+                                <td>Open an interactive PostgreSQL shell.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <hr class="section-divider">
+
             <!-- Quick Start Section -->
             <section id="quick-start">
                 <h2>Quick Start</h2>
-                <p>A minimal "Hello World" server using <code>chopin-core</code>.</p>
+                <p>Modern Chopin uses attribute macros for routing and implicit discovery.</p>
 
                 <div class="code-block glass-panel">
-                    <pre><code class="language-rust">use chopin::{Server, Router, Context, Response};
+                    <pre><code class="language-rust">use chopin_core::Chopin;
+use chopin_macros::get;
 
+#[get("/")]
 fn hello_world(_ctx: Context) -> Response {
     Response::plain("Hello, World!")
 }
 
 fn main() {
-    let mut router = Router::new();
-    router.get("/", hello_world);
-    
-    // Binds aggressively and utilizes all available CPU cores automatically
-    Server::bind("0.0.0.0:8080").serve(router).unwrap();
+    // Automatically discovers all routes marked with macros
+    Chopin::new()
+        .mount_all_routes()
+        .serve("0.0.0.0:8080")
+        .unwrap();
 }</code></pre>
                 </div>
             </section>
@@ -245,20 +302,29 @@ fn main() {
 
             <!-- Routing User Manual -->
             <section id="routing">
-                <h2>Routing</h2>
-                <p>The Chopin Radix Router provides $O(K)$ path matching (where $K$ is path length) with zero-cost
-                    parameter extraction. It supports exact paths, named parameters, and wildcard catch-alls.</p>
+                <h2>Routing & Macros</h2>
+                <p>Chopin supports both declarative attribute macros and manual router configuration. Both use the same
+                    underlying Radix Tree for $O(K)$ matching.</p>
 
+                <h3>Attribute Macros</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[get("/users")]
+fn list_users(ctx: Context) -> Response { ... }
+
+#[post("/users")]
+fn create_user(ctx: Context) -> Response { ... }
+
+#[get("/user/:id")]
+fn get_user(ctx: Context) -> Response {
+    let id = ctx.param("id");
+    ...
+}</code></pre>
+                </div>
+
+                <h3>Manual Routing</h3>
                 <div class="code-block glass-panel">
                     <pre><code class="language-rust">let mut router = Router::new();
-
-// Static routing
 router.get("/about", about_handler);
-
-// Parameterized routing (e.g., /user/42)
-router.get("/user/:id", user_handler);
-
-// Wildcard routing (e.g., /static/js/app.js)
 router.get("/static/*path", static_file_handler);</code></pre>
                 </div>
             </section>
@@ -305,27 +371,44 @@ fn user_handler(ctx: Context) -> Response {
             <section id="orm">
                 <h2>PostgreSQL & ORM</h2>
                 <p>The <code>chopin-pg</code> and <code>chopin-orm</code> crates provide a fast, zero-allocation
-                    database interaction layer mapping directly to Rust structs, avoiding reflection entirely.</p>
+                    database interaction layer mapping directly to Rust structs.</p>
 
                 <div class="code-block glass-panel">
-                    <pre><code class="language-rust">use chopin_orm::Model;
-use chopin_pg::Pool;
-
-#[derive(Model, Debug)]
+                    <pre><code class="language-rust">#[derive(Model, Debug)]
 #[table("users")]
 struct User {
     #[primary_key]
     id: i32,
     email: String,
-    created_at: Option<String>,
 }
 
-async fn fetch_user(pool: &Pool) {
-    // Zero-allocation query construction mapped directly to memory
-    let user: Option<User> = User::find_by_id(pool, 1).await.unwrap();
-    println!("{:?}", user);
-}
-</code></pre>
+// CRUD Operations
+async fn demo(pool: &PgPool) {
+    // Find
+    let user = User::find_by_id(pool, 1).await?;
+    
+    // Insert
+    let mut new_user = User { id: 0, email: "new@example.com".into() };
+    new_user.insert(pool).await?;
+    
+    // Update
+    new_user.email = "updated@example.com".into();
+    new_user.update(pool).await?;
+    
+    // Delete
+    new_user.delete(pool).await?;
+}</code></pre>
+                </div>
+
+                <h3>Query Builder</h3>
+                <p>For complex queries, use the type-safe Query Builder:</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">let users = User::query()
+    .filter("email LIKE $1", &["%@gmail.com"])
+    .order_by("created_at DESC")
+    .limit(10)
+    .fetch_all(pool)
+    .await?;</code></pre>
                 </div>
             </section>
 
