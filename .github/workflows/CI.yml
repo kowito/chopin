@@ -127,13 +127,22 @@ jobs:
         run: |
           if [ -n "${{ secrets.CARGO_TOKEN }}" ]; then
             echo "🚀 Publishing version ${{ steps.new_version.outputs.new_version }} to crates.io..."
+            # 1. Pubish macros first (dependency of core)
+            cargo publish -p chopin-macros --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 60
+            # 2. Publish core
             cargo publish -p chopin-core --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
             sleep 60
+            # 3. Publish leaf crates
+            cargo publish -p chopin-auth --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 30
             cargo publish -p chopin-pg --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
-            sleep 60
+            sleep 30
             cargo publish -p chopin-orm-macro --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
-            sleep 60
+            sleep 30
             cargo publish -p chopin-orm --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 30
+            cargo publish -p chopin-cli --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
           else
             echo "⚠️ CARGO_TOKEN not set, skipping publish"
             exit 1
@@ -165,13 +174,22 @@ jobs:
         run: |
           if [ -n "${{ secrets.CARGO_TOKEN }}" ]; then
             echo "🚀 Publishing tag ${{ github.ref_name }} to crates.io..."
+            # 1. Pubish macros first (dependency of core)
+            cargo publish -p chopin-macros --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 30
+            # 2. Publish core
             cargo publish -p chopin-core --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
             sleep 30
+            # 3. Publish leaf crates
+            cargo publish -p chopin-auth --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 10
             cargo publish -p chopin-pg --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
-            sleep 30
+            sleep 10
             cargo publish -p chopin-orm-macro --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
-            sleep 30
+            sleep 10
             cargo publish -p chopin-orm --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 10
+            cargo publish -p chopin-cli --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
           else
             echo "❌ CARGO_TOKEN not set"
             exit 1
