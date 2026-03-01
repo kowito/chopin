@@ -1,4 +1,4 @@
-use chopin_core::{get, Chopin, Context, KJson, Method, Response};
+use chopin_core::{Chopin, Context, KJson, Response, get};
 
 #[derive(KJson)]
 struct Message {
@@ -22,8 +22,6 @@ fn main() {
     println!("Starting local TFB test server on http://localhost:8000");
     Chopin::new()
         .mount_all_routes()
-        .route(Method::Get, "/json", json)
-        .route(Method::Get, "/plaintext", plaintext)
         .serve("0.0.0.0:8000")
         .expect("server failed");
 }

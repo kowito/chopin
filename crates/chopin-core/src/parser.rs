@@ -1,5 +1,6 @@
 // src/parser.rs
 use crate::http::{MAX_HEADERS, Method, Request};
+use memchr::memchr;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -16,24 +17,14 @@ pub fn parse_request(buf_mut: &mut [u8]) -> Result<(Request<'_>, usize), ParseEr
     let buf = &*buf_mut;
 
     // Basic HTTP request line: METHOD PATH HTTP/1.x\r\n
-    // Find first space for Method
-    let mut space1 = 0;
-    while space1 < buf.len() && buf[space1] != b' ' {
-        space1 += 1;
-    }
-    if space1 >= buf.len() {
-        return Err(ParseError::Incomplete);
-    }
+    // Find first space for Method (SIMD-accelerated)
+    let space1 = memchr(b' ', buf).ok_or(ParseError::Incomplete)?;
     let method = Method::from_bytes(&buf[..space1]);
 
-    // Find second space for Path
-    let mut space2 = space1 + 1;
-    while space2 < buf.len() && buf[space2] != b' ' {
-        space2 += 1;
-    }
-    if space2 >= buf.len() {
-        return Err(ParseError::Incomplete);
-    }
+    // Find second space for Path (SIMD-accelerated)
+    let space2 = memchr(b' ', &buf[space1 + 1..])
+        .map(|i| i + space1 + 1)
+        .ok_or(ParseError::Incomplete)?;
     let path_bytes = &buf[space1 + 1..space2];
 
     // Validate path as UTF-8
@@ -44,16 +35,23 @@ pub fn parse_request(buf_mut: &mut [u8]) -> Result<(Request<'_>, usize), ParseEr
         None => (full_path, None),
     };
 
-    // Find the end of the request line
-    let mut req_line_end = space2 + 1;
-    while req_line_end + 1 < buf.len()
-        && !(buf[req_line_end] == b'\r' && buf[req_line_end + 1] == b'\n')
-    {
-        req_line_end += 1;
-    }
-    if req_line_end + 1 >= buf.len() {
-        return Err(ParseError::Incomplete);
-    }
+    // Find the end of the request line (SIMD-accelerated \r scan)
+    let req_line_end = {
+        let search_start = space2 + 1;
+        let mut pos = search_start;
+        loop {
+            match memchr(b'\r', &buf[pos..]) {
+                Some(offset) => {
+                    let abs = pos + offset;
+                    if abs + 1 < buf.len() && buf[abs + 1] == b'\n' {
+                        break abs;
+                    }
+                    pos = abs + 1;
+                }
+                None => return Err(ParseError::Incomplete),
+            }
+        }
+    };
 
     let mut headers = [("", ""); MAX_HEADERS];
     let mut header_count: u8 = 0;
@@ -69,28 +67,40 @@ pub fn parse_request(buf_mut: &mut [u8]) -> Result<(Request<'_>, usize), ParseEr
             break; // End of headers
         }
 
-        // Find the colon
-        let mut colon_idx = cursor;
-        while colon_idx < buf.len() && buf[colon_idx] != b':' && buf[colon_idx] != b'\r' {
-            colon_idx += 1;
-        }
-
-        if colon_idx >= buf.len() || buf[colon_idx] == b'\r' {
-            return Err(ParseError::InvalidFormat);
-        }
+        // Find the colon (SIMD-accelerated)
+        let colon_idx = match memchr(b':', &buf[cursor..]) {
+            Some(offset) => {
+                let abs = cursor + offset;
+                // Make sure we didn't skip past a \r (malformed header)
+                if let Some(cr_offset) = memchr(b'\r', &buf[cursor..abs]) {
+                    let _ = cr_offset; // colon is after \r — no colon on this line
+                    return Err(ParseError::InvalidFormat);
+                }
+                abs
+            }
+            None => return Err(ParseError::InvalidFormat),
+        };
 
         let name =
             std::str::from_utf8(&buf[cursor..colon_idx]).map_err(|_| ParseError::InvalidFormat)?;
 
-        // Find header line end
-        let mut line_end = colon_idx + 1;
-        while line_end + 1 < buf.len() && !(buf[line_end] == b'\r' && buf[line_end + 1] == b'\n') {
-            line_end += 1;
-        }
-
-        if line_end + 1 >= buf.len() {
-            return Err(ParseError::Incomplete);
-        }
+        // Find header line end (SIMD-accelerated \r scan)
+        let line_end = {
+            let search_start = colon_idx + 1;
+            let mut pos = search_start;
+            loop {
+                match memchr(b'\r', &buf[pos..]) {
+                    Some(offset) => {
+                        let abs = pos + offset;
+                        if abs + 1 < buf.len() && buf[abs + 1] == b'\n' {
+                            break abs;
+                        }
+                        pos = abs + 1;
+                    }
+                    None => return Err(ParseError::Incomplete),
+                }
+            }
+        };
 
         let mut val_start = colon_idx + 1;
         while val_start < line_end && buf[val_start] == b' ' {

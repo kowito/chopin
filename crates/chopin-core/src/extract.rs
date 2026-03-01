@@ -17,14 +17,6 @@ where
     type Error = Response;
 
     fn from_request(ctx: &'a Context<'a>) -> Result<Self, Self::Error> {
-        // Use kowito-json's fast scanner for validation before deserializing
-        let scanner = crate::json::Scanner::new(ctx.req.body);
-        let mut tape = [0u32; 1024]; // Stack-allocated tape
-        let tokens = scanner.scan(&mut tape);
-        if tokens == 0 && !ctx.req.body.is_empty() {
-            return Err(crate::http::Response::bad_request()); // Invalid JSON → 400
-        }
-
         match serde_json::from_slice(ctx.req.body) {
             Ok(val) => Ok(Json(val)),
             Err(_) => Err(crate::http::Response::bad_request()), // Malformed JSON → 400

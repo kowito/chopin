@@ -3,6 +3,9 @@
 pub const READ_BUF_SIZE: usize = 4096;
 pub const WRITE_BUF_SIZE: usize = 4096;
 
+/// Connection flags (bit field)
+pub const CONN_KEEP_ALIVE: u8 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum ConnState {
@@ -22,9 +25,10 @@ pub enum ConnState {
 pub struct Conn {
     pub fd: i32,              // File Descriptor or Free List Next Index
     pub state: ConnState,     // State machine enum
-    pub parse_pos: u16,       // Parse checkpoint / total read valid bytes / total write len
+    pub flags: u8,            // Bit 0: keep-alive (was padding)
+    pub read_len: u16,        // Valid bytes in read_buf
     pub write_pos: u16,       // Bytes already written (for partial write resume)
-    pub route_id: u16,        // Cached Route index for later lookup / State
+    pub write_len: u16,       // Total bytes to write in write_buf
     pub last_active: u32,     // Cached timestamp in seconds
     pub requests_served: u32, // Number of HTTP requests served on this keep-alive connection
 
@@ -38,9 +42,10 @@ impl Conn {
         Self {
             fd: -1,
             state: ConnState::Free,
-            parse_pos: 0,
+            flags: 0,
+            read_len: 0,
             write_pos: 0,
-            route_id: 0,
+            write_len: 0,
             last_active: 0,
             requests_served: 0,
             read_buf: [0; READ_BUF_SIZE],
@@ -64,8 +69,8 @@ mod tests {
     fn verify_conn_alignment() {
         assert_eq!(std::mem::align_of::<Conn>(), 64);
 
-        // Header fields: fd(4) + state(1) + _pad(1) + parse_pos(2) + write_pos(2) +
-        //                route_id(2) + _pad(2) + last_active(4) + requests_served(4) = 20 bytes
+        // Header fields: fd(4) + state(1) + flags(1) + read_len(2) + write_pos(2) +
+        //                write_len(2) + _pad(0) + last_active(4) + requests_served(4) = 20 bytes
         // Padded to next 64-byte boundary = 64 bytes total for the header block.
         let header_block = 64_usize;
         let total_size = header_block + READ_BUF_SIZE + WRITE_BUF_SIZE;

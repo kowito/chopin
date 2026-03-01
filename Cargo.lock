@@ -286,6 +286,7 @@ dependencies = [
  "kowito-json",
  "lazy_static",
  "libc",
+ "memchr",
  "num_cpus",
  "serde",
  "serde_json",

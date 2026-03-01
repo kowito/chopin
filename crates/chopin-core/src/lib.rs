@@ -11,6 +11,7 @@ pub mod router;
 pub mod server;
 pub mod slab;
 pub mod syscalls;
+pub mod timer;
 pub mod worker;
 
 // Re-exports for users

@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 httpdate = "1.0.3"
 inventory = "0.3.22"
 chopin-macros = { workspace = true }
+memchr = "2.8.0"
 
 [dev-dependencies]
 hyper = { version = "1.4.1", features = ["full"] }

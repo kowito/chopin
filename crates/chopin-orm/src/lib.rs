@@ -229,7 +229,6 @@ pub trait Model: FromRow + Sized + Send + Sync {
 
         let pk = self.primary_key_value();
 
-
         executor.execute(&query, &[&pk])?;
         Ok(())
     }

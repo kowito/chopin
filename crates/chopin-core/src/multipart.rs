@@ -1,4 +1,5 @@
 use crate::parser::ParseError;
+use memchr::memchr;
 
 #[derive(Debug)]
 pub struct Part<'a> {
@@ -24,12 +25,27 @@ impl<'a> Multipart<'a> {
         }
     }
 
-    // helper to find byte sequence
+    // helper to find byte sequence (SIMD-accelerated via memchr for first byte)
     fn find(data: &[u8], needle: &[u8]) -> Option<usize> {
         if needle.is_empty() {
             return Some(0);
         }
-        data.windows(needle.len()).position(|w| w == needle)
+        let first = needle[0];
+        let mut offset = 0;
+        while offset + needle.len() <= data.len() {
+            match memchr(first, &data[offset..]) {
+                Some(pos) => {
+                    let abs = offset + pos;
+                    if abs + needle.len() <= data.len() && data[abs..abs + needle.len()] == *needle
+                    {
+                        return Some(abs);
+                    }
+                    offset = abs + 1;
+                }
+                None => return None,
+            }
+        }
+        None
     }
 }
 
@@ -100,16 +116,15 @@ impl<'a> Iterator for Multipart<'a> {
                 .is_some_and(|h| h.eq_ignore_ascii_case(b"content-disposition:"))
             {
                 let rest = &line[20..];
-                // parse name="foo"
-                let lower_rest = rest.to_ascii_lowercase();
-                if let Some(idx) = lower_rest.find("name=\"") {
+                // parse name="foo" (case-insensitive key match without allocation)
+                if let Some(idx) = rest.to_ascii_lowercase().find("name=\"") {
                     let after = &rest[idx + 6..];
                     if let Some(end) = after.find('"') {
                         name = Some(&after[..end]);
                     }
                 }
-                // parse filename="foo.txt" — search after the name= position
-                if let Some(idx) = lower_rest.find("filename=\"") {
+                // parse filename="foo.txt"
+                if let Some(idx) = rest.to_ascii_lowercase().find("filename=\"") {
                     let after = &rest[idx + 10..];
                     if let Some(end) = after.find('"') {
                         filename = Some(&after[..end]);

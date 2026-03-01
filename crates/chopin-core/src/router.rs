@@ -1,6 +1,5 @@
 // src/router.rs
 use crate::http::{Context, MAX_PARAMS, Method, Response};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub type Handler = fn(Context) -> Response;
@@ -9,12 +8,17 @@ pub type BoxedHandler = Arc<dyn Fn(Context) -> Response + Send + Sync>;
 
 pub type MiddlewareFn = fn(Context, BoxedHandler) -> Response;
 
+pub const MAX_MIDDLEWARE: usize = 8;
+pub const MAX_SEGMENTS: usize = 16;
+const METHOD_COUNT: usize = 10;
+
 /// Result of a successful route match.
 pub type RouteMatch<'a> = (
     &'a Handler,
     [(&'a str, &'a str); MAX_PARAMS],
     u8,
-    Vec<MiddlewareFn>,
+    [Option<MiddlewareFn>; MAX_MIDDLEWARE], // stack-allocated middleware list
+    usize,                                  // middleware count
 );
 
 #[derive(Clone, Copy)]
@@ -29,7 +33,7 @@ inventory::collect!(RouteDef);
 #[derive(Clone)]
 pub(crate) struct RouteNode {
     pub(crate) path: String,
-    pub(crate) handlers: HashMap<Method, Handler>,
+    pub(crate) handlers: [Option<Handler>; METHOD_COUNT],
     pub(crate) children: Vec<RouteNode>,
     pub(crate) is_param: bool,
     pub(crate) param_name: Option<String>,
@@ -41,13 +45,30 @@ impl RouteNode {
     pub(crate) fn new(path: String) -> Self {
         Self {
             path,
-            handlers: HashMap::new(),
+            handlers: [None; METHOD_COUNT],
             children: Vec::new(),
             is_param: false,
             param_name: None,
             is_wildcard: false,
             middleware: Vec::new(),
         }
+    }
+}
+
+/// Map Method enum to array index for O(1) dispatch
+#[inline(always)]
+fn method_index(m: Method) -> usize {
+    match m {
+        Method::Get => 0,
+        Method::Post => 1,
+        Method::Put => 2,
+        Method::Delete => 3,
+        Method::Patch => 4,
+        Method::Head => 5,
+        Method::Options => 6,
+        Method::Trace => 7,
+        Method::Connect => 8,
+        Method::Unknown => 9,
     }
 }
 
@@ -110,25 +131,39 @@ impl Router {
             }
         }
 
-        current.handlers.insert(method, handler);
+        current.handlers[method_index(method)] = Some(handler);
     }
 
     pub fn match_route<'a>(&'a self, method: Method, path: &'a str) -> Option<RouteMatch<'a>> {
-        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        // Stack-allocated segments — no heap allocation
+        let mut segments = [""; MAX_SEGMENTS];
+        let mut seg_count: usize = 0;
+        for s in path.split('/').filter(|s| !s.is_empty()) {
+            if seg_count >= MAX_SEGMENTS {
+                return None; // Path too deep
+            }
+            segments[seg_count] = s;
+            seg_count += 1;
+        }
+        let segments = &segments[..seg_count];
+
         let mut params = [("", ""); MAX_PARAMS];
         let mut param_count: u8 = 0;
-        let mut middleware = Vec::new();
+        // Stack-allocated middleware accumulator
+        let mut middleware_buf = [None::<MiddlewareFn>; MAX_MIDDLEWARE];
+        let mut mw_count: usize = 0;
 
         let handler = self.match_recursive(
             &self.root,
             method,
-            &segments,
+            segments,
             0,
             &mut params,
             &mut param_count,
-            &mut middleware,
+            &mut middleware_buf,
+            &mut mw_count,
         );
-        handler.map(|h| (h, params, param_count, middleware))
+        handler.map(|h| (h, params, param_count, middleware_buf, mw_count))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -140,50 +175,64 @@ impl Router {
         depth: usize,
         params: &mut [(&'b str, &'b str); MAX_PARAMS],
         param_count: &mut u8,
-        middleware: &mut Vec<MiddlewareFn>,
+        middleware: &mut [Option<MiddlewareFn>; MAX_MIDDLEWARE],
+        mw_count: &mut usize,
     ) -> Option<&'a Handler>
     where
         'a: 'b,
     {
-        let mw_start_len = middleware.len();
-        middleware.extend_from_slice(&node.middleware);
+        let mw_start_len = *mw_count;
+        for mw_fn in &node.middleware {
+            if *mw_count < MAX_MIDDLEWARE {
+                middleware[*mw_count] = Some(*mw_fn);
+                *mw_count += 1;
+            }
+        }
 
         if depth == segments.len() {
-            if let Some(h) = node.handlers.get(&method) {
+            let idx = method_index(method);
+            if let Some(ref h) = node.handlers[idx] {
                 return Some(h);
             }
-            middleware.truncate(mw_start_len);
+            *mw_count = mw_start_len;
             return None;
         }
 
         let segment = segments[depth];
 
-        // Try exact match first
-        for child in &node.children {
-            if !child.is_param && !child.is_wildcard && child.path == segment {
-                if let Some(handler) = self.match_recursive(
-                    child,
+        // Count static children (they are sorted first after finalize())
+        let static_end = node
+            .children
+            .partition_point(|c| !c.is_param && !c.is_wildcard);
+
+        // Binary search over sorted static children for O(log n) exact match
+        if static_end > 0 {
+            let statics = &node.children[..static_end];
+            if let Ok(idx) = statics.binary_search_by(|c| c.path.as_str().cmp(segment))
+                && let Some(handler) = self.match_recursive(
+                    &statics[idx],
                     method,
                     segments,
                     depth + 1,
                     params,
                     param_count,
                     middleware,
-                ) {
-                    return Some(handler);
-                }
+                    mw_count,
+                )
+            {
+                return Some(handler);
             }
         }
 
-        // Try param match
-        for child in &node.children {
+        // Try param match (children after static_end)
+        for child in &node.children[static_end..] {
             if child.is_param {
                 let old_count = *param_count;
-                if (*param_count as usize) < MAX_PARAMS {
-                    if let Some(ref name) = child.param_name {
-                        params[*param_count as usize] = (name.as_str(), segment);
-                        *param_count += 1;
-                    }
+                if (*param_count as usize) < MAX_PARAMS
+                    && let Some(ref name) = child.param_name
+                {
+                    params[*param_count as usize] = (name.as_str(), segment);
+                    *param_count += 1;
                 }
                 if let Some(handler) = self.match_recursive(
                     child,
@@ -193,6 +242,7 @@ impl Router {
                     params,
                     param_count,
                     middleware,
+                    mw_count,
                 ) {
                     return Some(handler);
                 }
@@ -201,23 +251,29 @@ impl Router {
             }
         }
 
-        // Try wildcard match
-        for child in &node.children {
+        // Try wildcard match (after params in sorted order)
+        for child in &node.children[static_end..] {
             if child.is_wildcard {
-                if (*param_count as usize) < MAX_PARAMS {
-                    if let Some(ref name) = child.param_name {
-                        params[*param_count as usize] = (name.as_str(), segment);
-                        *param_count += 1;
-                    }
+                if (*param_count as usize) < MAX_PARAMS
+                    && let Some(ref name) = child.param_name
+                {
+                    params[*param_count as usize] = (name.as_str(), segment);
+                    *param_count += 1;
                 }
-                if let Some(h) = child.handlers.get(&method) {
-                    middleware.extend_from_slice(&child.middleware);
+                let idx = method_index(method);
+                if let Some(ref h) = child.handlers[idx] {
+                    for mw_fn in &child.middleware {
+                        if *mw_count < MAX_MIDDLEWARE {
+                            middleware[*mw_count] = Some(*mw_fn);
+                            *mw_count += 1;
+                        }
+                    }
                     return Some(h);
                 }
             }
         }
 
-        middleware.truncate(mw_start_len);
+        *mw_count = mw_start_len;
         None
     }
 
@@ -333,9 +389,11 @@ impl Router {
     }
 
     fn merge_nodes(target: &mut RouteNode, mut source: RouteNode) {
-        // Merge handlers
-        for (method, handler) in source.handlers {
-            target.handlers.insert(method, handler);
+        // Merge handlers (array-based)
+        for i in 0..METHOD_COUNT {
+            if source.handlers[i].is_some() {
+                target.handlers[i] = source.handlers[i];
+            }
         }
 
         target.middleware.append(&mut source.middleware);
@@ -360,6 +418,32 @@ impl Router {
             } else {
                 target.children.push(source_child);
             }
+        }
+    }
+
+    /// Prepare the router for production use. Sorts static children at every
+    /// level so `match_recursive` can binary-search instead of linear-scan.
+    /// Call once after all routes are registered, before serving.
+    pub fn finalize(&mut self) {
+        Self::sort_children_recursive(&mut self.root);
+    }
+
+    fn sort_children_recursive(node: &mut RouteNode) {
+        // Partition: static children first (sorted by path), then params, then wildcards.
+        // This lets match_recursive do a binary search over the static prefix.
+        node.children.sort_by(|a, b| {
+            match (a.is_param || a.is_wildcard, b.is_param || b.is_wildcard) {
+                (false, false) => a.path.cmp(&b.path), // both static → sort lexically
+                (false, true) => std::cmp::Ordering::Less, // static before dynamic
+                (true, false) => std::cmp::Ordering::Greater,
+                (true, true) => {
+                    // params before wildcards
+                    a.is_wildcard.cmp(&b.is_wildcard)
+                }
+            }
+        });
+        for child in &mut node.children {
+            Self::sort_children_recursive(child);
         }
     }
 
@@ -411,6 +495,7 @@ mod tests {
     fn test_router_static() {
         let mut router = Router::new();
         router.get("/hello/world", test_handler);
+        router.finalize();
 
         assert!(router.match_route(Method::Get, "/hello/world").is_some());
         assert!(router.match_route(Method::Get, "/hello").is_none());
@@ -422,10 +507,11 @@ mod tests {
         let mut router = Router::new();
         router.get("/users/:id", test_handler);
         router.post("/users/:id/posts/:post_id", test_handler);
+        router.finalize();
 
         let match1 = router.match_route(Method::Get, "/users/123");
         assert!(match1.is_some());
-        let (_, params1, _, _) = match1.unwrap();
+        let (_, params1, _, _, _) = match1.unwrap();
         assert_eq!(
             params1
                 .iter()
@@ -437,7 +523,7 @@ mod tests {
 
         let match2 = router.match_route(Method::Post, "/users/123/posts/abc");
         assert!(match2.is_some());
-        let (_, params2, _, _) = match2.unwrap();
+        let (_, params2, _, _, _) = match2.unwrap();
         assert_eq!(
             params2
                 .iter()
@@ -460,10 +546,11 @@ mod tests {
     fn test_router_wildcard() {
         let mut router = Router::new();
         router.get("/assets/*path", test_handler);
+        router.finalize();
 
         let match1 = router.match_route(Method::Get, "/assets/js/app.js");
         assert!(match1.is_some());
-        let (_, params1, _, _) = match1.unwrap();
+        let (_, params1, _, _, _) = match1.unwrap();
         assert_eq!(
             params1
                 .iter()
@@ -485,6 +572,7 @@ mod tests {
 
         let mut root = Router::new();
         root = root.nest("/api/v1", api_router);
+        root.finalize();
 
         assert!(
             root.match_route(Method::Post, "/api/v1/auth/login")
@@ -512,14 +600,15 @@ mod tests {
         let mut root = Router::new();
         root = root.nest("/api", auth_router);
         root.get("/status", test_handler);
+        root.finalize();
 
         let m1 = root.match_route(Method::Post, "/api/login");
         assert!(m1.is_some());
-        assert_eq!(m1.unwrap().3.len(), 1); // Only auth gets middleware
+        assert_eq!(m1.unwrap().4, 1); // Only auth gets middleware
 
         let m2 = root.match_route(Method::Get, "/status");
         assert!(m2.is_some());
-        assert_eq!(m2.unwrap().3.len(), 0); // Root doesn't
+        assert_eq!(m2.unwrap().4, 0); // Root doesn't
     }
 
     #[test]
@@ -531,6 +620,10 @@ mod tests {
         r2.get("/r2", test_handler);
 
         let merged = r1.merge(r2);
+        // Note: finalize not needed here — merge test just checks existence.
+        // But let's finalize for consistency with production path.
+        let mut merged = merged;
+        merged.finalize();
 
         assert!(merged.match_route(Method::Get, "/r1").is_some());
         assert!(merged.match_route(Method::Get, "/r2").is_some());

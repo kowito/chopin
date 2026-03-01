@@ -50,9 +50,10 @@ impl ConnectionSlab {
         // Setup connection specifically
         conn.fd = new_fd;
         conn.state = ConnState::Accepted;
-        conn.parse_pos = 0;
+        conn.flags = 0;
+        conn.read_len = 0;
         conn.write_pos = 0;
-        conn.route_id = 0;
+        conn.write_len = 0;
         // Notice we do NOT clear read_buf/write_buf.
         // We defer to state parsing tracking to never leak state, saving memset cycles.
 

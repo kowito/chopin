@@ -28,6 +28,7 @@ impl Chopin {
         for route in inventory::iter::<crate::router::RouteDef> {
             self.router.add(route.method, route.path, route.handler);
         }
+        self.router.finalize();
         self
     }
 
@@ -55,7 +56,10 @@ impl Server {
         self
     }
 
-    pub fn serve(self, router: Router) -> crate::error::ChopinResult<()> {
+    pub fn serve(self, mut router: Router) -> crate::error::ChopinResult<()> {
+        // Sort children at every trie level for binary-search matching.
+        router.finalize();
+
         let core_ids = core_affinity::get_core_ids().unwrap_or_default();
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
@@ -70,9 +74,8 @@ impl Server {
             worker_metrics.push(Arc::new(crate::metrics::WorkerMetrics::new()));
         }
 
-        let metrics_clones = worker_metrics.clone();
-        let shutdown_metrics = shutdown_flag.clone();
-
+        let _metrics_clones = worker_metrics.clone();
+        let _shutdown_metrics = shutdown_flag.clone();
 
         let Parts { host, port } = parse_host_port(&self.host_port)?;
 

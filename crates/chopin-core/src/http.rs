@@ -15,17 +15,83 @@ pub enum Method {
 }
 
 impl Method {
+    /// First-byte dispatch for fast HTTP method parsing (picohttpparser technique).
     pub fn from_bytes(b: &[u8]) -> Self {
-        match b {
-            b"GET" => Method::Get,
-            b"POST" => Method::Post,
-            b"PUT" => Method::Put,
-            b"DELETE" => Method::Delete,
-            b"PATCH" => Method::Patch,
-            b"HEAD" => Method::Head,
-            b"OPTIONS" => Method::Options,
-            b"TRACE" => Method::Trace,
-            b"CONNECT" => Method::Connect,
+        if b.is_empty() {
+            return Method::Unknown;
+        }
+        match b[0] {
+            b'G' => {
+                if b.len() == 3 && b[1] == b'E' && b[2] == b'T' {
+                    Method::Get
+                } else {
+                    Method::Unknown
+                }
+            }
+            b'P' => {
+                if b.len() < 3 {
+                    return Method::Unknown;
+                }
+                match b[1] {
+                    b'O' => {
+                        if b.len() == 4 && b[2] == b'S' && b[3] == b'T' {
+                            Method::Post
+                        } else {
+                            Method::Unknown
+                        }
+                    }
+                    b'U' => {
+                        if b.len() == 3 && b[2] == b'T' {
+                            Method::Put
+                        } else {
+                            Method::Unknown
+                        }
+                    }
+                    b'A' => {
+                        if b.len() == 5 && b[2] == b'T' && b[3] == b'C' && b[4] == b'H' {
+                            Method::Patch
+                        } else {
+                            Method::Unknown
+                        }
+                    }
+                    _ => Method::Unknown,
+                }
+            }
+            b'D' => {
+                if b == b"DELETE" {
+                    Method::Delete
+                } else {
+                    Method::Unknown
+                }
+            }
+            b'H' => {
+                if b == b"HEAD" {
+                    Method::Head
+                } else {
+                    Method::Unknown
+                }
+            }
+            b'O' => {
+                if b == b"OPTIONS" {
+                    Method::Options
+                } else {
+                    Method::Unknown
+                }
+            }
+            b'T' => {
+                if b == b"TRACE" {
+                    Method::Trace
+                } else {
+                    Method::Unknown
+                }
+            }
+            b'C' => {
+                if b == b"CONNECT" {
+                    Method::Connect
+                } else {
+                    Method::Unknown
+                }
+            }
             _ => Method::Unknown,
         }
     }
@@ -45,6 +111,7 @@ pub struct Request<'a> {
 
 pub enum Body {
     Empty,
+    Static(&'static [u8]),
     Bytes(Vec<u8>),
     Stream(Box<dyn Iterator<Item = Vec<u8>> + Send>),
 }
@@ -53,6 +120,7 @@ impl Body {
     pub fn len(&self) -> usize {
         match self {
             Body::Empty => 0,
+            Body::Static(b) => b.len(),
             Body::Bytes(b) => b.len(),
             Body::Stream(_) => 0, // Chunked has no predefined length
         }
@@ -65,6 +133,7 @@ impl Body {
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             Body::Empty => &[],
+            Body::Static(b) => b,
             Body::Bytes(b) => b.as_slice(),
             Body::Stream(_) => &[], // Streams must be polled/chunked iteratively
         }
@@ -128,7 +197,7 @@ impl Response {
     pub fn not_found() -> Self {
         Self {
             status: 404,
-            body: Body::Bytes(b"Not Found".to_vec()),
+            body: Body::Static(b"Not Found"),
             content_type: "text/plain",
             headers: Vec::new(),
         }
@@ -138,7 +207,7 @@ impl Response {
     pub fn server_error() -> Self {
         Self {
             status: 500,
-            body: Body::Bytes(b"Internal Server Error".to_vec()),
+            body: Body::Static(b"Internal Server Error"),
             content_type: "text/plain",
             headers: Vec::new(),
         }
@@ -148,7 +217,7 @@ impl Response {
     pub fn bad_request() -> Self {
         Self {
             status: 400,
-            body: Body::Bytes(b"Bad Request".to_vec()),
+            body: Body::Static(b"Bad Request"),
             content_type: "text/plain",
             headers: Vec::new(),
         }
@@ -158,7 +227,7 @@ impl Response {
     pub fn unauthorized() -> Self {
         Self {
             status: 401,
-            body: Body::Bytes(b"Unauthorized".to_vec()),
+            body: Body::Static(b"Unauthorized"),
             content_type: "text/plain",
             headers: Vec::new(),
         }
@@ -168,7 +237,7 @@ impl Response {
     pub fn forbidden() -> Self {
         Self {
             status: 403,
-            body: Body::Bytes(b"Forbidden".to_vec()),
+            body: Body::Static(b"Forbidden"),
             content_type: "text/plain",
             headers: Vec::new(),
         }
@@ -247,11 +316,11 @@ impl<'a> Context<'a> {
     /// Returns `None` if the `Content-Type` header is not `multipart/form-data`.
     pub fn multipart(&self) -> Option<crate::multipart::Multipart<'a>> {
         let ct = self.header("content-type")?;
-        if ct.starts_with("multipart/form-data") {
-            if let Some(idx) = ct.find("boundary=") {
-                let boundary = &ct[idx + 9..];
-                return Some(crate::multipart::Multipart::new(self.req.body, boundary));
-            }
+        if ct.starts_with("multipart/form-data")
+            && let Some(idx) = ct.find("boundary=")
+        {
+            let boundary = &ct[idx + 9..];
+            return Some(crate::multipart::Multipart::new(self.req.body, boundary));
         }
         None
     }
@@ -267,5 +336,4 @@ impl<'a> Context<'a> {
     pub fn json<T: crate::json::Serialize>(&self, val: &T) -> Response {
         Response::json(val)
     }
-
 }
