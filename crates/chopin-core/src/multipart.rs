@@ -94,24 +94,33 @@ impl<'a> Iterator for Multipart<'a> {
 
         let headers_str = std::str::from_utf8(header_slice).ok()?;
         for line in headers_str.split("\r\n") {
-            let lower = line.to_lowercase();
-            if lower.starts_with("content-disposition:") {
-                // parse name="foo"; filename="foo.txt"
-                if let Some(idx) = lower.find("name=\"") {
-                    let rest = &line[idx + 6..];
-                    if let Some(end) = rest.find('"') {
-                        name = Some(&rest[..end]);
+            if line
+                .as_bytes()
+                .get(..20)
+                .is_some_and(|h| h.eq_ignore_ascii_case(b"content-disposition:"))
+            {
+                let rest = &line[20..];
+                // parse name="foo"
+                let lower_rest = rest.to_ascii_lowercase();
+                if let Some(idx) = lower_rest.find("name=\"") {
+                    let after = &rest[idx + 6..];
+                    if let Some(end) = after.find('"') {
+                        name = Some(&after[..end]);
                     }
                 }
-                if let Some(idx) = lower.find("filename=\"") {
-                    let rest = &line[idx + 10..];
-                    if let Some(end) = rest.find('"') {
-                        filename = Some(&rest[..end]);
+                // parse filename="foo.txt" — search after the name= position
+                if let Some(idx) = lower_rest.find("filename=\"") {
+                    let after = &rest[idx + 10..];
+                    if let Some(end) = after.find('"') {
+                        filename = Some(&after[..end]);
                     }
                 }
-            } else if lower.starts_with("content-type:") {
-                let ct = line[13..].trim();
-                content_type = Some(ct);
+            } else if line
+                .as_bytes()
+                .get(..13)
+                .is_some_and(|h| h.eq_ignore_ascii_case(b"content-type:"))
+            {
+                content_type = Some(line[13..].trim());
             }
         }
 

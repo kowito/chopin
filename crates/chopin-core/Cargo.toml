@@ -11,6 +11,7 @@ kowito-json = "0.2.8"
 libc = "0.2.180"
 num_cpus = "1.17.0"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_urlencoded = "0.7"
 serde_json = "1.0.138"
 httpdate = "1.0.3"
 inventory = "0.3.22"

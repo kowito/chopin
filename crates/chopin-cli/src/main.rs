@@ -140,20 +140,25 @@ async fn main() -> Result<()> {
                 .spawn()?;
             child.wait()?;
         }
-        Commands::Migrate { command } => match command {
-            MigrateCommands::Status => {
-                println!("Checking migration status...");
-            }
-            MigrateCommands::Up => {
-                println!("Running migrations...");
-            }
-            MigrateCommands::Down { steps } => {
-                println!("Rolling back {} steps...", steps);
-            }
-            MigrateCommands::Generate { name } => {
-                println!("Generating migration: {}", name);
-            }
-        },
+        Commands::Migrate { command } => {
+            eprintln!(
+                "{} Migration support is not yet implemented in the Chopin CLI.",
+                "⚠".yellow()
+            );
+            eprintln!(
+                "  Planned commands: {:?}",
+                match command {
+                    MigrateCommands::Status => "status",
+                    MigrateCommands::Up => "up",
+                    MigrateCommands::Down { .. } => "down",
+                    MigrateCommands::Generate { .. } => "generate",
+                }
+            );
+            eprintln!(
+                "  Tip: use a standalone migration tool (e.g., sqitch, flyway, golang-migrate)."
+            );
+            std::process::exit(1);
+        }
         Commands::Db { command } => {
             let project_dir = std::env::current_dir()?;
             let cfg = config::ChopinConfig::load(&project_dir)?;
@@ -225,7 +230,7 @@ fn create_project(name: &str) -> Result<()> {
         anyhow::bail!("Directory already exists: {}", name);
     }
 
-    std::fs::create_dir_all(path.join("src/handlers"))?;
+    std::fs::create_dir_all(path.join("src/apps"))?;
 
     // Cargo.toml
     let cargo_toml = format!(
@@ -235,44 +240,35 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-chopin-core = "0.5.1"
+chopin-core = "0.5"
+chopin-macros = "0.1"
 serde = {{ version = "1.0", features = ["derive"] }}
 "#,
         name
     );
     std::fs::write(path.join("Cargo.toml"), cargo_toml)?;
 
-    // src/main.rs
-    let main_rs = r#"use chopin_core::{Router, Server};
-mod handlers;
+    // src/main.rs — uses macro-based route discovery
+    let main_rs = r#"use chopin_core::Chopin;
+mod apps;
 
 fn main() {
-    let router = Router::new()
-        .nest("/", handlers::router());
-
     println!("🎹 Starting {} server on 0.0.0.0:8080", env!("CARGO_PKG_NAME"));
-    
-    Server::bind("0.0.0.0:8080")
-        .serve(router)
+
+    Chopin::new()
+        .mount_all_routes()
+        .serve("0.0.0.0:8080")
         .unwrap();
 }
 "#;
     std::fs::write(path.join("src/main.rs"), main_rs)?;
 
-    // src/handlers/mod.rs
-    let handlers_mod = r#"use chopin_core::{Router, Context, Response};
-
-pub fn router() -> Router {
-    let mut r = Router::new();
-    r.get("/", welcome);
-    r
-}
-
-fn welcome(_ctx: Context) -> Response {
-    Response::ok("Welcome to your Chopin app! 🎹")
-}
-"#;
-    std::fs::write(path.join("src/handlers/mod.rs"), handlers_mod)?;
+    // src/apps/mod.rs placeholder
+    std::fs::create_dir_all(path.join("src/apps"))?;
+    std::fs::write(
+        path.join("src/apps/mod.rs"),
+        "// Add your app modules here, e.g.:\n// pub mod todos;\n",
+    )?;
 
     Ok(())
 }

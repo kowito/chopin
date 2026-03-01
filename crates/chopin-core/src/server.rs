@@ -66,7 +66,7 @@ impl Server {
             );
             shutdown_signal.store(true, Ordering::Release);
         })
-        .expect("Error setting Ctrl-C handler");
+        .map_err(|e| ChopinError::Other(format!("Failed to set Ctrl-C handler: {e}")))?;
 
         let mut worker_metrics = Vec::with_capacity(self.workers);
         for _ in 0..self.workers {

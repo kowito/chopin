@@ -27,6 +27,26 @@ pub fn patch(attr: TokenStream, item: TokenStream) -> TokenStream {
     generate_route("Patch", attr, item)
 }
 
+#[proc_macro_attribute]
+pub fn head(attr: TokenStream, item: TokenStream) -> TokenStream {
+    generate_route("Head", attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn options(attr: TokenStream, item: TokenStream) -> TokenStream {
+    generate_route("Options", attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn trace(attr: TokenStream, item: TokenStream) -> TokenStream {
+    generate_route("Trace", attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn connect(attr: TokenStream, item: TokenStream) -> TokenStream {
+    generate_route("Connect", attr, item)
+}
+
 fn generate_route(method: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     let path = parse_macro_input!(attr as syn::LitStr).value();
     let input_fn = parse_macro_input!(item as ItemFn);

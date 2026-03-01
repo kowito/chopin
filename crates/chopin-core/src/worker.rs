@@ -10,6 +10,77 @@ use crate::metrics::WorkerMetrics;
 use crate::router::Router;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Write `src` into `buf[pos..]`, advancing `pos`. Returns `false` on overflow.
+#[inline(always)]
+fn buf_write(buf: &mut [u8], pos: &mut usize, src: &[u8]) -> bool {
+    let end = *pos + src.len();
+    if end > buf.len() {
+        return false;
+    }
+    buf[*pos..end].copy_from_slice(src);
+    *pos = end;
+    true
+}
+
+/// Format an HTTP status line into a fixed 40-byte buffer. Returns the slice length.
+fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
+    let phrase: &[u8] = match status {
+        100 => b"Continue",
+        101 => b"Switching Protocols",
+        200 => b"OK",
+        201 => b"Created",
+        202 => b"Accepted",
+        204 => b"No Content",
+        206 => b"Partial Content",
+        301 => b"Moved Permanently",
+        302 => b"Found",
+        304 => b"Not Modified",
+        400 => b"Bad Request",
+        401 => b"Unauthorized",
+        403 => b"Forbidden",
+        404 => b"Not Found",
+        405 => b"Method Not Allowed",
+        408 => b"Request Timeout",
+        409 => b"Conflict",
+        410 => b"Gone",
+        413 => b"Content Too Large",
+        415 => b"Unsupported Media Type",
+        422 => b"Unprocessable Entity",
+        429 => b"Too Many Requests",
+        500 => b"Internal Server Error",
+        501 => b"Not Implemented",
+        502 => b"Bad Gateway",
+        503 => b"Service Unavailable",
+        504 => b"Gateway Timeout",
+        _ => b"Unknown",
+    };
+    // "HTTP/1.1 XYZ Phrase\r\n" — write inline using writeln!()
+    // Encode status as three ASCII digits
+    let h = (status / 100) as u8 + b'0';
+    let t = ((status / 10) % 10) as u8 + b'0';
+    let u = (status % 10) as u8 + b'0';
+
+    let prefix = b"HTTP/1.1 ";
+    let mut i = 0;
+    out[i..i + prefix.len()].copy_from_slice(prefix);
+    i += prefix.len();
+    out[i] = h;
+    i += 1;
+    out[i] = t;
+    i += 1;
+    out[i] = u;
+    i += 1;
+    out[i] = b' ';
+    i += 1;
+    out[i..i + phrase.len()].copy_from_slice(phrase);
+    i += phrase.len();
+    out[i] = b'\r';
+    i += 1;
+    out[i] = b'\n';
+    i += 1;
+    i
+}
+
 pub struct Worker {
     id: usize,
     router: Router,
@@ -61,6 +132,33 @@ impl Worker {
         let mut last_prune = now;
         let mut iter_count: u32 = 0;
 
+        // Pre-formatted Date header (RFC 7231 §7.1.1.2). Refresh every second.
+        let mut date_header: [u8; 64] = [0u8; 64];
+        let mut date_header_len: usize = 0;
+        let mut last_date_update: u32;
+
+        let update_date_header =
+            |date_header: &mut [u8; 64], date_header_len: &mut usize, now_secs: u32| {
+                let sys = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(now_secs as u64);
+                let formatted = httpdate::fmt_http_date(sys);
+                let prefix = b"Date: ";
+                let suffix = b"\r\n";
+                let formatted_bytes = formatted.as_bytes();
+                let total = prefix.len() + formatted_bytes.len() + suffix.len();
+                if total <= 64 {
+                    date_header[..prefix.len()].copy_from_slice(prefix);
+                    date_header[prefix.len()..prefix.len() + formatted_bytes.len()]
+                        .copy_from_slice(formatted_bytes);
+                    date_header[prefix.len() + formatted_bytes.len()
+                        ..prefix.len() + formatted_bytes.len() + suffix.len()]
+                        .copy_from_slice(suffix);
+                    *date_header_len = total;
+                }
+            };
+
+        update_date_header(&mut date_header, &mut date_header_len, now);
+        last_date_update = now;
+
         loop {
             let is_shutting_down = shutdown.load(Ordering::Acquire);
             if is_shutting_down && slab.is_empty() {
@@ -74,8 +172,12 @@ impl Worker {
                     .duration_since(UNIX_EPOCH)
                     .map_err(|_| ChopinError::Other("Clock went backwards".to_string()))?
                     .as_secs() as u32;
+                if now - last_date_update >= 1 {
+                    update_date_header(&mut date_header, &mut date_header_len, now);
+                    last_date_update = now;
+                }
                 if now - last_prune >= 1 {
-                    self.prune_connections(&mut slab, now);
+                    self.prune_connections(&mut slab, &epoll, now);
                     last_prune = now;
                 }
             }
@@ -250,40 +352,45 @@ impl Worker {
                                         None => crate::http::Response::not_found(),
                                     };
 
-                                    // Format response using raw byte copies
+                                    // Format response into the write buffer.
+                                    // Uses bounds-checked buf_write() — on overflow we
+                                    // discard the partial write and send a 500 + close.
                                     let buf = &mut conn.write_buf[..];
                                     let mut pos: usize = 0;
+                                    let mut overflow = false;
+
+                                    macro_rules! w {
+                                        ($src:expr) => {
+                                            if !buf_write(buf, &mut pos, $src) {
+                                                overflow = true;
+                                            }
+                                        };
+                                    }
 
                                     // Status line
-                                    let status_line: &[u8] = match response.status {
-                                        200 => b"HTTP/1.1 200 OK\r\n",
-                                        404 => b"HTTP/1.1 404 Not Found\r\n",
-                                        500 => b"HTTP/1.1 500 Internal Server Error\r\n",
-                                        _ => b"HTTP/1.1 200 OK\r\n",
-                                    };
-                                    buf[pos..pos + status_line.len()].copy_from_slice(status_line);
-                                    pos += status_line.len();
+                                    let mut sl_buf = [0u8; 40];
+                                    let sl_len = status_line(response.status, &mut sl_buf);
+                                    w!(&sl_buf[..sl_len]);
+
+                                    // Date header (RFC 7231 §7.1.1.2)
+                                    w!(&date_header[..date_header_len]);
+
+                                    // Server header
+                                    w!(b"Server: chopin\r\n");
 
                                     // Content-Type
-                                    buf[pos..pos + 14].copy_from_slice(b"Content-Type: ");
-                                    pos += 14;
-                                    let ct = response.content_type.as_bytes();
-                                    buf[pos..pos + ct.len()].copy_from_slice(ct);
-                                    pos += ct.len();
-                                    buf[pos..pos + 2].copy_from_slice(b"\r\n");
-                                    pos += 2;
+                                    w!(b"Content-Type: ");
+                                    w!(response.content_type.as_bytes());
+                                    w!(b"\r\n");
 
                                     let is_chunked =
                                         matches!(response.body, crate::http::Body::Stream(_));
 
                                     if is_chunked {
-                                        buf[pos..pos + 28]
-                                            .copy_from_slice(b"Transfer-Encoding: chunked\r\n");
-                                        pos += 28;
+                                        w!(b"Transfer-Encoding: chunked\r\n");
                                     } else {
                                         // Content-Length with inline itoa
-                                        buf[pos..pos + 16].copy_from_slice(b"Content-Length: ");
-                                        pos += 16;
+                                        w!(b"Content-Length: ");
                                         let body_len = response.body.len();
                                         let mut itoa_buf = [0u8; 10];
                                         let itoa_len = {
@@ -302,87 +409,82 @@ impl Worker {
                                                 i
                                             }
                                         };
-                                        buf[pos..pos + itoa_len]
-                                            .copy_from_slice(&itoa_buf[..itoa_len]);
-                                        pos += itoa_len;
-                                        buf[pos..pos + 2].copy_from_slice(b"\r\n");
-                                        pos += 2;
+                                        w!(&itoa_buf[..itoa_len]);
+                                        w!(b"\r\n");
                                     }
 
                                     // Connection header
                                     if keep_alive {
-                                        buf[pos..pos + 24]
-                                            .copy_from_slice(b"Connection: keep-alive\r\n");
-                                        pos += 24;
+                                        w!(b"Connection: keep-alive\r\n");
                                     } else {
-                                        buf[pos..pos + 19]
-                                            .copy_from_slice(b"Connection: close\r\n");
-                                        pos += 19;
+                                        w!(b"Connection: close\r\n");
                                     }
 
                                     // Custom headers
                                     for (k, v) in &response.headers {
-                                        let kb = k.as_bytes();
-                                        let vb = v.as_bytes();
-                                        buf[pos..pos + kb.len()].copy_from_slice(kb);
-                                        pos += kb.len();
-                                        buf[pos..pos + 2].copy_from_slice(b": ");
-                                        pos += 2;
-                                        buf[pos..pos + vb.len()].copy_from_slice(vb);
-                                        pos += vb.len();
-                                        buf[pos..pos + 2].copy_from_slice(b"\r\n");
-                                        pos += 2;
+                                        w!(k.as_bytes());
+                                        w!(b": ");
+                                        w!(v.as_bytes());
+                                        w!(b"\r\n");
                                     }
 
                                     // End of headers
-                                    buf[pos..pos + 2].copy_from_slice(b"\r\n");
-                                    pos += 2;
+                                    w!(b"\r\n");
 
-                                    // Body
-                                    match response.body {
-                                        crate::http::Body::Empty => {}
-                                        crate::http::Body::Bytes(ref b) => {
-                                            buf[pos..pos + b.len()].copy_from_slice(b);
-                                            pos += b.len();
-                                        }
-                                        crate::http::Body::Stream(mut iter) => {
-                                            for chunk in iter.by_ref() {
-                                                let hex_len = {
-                                                    let mut n = chunk.len();
-                                                    let mut hex_buf = [0u8; 8];
-                                                    let mut i = 0;
-                                                    if n == 0 {
-                                                        hex_buf[0] = b'0';
-                                                        i = 1;
-                                                    } else {
-                                                        while n > 0 {
-                                                            let d = (n % 16) as u8;
-                                                            hex_buf[i] = if d < 10 {
-                                                                b'0' + d
-                                                            } else {
-                                                                b'A' + d - 10
-                                                            };
-                                                            n /= 16;
-                                                            i += 1;
-                                                        }
-                                                        hex_buf[..i].reverse();
-                                                    }
-                                                    (hex_buf, i)
-                                                };
-                                                buf[pos..pos + hex_len.1]
-                                                    .copy_from_slice(&hex_len.0[..hex_len.1]);
-                                                pos += hex_len.1;
-                                                buf[pos..pos + 2].copy_from_slice(b"\r\n");
-                                                pos += 2;
-                                                buf[pos..pos + chunk.len()].copy_from_slice(&chunk);
-                                                pos += chunk.len();
-                                                buf[pos..pos + 2].copy_from_slice(b"\r\n");
-                                                pos += 2;
+                                    if overflow {
+                                        // Response too large for write buffer — send minimal 500
+                                        const ERR: &[u8] = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error";
+                                        buf[..ERR.len()].copy_from_slice(ERR);
+                                        pos = ERR.len();
+                                        keep_alive = false;
+                                    } else {
+                                        // Body
+                                        match response.body {
+                                            crate::http::Body::Empty => {}
+                                            crate::http::Body::Bytes(ref b) => {
+                                                w!(b.as_slice());
                                             }
-                                            buf[pos..pos + 5].copy_from_slice(b"0\r\n\r\n");
-                                            pos += 5;
+                                            crate::http::Body::Stream(mut iter) => {
+                                                for chunk in iter.by_ref() {
+                                                    let hex_len = {
+                                                        let mut n = chunk.len();
+                                                        let mut hex_buf = [0u8; 8];
+                                                        let mut i = 0;
+                                                        if n == 0 {
+                                                            hex_buf[0] = b'0';
+                                                            i = 1;
+                                                        } else {
+                                                            while n > 0 {
+                                                                let d = (n % 16) as u8;
+                                                                hex_buf[i] = if d < 10 {
+                                                                    b'0' + d
+                                                                } else {
+                                                                    b'A' + d - 10
+                                                                };
+                                                                n /= 16;
+                                                                i += 1;
+                                                            }
+                                                            hex_buf[..i].reverse();
+                                                        }
+                                                        (hex_buf, i)
+                                                    };
+                                                    w!(&hex_len.0[..hex_len.1]);
+                                                    w!(b"\r\n");
+                                                    w!(chunk.as_slice());
+                                                    w!(b"\r\n");
+                                                }
+                                                w!(b"0\r\n\r\n");
+                                            }
+                                        }
+                                        if overflow {
+                                            // Body overflowed — truncate to headers-only 500
+                                            const ERR: &[u8] = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error";
+                                            buf[..ERR.len()].copy_from_slice(ERR);
+                                            pos = ERR.len();
+                                            keep_alive = false;
                                         }
                                     }
+
                                     conn.parse_pos = pos as u16; // total write len
                                     conn.write_pos = 0; // start from beginning
                                     conn.route_id = if keep_alive { 1 } else { 0 };
@@ -469,13 +571,15 @@ impl Worker {
         Ok(())
     }
 
-    fn prune_connections(&self, slab: &mut ConnectionSlab, now: u32) {
+    fn prune_connections(&self, slab: &mut ConnectionSlab, epoll: &Epoll, now: u32) {
         for i in 0..slab.high_water() {
             if let Some(conn) = slab.get(i)
                 && conn.state != ConnState::Free
                 && now - conn.last_active > 30
             {
                 let fd = conn.fd;
+                // Remove from epoll BEFORE closing the fd to avoid stale events.
+                epoll.delete(fd).ok();
                 unsafe {
                     libc::close(fd);
                 }

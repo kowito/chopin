@@ -1,7 +1,7 @@
 // src/conn.rs
 
-pub const READ_BUF_SIZE: usize = 2036;
-pub const WRITE_BUF_SIZE: usize = 2036;
+pub const READ_BUF_SIZE: usize = 8192;
+pub const WRITE_BUF_SIZE: usize = 8192;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -64,8 +64,11 @@ mod tests {
     fn verify_conn_alignment() {
         assert_eq!(std::mem::align_of::<Conn>(), 64);
 
-        let header_padding = 24_usize; // Expected based on Rust struct padding rules
-        let total_size = header_padding + READ_BUF_SIZE + WRITE_BUF_SIZE;
+        // Header fields: fd(4) + state(1) + _pad(1) + parse_pos(2) + write_pos(2) +
+        //                route_id(2) + _pad(2) + last_active(4) + requests_served(4) = 20 bytes
+        // Padded to next 64-byte boundary = 64 bytes total for the header block.
+        let header_block = 64_usize;
+        let total_size = header_block + READ_BUF_SIZE + WRITE_BUF_SIZE;
 
         // Assert total size is a multiple of 64
         assert_eq!(total_size % 64, 0, "Conn total size not a multiple of 64!");

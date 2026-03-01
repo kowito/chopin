@@ -27,18 +27,18 @@ pub struct RouteDef {
 inventory::collect!(RouteDef);
 
 #[derive(Clone)]
-pub struct RouteNode {
-    pub path: String,
-    pub handlers: HashMap<Method, Handler>,
-    pub children: Vec<RouteNode>,
-    pub is_param: bool,
-    pub param_name: Option<String>,
-    pub is_wildcard: bool,
-    pub middleware: Vec<MiddlewareFn>,
+pub(crate) struct RouteNode {
+    pub(crate) path: String,
+    pub(crate) handlers: HashMap<Method, Handler>,
+    pub(crate) children: Vec<RouteNode>,
+    pub(crate) is_param: bool,
+    pub(crate) param_name: Option<String>,
+    pub(crate) is_wildcard: bool,
+    pub(crate) middleware: Vec<MiddlewareFn>,
 }
 
 impl RouteNode {
-    pub fn new(path: String) -> Self {
+    pub(crate) fn new(path: String) -> Self {
         Self {
             path,
             handlers: HashMap::new(),
@@ -53,8 +53,8 @@ impl RouteNode {
 
 #[derive(Clone)]
 pub struct Router {
-    pub root: RouteNode,
-    pub global_middleware: Vec<MiddlewareFn>,
+    pub(crate) root: RouteNode,
+    pub(crate) global_middleware: Vec<MiddlewareFn>,
 }
 
 impl Router {
@@ -275,12 +275,14 @@ impl Router {
     }
 
     // Modular Routing
+    #[must_use]
     pub fn merge(mut self, other: Router) -> Self {
         Self::merge_nodes(&mut self.root, other.root);
         self.global_middleware.extend(other.global_middleware);
         self
     }
 
+    #[must_use]
     pub fn nest(mut self, prefix: &str, other: Router) -> Self {
         let segments: Vec<&str> = prefix.split('/').filter(|s| !s.is_empty()).collect();
         let mut current = &mut self.root;

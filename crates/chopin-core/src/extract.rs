@@ -22,12 +22,12 @@ where
         let mut tape = [0u32; 1024]; // Stack-allocated tape
         let tokens = scanner.scan(&mut tape);
         if tokens == 0 && !ctx.req.body.is_empty() {
-            return Err(crate::http::Response::internal_error()); // Invalid JSON
+            return Err(crate::http::Response::bad_request()); // Invalid JSON → 400
         }
 
         match serde_json::from_slice(ctx.req.body) {
             Ok(val) => Ok(Json(val)),
-            Err(_) => Err(crate::http::Response::internal_error()),
+            Err(_) => Err(crate::http::Response::bad_request()), // Malformed JSON → 400
         }
     }
 }
@@ -41,10 +41,11 @@ where
     type Error = Response;
 
     fn from_request(ctx: &'a Context<'a>) -> Result<Self, Self::Error> {
-        let _qs = ctx.req.query.unwrap_or("");
-        // A minimal query string parser.
-        // For production, we'd use `serde_urlencoded`. But kowito-json is mostly for JSON.
-        // We can just manually parse if needed, but since we are demonstrating extractors:
-        Err(crate::http::Response::internal_error())
+        let qs = ctx.req.query.unwrap_or("");
+        // Parse key=val&key2=val2 without allocating — build a serde deserializer
+        match serde_urlencoded::from_str::<T>(qs) {
+            Ok(val) => Ok(Query(val)),
+            Err(_) => Err(crate::http::Response::bad_request()),
+        }
     }
 }
