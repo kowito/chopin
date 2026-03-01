@@ -1,2 +1,27 @@
-/target
-/.gemini
+# --- Rust ---
+/target/
+**/*.rs.bk
+Cargo.lock.lock
+
+# --- Environment ---
+.env
+.env.local
+.env.*.local
+.gemini/
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS Specific ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+Network Trash Folder
+Temporary Items
+.apdisk
+Thumbs.db
+Desktop.ini
