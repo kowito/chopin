@@ -1,6 +1,6 @@
 [package]
 name = "chopin-cli"
-version = "0.1.0"
+version = "0.5.3"
 edition = "2024"
 authors = ["kowito <kowit.s.c@gmail.com>"]
 description = "CLI tool for the Chopin HTTP framework"
