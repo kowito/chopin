@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Developer Guide | Chopin HTTP Framework</title>
+    <meta name="description"
+        content="Comprehensive step-by-step developer guide for building high-performance APIs with Chopin.">
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Outfit:wght@100..900&family=Fira+Code:wght@300..700&display=swap"
+        rel="stylesheet">
+    <!-- Prism Syntax Highlighting -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css"
+        rel="stylesheet" />
+    <!-- Icons -->
+    <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body class="line-numbers">
+
+    <!-- Mobile Header -->
+    <header class="mobile-header">
+        <div class="logo">
+            <i class='bx bx-music'></i> Chopin
+        </div>
+        <button id="menu-toggle" aria-label="Toggle Menu">
+            <i class='bx bx-menu'></i>
+        </button>
+    </header>
+
+    <div class="layout-wrapper">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class='bx bx-music'></i> Chopin 🎼
+                </div>
+            </div>
+
+            <ul class="nav-links">
+                <li class="nav-label">Navigation</li>
+                <li><a href="index.html"><i class='bx bx-arrow-back'></i> Back to Home</a></li>
+
+                <li class="nav-label">Developer Guide</li>
+                <li><a href="#setup" class="active"><i class='bx bx-cog'></i> 1. Foundation & Setup</a></li>
+                <li><a href="#routing"><i class='bx bx-directions'></i> 2. Core Routing</a></li>
+                <li><a href="#middleware"><i class='bx bx-shield-quarter'></i> 3. Middleware</a></li>
+                <li><a href="#persistence"><i class='bx bx-data'></i> 4. Data & Persistence</a></li>
+                <li><a href="#advanced"><i class='bx bx-bolt-circle'></i> 5. Advanced Logic</a></li>
+                <li><a href="#performance"><i class='bx bx-stats'></i> 6. Performance</a></li>
+                <li><a href="#testing"><i class='bx bx-check-shield'></i> 7. Testing & Quality</a></li>
+                <li><a href="#deployment"><i class='bx bx-cloud-upload'></i> 8. Deployment</a></li>
+            </ul>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <section class="hero-section" style="padding: 4rem 2rem 2rem;">
+                <h1>Comprehensive API Development Guide</h1>
+                <p class="subtitle">From "Hello World" to production-hardened microservices using Chopin's
+                    Shared-Nothing architecture.</p>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Section 1 -->
+            <section id="setup">
+                <h2>1. Foundation & Setup</h2>
+                <p>Welcome to the official developer guide for the <strong>Chopin HTTP Framework</strong>. Chopin
+                    requires a modern Rust toolchain (1.75+). It's optimized for UNIX-like environments (Linux
+                    <code>epoll</code> and macOS <code>kqueue</code>).</p>
+
+                <h3>Environment Configuration</h3>
+                <p>Install the <code>chopin-cli</code>, your central tool for generating and managing projects:</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-bash">cargo install --path crates/chopin-cli</code></pre>
+                </div>
+
+                <h3>Project Initialization</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-bash">chopin new my_api
+cd my_api
+chopin dev</code></pre>
+                </div>
+
+                <h3>The Big Picture (Architecture)</h3>
+                <p>Chopin relies on a <strong>Shared-Nothing threaded model</strong>:</p>
+                <ul class="feature-list" style="margin-bottom: 2rem;">
+                    <li><i class='bx bx-check-circle'></i> <strong>Atomic Listener Binding:</strong> Using
+                        <code>SO_REUSEPORT</code>, every single thread binds independently to the same port.</li>
+                    <li><i class='bx bx-check-circle'></i> <strong>Worker Concurrency:</strong> Each logical CPU core
+                        gets a dedicated thread running an Edge-Triggered event loop.</li>
+                </ul>
+
+                <h3>Boilerplate Breakdown</h3>
+                <p>When you run <code>chopin new</code>, you get a structured codebase:</p>
+                <ul class="feature-list">
+                    <li><i class='bx bx-file'></i> <code>src/main.rs</code>: Discovers and mounts all routes via
+                        <code>inventory</code>.</li>
+                    <li><i class='bx bx-folder'></i> <code>src/apps/</code>: Domain-driven modules for your API.</li>
+                </ul>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Section 2 -->
+            <section id="routing">
+                <h2>2. Core Routing & Handlers</h2>
+                <p>Chopin uses declarative attribute macros for request mapping. Handlers take a <code>Context</code>
+                    and return a <code>Response</code>.</p>
+
+                <h3>Basic Mapping</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_core::{Context, Response};
+use chopin_macros::get;
+
+#[get("/ping")]
+fn ping(ctx: Context) -> Response {
+    Response::text("pong")
+}</code></pre>
+                </div>
+
+                <h3>Path Parameters & Headers</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[post("/users/:id")]
+fn update_user(ctx: Context) -> Response {
+    let user_id = ctx.param("id").unwrap_or("0");
+    let auth_header = ctx.header("Authorization");
+    
+    Response::text(format!("Updating {}", user_id))
+}</code></pre>
+                </div>
+
+                <h3>Type-Safe JSON Payloads</h3>
+                <p>Chopin uses the Schema-JIT engine (<code>kowito-json</code>) for ultra-fast serialization.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[derive(Serialize)]
+struct UserResponse {
+    id: i32,
+    username: String,
+}
+
+#[get("/user")]
+fn get_user(ctx: Context) -> Response {
+    let payload = UserResponse { id: 1, username: "virtuoso".into() };
+    ctx.json(&payload)
+}</code></pre>
+                </div>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Section 3 -->
+            <section id="middleware">
+                <h2>3. The Middleware Pipeline</h2>
+                <p>Middlewares are pure functions that intercept the request/response lifecycle.</p>
+
+                <h3>Timing Interceptor</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">fn timing_middleware(ctx: Context, next: BoxedHandler) -> Response {
+    let start = std::time::Instant::now();
+    let mut response = next(ctx);
+    let duration = start.elapsed();
+    
+    response.headers.push(("X-Runtime-Ms", duration.as_millis().to_string()));
+    response
+}
+
+// Global registration
+router.layer(timing_middleware);</code></pre>
+                </div>
+
+                <h3>Role-Based Auth (JWT)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">require_role_middleware!(admin_only, MyClaims, UserRole::Admin, MyClaims::has_role);
+
+router.get("/admin/dashboard", admin_only(dashboard_handler));</code></pre>
+                </div>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Section 4 -->
+            <section id="persistence">
+                <h2>4. Data & Persistence</h2>
+                <p>Shared-Nothing persistence means avoid global mutexes on pools.</p>
+
+                <h3>Worker-Local Pooling</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">thread_local! {
+    pub static DB: RefCell<PgPool> = RefCell::new(
+        PgPool::connect(PgConfig::from_url("...").unwrap(), 10).expect("DB panic")
+    );
+}</code></pre>
+                </div>
+
+                <h3>ORM Usage</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[derive(Model)]
+struct Product {
+    #[model(primary_key)]
+    id: i32,
+    name: String,
+}
+
+#[get("/products")]
+fn list_products(ctx: Context) -> Response {
+    DB.with(|db| {
+        let mut pool = db.borrow_mut();
+        let products = QueryBuilder::<Product>::new().all(&mut *pool).unwrap();
+        ctx.json(&products)
+    })
+}</code></pre>
+                </div>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Section 5 -->
+            <section id="advanced">
+                <h2>5. Advanced Logic</h2>
+
+                <h3>Streaming Multipart</h3>
+                <p>Chopin's <code>Multipart</code> parser iterates through body bytes without massive buffering.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[post("/upload")]
+fn upload(ctx: Context) -> Response {
+    if let Some(multipart) = ctx.multipart() {
+        for part in multipart {
+            let p = part.unwrap();
+            println!("File: {:?}", p.filename);
+        }
+    }
+    Response::text("Upload Done")
+}</code></pre>
+                </div>
+
+                <h3>Panic Recovery</h3>
+                <p>Faulty routes are isolated via <code>catch_unwind</code>. A panic returns a
+                    <code>500 Server Error</code> but keeps the worker alive.</p>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Section 6 -->
+            <section id="performance">
+                <h2>6. Performance & Scaling</h2>
+                <ul class="feature-grid">
+                    <li class="feature-card glass-panel">
+                        <h3>Core Affinity</h3>
+                        <p>Workers are pinned to physical cores to maximize cache locality.</p>
+                    </li>
+                    <li class="feature-card glass-panel">
+                        <h3>Kernel Handoff</h3>
+                        <p>Uses <code>TCP_DEFER_ACCEPT</code> and <code>TCP_FASTOPEN</code> to minimize round trips.</p>
+                    </li>
+                </ul>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Section 7 -->
+            <section id="testing">
+                <h2>7. Testing & Quality</h2>
+                <h3>Architectural Linter</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-bash">chopin check</code></pre>
+                </div>
+                <h3>Benchmarking</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-bash">chopin bench
+wrk -t10 -c200 -d10s http://localhost:8080/ping</code></pre>
+                </div>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Section 8 -->
+            <section id="deployment">
+                <h2>8. Deployment & Observability</h2>
+                <h3>Dockerization</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-bash">chopin deploy docker</code></pre>
+                </div>
+                <h3>Live Metrics</h3>
+                <p>Metrics are piped to <code>stdout</code> automatically every 5 seconds.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-text">[Metrics] Active Connections: 194 | Total Requests: 1248030</code></pre>
+                </div>
+            </section>
+
+            <footer class="site-footer">
+                <p>Chopin Developer Guide &copy; 2026. <a href="index.html">Back to Home</a></p>
+            </footer>
+
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-rust.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>
