@@ -9,7 +9,7 @@ struct UserPayload<'a> {
 }
 
 fn hello_json(_ctx: Context) -> Response {
-    Response::json(br#"{"message":"Hello, World!"}"#)
+    Response::json_bytes(br#"{"message":"Hello, World!"}"#)
 }
 
 fn create_user(ctx: Context) -> Response {
@@ -18,33 +18,22 @@ fn create_user(ctx: Context) -> Response {
         Err(e) => return e,
     };
 
-    Response::ok(format!(
+    Response::text(format!(
         "Created user '{}' age {}",
         payload.name, payload.age
     ))
 }
 
 fn hello_text(ctx: Context) -> Response {
-    let name = ctx
-        .params
-        .iter()
-        .find(|(k, _)| *k == "name")
-        .map(|(_, v)| *v)
-        .unwrap_or("World");
+    let name = ctx.param("name").unwrap_or("World");
     let uppercase = ctx.req.query.unwrap_or("") == "upper=true";
-    let user_agent = ctx
-        .req
-        .headers
-        .iter()
-        .find(|(k, _): &&(&str, &str)| k.eq_ignore_ascii_case("User-Agent"))
-        .map(|(_, v)| *v)
-        .unwrap_or("Unknown");
+    let user_agent = ctx.header("User-Agent").unwrap_or("Unknown");
 
     let mut greeting = format!("Hello, {}! You are using {}.", name, user_agent);
     if uppercase {
         greeting = greeting.to_uppercase();
     }
-    Response::ok(greeting)
+    Response::text(greeting)
 }
 
 fn panic_handler(_ctx: Context) -> Response {
@@ -75,7 +64,7 @@ fn logger_mw(ctx: Context, next: chopin_core::router::BoxedHandler) -> Response 
 
 fn main() {
     let mut router = Router::new();
-    router.wrap(logger_mw);
+    router.layer(logger_mw);
     router.get("/hello", hello_json);
     router.get("/hello/:name", hello_text);
     router.post("/users", create_user);

@@ -277,17 +277,7 @@ impl Router {
         current.middleware.push(mw);
     }
 
-    #[deprecated(since = "0.6.0", note = "Use `router.layer(mw)` instead")]
-    pub fn wrap(&mut self, mw: MiddlewareFn) {
-        self.layer(mw);
-    }
-
-    #[deprecated(since = "0.6.0", note = "Use `router.layer_path(path, mw)` instead")]
-    pub fn wrap_path(&mut self, path: &str, mw: MiddlewareFn) {
-        self.layer_path(path, mw);
-    }
-
-    // Modular Routing
+    // ── Modular Routing ───────────────────────────────────────────────────────
     #[must_use]
     pub fn merge(mut self, other: Router) -> Self {
         Self::merge_nodes(&mut self.root, other.root);

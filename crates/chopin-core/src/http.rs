@@ -268,20 +268,4 @@ impl<'a> Context<'a> {
         Response::json(val)
     }
 
-    // ── Deprecated aliases (kept for backward compatibility) ──────────────────
-
-    #[deprecated(since = "0.6.0", note = "Use `ctx.param(key)` instead")]
-    pub fn get_param(&self, key: &str) -> Option<&'a str> {
-        self.param(key)
-    }
-
-    #[deprecated(since = "0.6.0", note = "Use `ctx.header(key)` instead")]
-    pub fn get_header(&self, key: &str) -> Option<&'a str> {
-        self.header(key)
-    }
-
-    #[deprecated(since = "0.6.0", note = "Use `ctx.json(val)` instead")]
-    pub fn respond_json<T: crate::json::Serialize>(&self, val: &T) -> Response {
-        self.json(val)
-    }
 }

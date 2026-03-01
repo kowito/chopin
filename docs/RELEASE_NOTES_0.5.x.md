@@ -1,4 +1,4 @@
-# Chopin Release Notes: v0.5.0 – v0.5.4 (Codename: Nocturne)
+# Chopin Release Notes: v0.5.0 – v0.5.7 (Codename: Nocturne)
 
 The 0.5.x series, codenamed **Nocturne**, marks the most significant evolution of Chopin to date. We've transitioned from a proof-of-concept networking engine to a production-hardened web framework with industry-leading performance and modern ergonomics.
 
@@ -31,6 +31,8 @@ The release of `chopin-orm` brings type-safe database interactions to the ecosys
 - **v0.5.1 - v0.5.2**: Launch of `chopin-orm` and `chopin-pg`.
 - **v0.5.3**: Refactoring to Attribute Macros and Implicit Routing.
 - **v0.5.4**: CI/CD optimization and benchmark synchronization with Actix/Axum.
+- **v0.5.5 - v0.5.6**: Documentation update and ORM performance tuning.
+- **v0.5.7**: Major Naming Convention Overhaul (`Response::text`, `ctx.param`, `router.layer`).
 
 ---
 "Simple as a melody, fast as a nocturne."

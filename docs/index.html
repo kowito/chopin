@@ -316,10 +316,10 @@ Hyper      [██████████████████████  
                 <p>Or add individual crates to your <code>Cargo.toml</code>:</p>
                 <div class="code-block glass-panel">
                     <pre><code class="language-toml">[dependencies]
-chopin-core = "0.5"
-chopin-macros = "0.1"    # For attribute routing
-chopin-pg = "0.5"        # High-performance PostgreSQL driver
-chopin-orm = "0.5"       # Zero-allocation ORM layer
+chopin-core = "0.5.7"
+chopin-macros = "0.5.7"    # For attribute routing
+chopin-pg = "0.5.7"        # High-performance PostgreSQL driver
+chopin-orm = "0.5.7"       # Zero-allocation ORM layer
 kowito-json = "0.2.8"    # Schema-JIT SIMD JSON parser
 </code></pre>
                 </div>
@@ -417,7 +417,7 @@ use chopin_macros::get;
 
 #[get("/")]
 fn hello_world(_ctx: Context) -> Response {
-    Response::plain("Hello, World!")
+    Response::text("Hello, World!")
 }
 
 fn main() {
@@ -457,7 +457,8 @@ fn get_user(ctx: Context) -> Response {
                 <div class="code-block glass-panel">
                     <pre><code class="language-rust">let mut router = Router::new();
 router.get("/about", about_handler);
-router.get("/static/*path", static_file_handler);</code></pre>
+router.get("/static/*path", static_file_handler);
+</code></pre>
                 </div>
             </section>
 
@@ -489,7 +490,7 @@ fn user_handler(ctx: Context) -> Response {
     };
     
     // Turbo-charged Schema-JIT serialization
-    ctx.respond_json(&user) 
+    ctx.json(&user) 
 }</code></pre>
                 </div>
 
@@ -519,7 +520,7 @@ fn upload_handler(ctx: Context) -> Response {
         // Save part.body to disk or process...
     }
     
-    Response::plain("Upload complete")
+    Response::text("Upload complete")
 }</code></pre>
                 </div>
             </section>
@@ -599,7 +600,7 @@ fn stats_handler(_ctx: Context) -> Response {
         ).unwrap();
         
         let count: i64 = rows[0].get(0).unwrap();
-        Response::plain(format!("Errors: {}", count))
+        Response::text(format!("Errors: {}", count))
     })
 }</code></pre>
                 </div>

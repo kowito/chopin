@@ -46,7 +46,7 @@ use chopin_macros::get;
 
 #[get("/ping")]
 fn ping(ctx: Context) -> Response {
-    Response::ok("pong")
+    Response::text("pong")
 }
 ```
 
@@ -56,10 +56,10 @@ URL path variables and HTTP headers can be cleanly extracted from the `Context`.
 ```rust
 #[post("/users/:id")]
 fn update_user(ctx: Context) -> Response {
-    let user_id = ctx.get_param("id").unwrap_or("0");
-    let auth_header = ctx.get_header("Authorization");
+    let user_id = ctx.param("id").unwrap_or("0");
+    let auth_header = ctx.header("Authorization");
     
-    Response::ok(format!("Updating {}", user_id))
+    Response::text(format!("Updating {}", user_id))
 }
 ```
 
@@ -78,7 +78,7 @@ struct UserResponse {
 #[get("/user")]
 fn get_user(ctx: Context) -> Response {
     let payload = UserResponse { id: 1, username: "virtuoso".into() };
-    ctx.respond_json(&payload)
+    ctx.json(&payload)
 }
 ```
 
@@ -99,7 +99,7 @@ fn timing_middleware(ctx: Context, next: BoxedHandler) -> Response {
     response
 }
 ```
-You attach these globally via `Router::new().wrap(timing_middleware)`.
+You attach these globally via `Router::new().layer(timing_middleware)`.
 
 ### Authentication & Role-Based Authorization
 The `chopin-auth` crate brings JWT validation. Middleware can be statically generated with zero allocations using the `require_role_middleware!` macro.
@@ -196,7 +196,7 @@ fn upload(ctx: Context) -> Response {
             // Slice of bytes extracted immediately: p.body
         }
     }
-    Response::ok("Upload Done")
+    Response::text("Upload Done")
 }
 ```
 
