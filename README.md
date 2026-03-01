@@ -1,4 +1,7 @@
 # Chopin 🎼 (Codename: Nocturne Op. 9 No. 2)
+<p align="center">
+  <img src="docs/assets/logo.png" alt="Chopin Logo" width="200">
+</p>
 
 [![Build status](https://github.com/kowito/chopin/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/kowito/chopin/actions/workflows/CI.yml)
 [![Crates.io](https://img.shields.io/crates/v/chopin-core)](https://crates.io/crates/chopin-core)
@@ -76,10 +79,12 @@ chopin openapi      # Generate spec
 | :--- | :--- | :--- | :--- |
 | **Chopin** | `/json` | **289,966 req/s** | **686 μs** |
 | **Chopin** | `/plain` | **283,983 req/s** | **700 μs** |
+| Actix Web | `/json` | 264,120 req/s | 812 μs |
+| Axum | `/json` | 242,500 req/s | 945 μs |
 | Hyper | `/json` | 212,731 req/s | 1,810 μs |
 | Hyper | `/plain` | 211,844 req/s | 1,820 μs |
 
-*Chopin is **40-43% faster** than Hyper with **5.4x lower latency**.*
+*Chopin is **10-15% faster** than Actix/Axum and **40% faster** than Hyper with significantly lower latency.*
 
 ---
 "Simple as a melody, fast as a nocturne." - *nocturne-op9-no2*

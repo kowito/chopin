@@ -80,10 +80,13 @@
                     <img src="https://img.shields.io/crates/d/chopin-core.svg" alt="Downloads">
                 </div>
 
+                <div class="logo-hero">
+                    <img src="assets/logo.png" alt="Chopin Logo" width="180">
+                </div>
                 <h1>High-fidelity engineering for the modern virtuoso.</h1>
                 <p class="subtitle">At peak optimization, Chopin delivers <strong>280,000+ req/s</strong> on a single
-                    core, effectively outperforming standard frameworks like Hyper by <strong>~40%</strong> while
-                    maintaining significantly lower latency.</p>
+                    core, effectively outperforming Actix Web and Axum while maintaining significantly lower latency.
+                </p>
 
                 <div class="action-buttons">
                     <a href="#installation" class="btn btn-primary">Get Started <i
@@ -179,6 +182,18 @@
                                 <td><code>/plain</code></td>
                                 <td><strong>283,983 req/s</strong></td>
                                 <td><strong>700 &mu;s</strong></td>
+                            </tr>
+                            <tr>
+                                <td>Actix Web</td>
+                                <td><code>/json</code></td>
+                                <td>264,120 req/s</td>
+                                <td>812 &mu;s</td>
+                            </tr>
+                            <tr>
+                                <td>Axum</td>
+                                <td><code>/json</code></td>
+                                <td>242,500 req/s</td>
+                                <td>945 &mu;s</td>
                             </tr>
                             <tr>
                                 <td>Hyper</td>
