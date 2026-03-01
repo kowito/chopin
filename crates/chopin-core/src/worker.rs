@@ -11,11 +11,41 @@ use crate::metrics::WorkerMetrics;
 use crate::router::Router;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Pre-baked status line for 200 OK (the overwhelming majority in TFB).
-const STATUS_200_OK: &[u8] = b"HTTP/1.1 200 OK\r\n";
+/// Pre-baked Content-Type header lines for the two most common types.
+const CT_TEXT_PLAIN: &[u8] = b"Content-Type: text/plain\r\n";
+const CT_APP_JSON: &[u8] = b"Content-Type: application/json\r\n";
+
+/// Length of the pre-baked 200 response prefix:
+/// "HTTP/1.1 200 OK\r\nDate: <29>\r\nServer: chopin\r\n" = 70 bytes.
+const PREFIX_200_LEN: usize = b"HTTP/1.1 200 OK\r\n".len()
+    + b"Date: ".len()
+    + 29 // cached HTTP date
+    + b"\r\n".len()
+    + b"Server: chopin\r\n".len();
+
+/// Rebuild the cached response prefix for 200 OK responses.
+/// Called once per second when the date changes.
+#[inline]
+fn rebuild_prefix_200(buf: &mut [u8; PREFIX_200_LEN], date: &[u8; 29]) {
+    const A: usize = 0;
+    const STATUS: &[u8] = b"HTTP/1.1 200 OK\r\n";
+    const B: usize = A + STATUS.len(); // 17
+    const DATE_PFX: &[u8] = b"Date: ";
+    const C: usize = B + DATE_PFX.len(); // 23
+    const D: usize = C + 29; // 52 (date)
+    const CRLF: &[u8] = b"\r\n";
+    const E: usize = D + CRLF.len(); // 54
+    const SERVER: &[u8] = b"Server: chopin\r\n";
+
+    buf[A..B].copy_from_slice(STATUS);
+    buf[B..C].copy_from_slice(DATE_PFX);
+    buf[C..D].copy_from_slice(date);
+    buf[D..E].copy_from_slice(CRLF);
+    buf[E..E + SERVER.len()].copy_from_slice(SERVER);
+}
 
 /// Format an HTTP status line into a fixed 40-byte buffer. Returns the slice length.
-#[inline]
+#[inline(always)]
 fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
     let (phrase, code_bytes): (&[u8], &[u8]) = match status {
         100 => (b"Continue", b"100"),
@@ -71,7 +101,7 @@ fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
 /// Output: `"Thu, 01 Jan 1970 00:00:00 GMT"` (exactly 29 bytes, always).
 ///
 /// Uses the Howard Hinnant civil_from_days algorithm for calendar conversion.
-#[inline]
+#[inline(always)]
 fn format_http_date(buf: &mut [u8; 29], ts: u64) {
     // Day-of-week names (epoch = Thursday, index 0)
     static WDAY: [[u8; 3]; 7] = [
@@ -167,7 +197,7 @@ impl Worker {
 
         let mut now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|_| ChopinError::Other("Clock went backwards".to_string()))?
+            .map_err(|_| ChopinError::ClockError)?
             .as_secs() as u32;
         let mut last_prune = now;
         let mut timer_wheel = TimerWheel::new(now);
@@ -177,6 +207,11 @@ impl Worker {
         let mut cached_date = [0u8; 29];
         format_http_date(&mut cached_date, now as u64);
         let mut cached_date_sec: u32 = now;
+
+        // Pre-baked 200 response prefix: "HTTP/1.1 200 OK\r\nDate: <date>\r\nServer: chopin\r\n"
+        // Refreshed alongside cached_date once per second. Reduces 5 w!() calls to 1.
+        let mut prefix_200 = [0u8; PREFIX_200_LEN];
+        rebuild_prefix_200(&mut prefix_200, &cached_date);
 
         loop {
             let is_shutting_down = shutdown.load(Ordering::Acquire);
@@ -189,7 +224,7 @@ impl Worker {
             if iter_count.is_multiple_of(1024) {
                 now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .map_err(|_| ChopinError::Other("Clock went backwards".to_string()))?
+                    .map_err(|_| ChopinError::ClockError)?
                     .as_secs() as u32;
 
                 if now - last_prune >= 1 {
@@ -197,10 +232,11 @@ impl Worker {
                     last_prune = now;
                 }
 
-                // Refresh cached HTTP-date once per second
+                // Refresh cached HTTP-date and 200 prefix once per second
                 if now != cached_date_sec {
                     format_http_date(&mut cached_date, now as u64);
                     cached_date_sec = now;
+                    rebuild_prefix_200(&mut prefix_200, &cached_date);
                 }
             }
 
@@ -209,7 +245,7 @@ impl Worker {
                 Err(_) => continue, // Interrupted likely
             };
 
-            for event in events.iter().take(n) {
+            for event in &events[..n] {
                 let token = event.u64;
                 let is_read = (event.events & EPOLLIN as u32) != 0;
                 let is_write = (event.events & EPOLLOUT as u32) != 0;
@@ -224,6 +260,18 @@ impl Worker {
                         match syscalls::accept_connection(self.listen_fd) {
                             Ok(Some(client_fd)) => {
                                 // TCP_NODELAY + SO_NOSIGPIPE are inherited from the listener
+                                // Disable delayed ACK on Linux for lower latency
+                                #[cfg(target_os = "linux")]
+                                unsafe {
+                                    let one: libc::c_int = 1;
+                                    libc::setsockopt(
+                                        client_fd,
+                                        libc::IPPROTO_TCP,
+                                        libc::TCP_QUICKACK,
+                                        &one as *const _ as *const libc::c_void,
+                                        std::mem::size_of_val(&one) as libc::socklen_t,
+                                    );
+                                }
                                 // Add to slab
                                 if let Ok(idx) = slab.allocate(client_fd) {
                                     // Register with epoll
@@ -475,26 +523,30 @@ impl Worker {
                                                 };
                                             }
 
-                                            // Pre-baked 200 OK status line (hot path)
+                                            // Pre-baked 200 OK prefix: status+date+server in one copy
                                             if response.status == 200 {
-                                                w!(STATUS_200_OK);
+                                                w!(&prefix_200);
                                             } else {
                                                 let mut sl_buf = [0u8; 40];
                                                 let sl_len =
                                                     status_line(response.status, &mut sl_buf);
                                                 w!(&sl_buf[..sl_len]);
+                                                w!(b"Date: ");
+                                                w!(&cached_date);
+                                                w!(b"\r\n");
+                                                w!(b"Server: chopin\r\n");
                                             }
 
-                                            // Cached HTTP-date (refreshed once per second)
-                                            w!(b"Date: ");
-                                            w!(&cached_date);
-                                            w!(b"\r\n");
-
-                                            w!(b"Server: chopin\r\n");
-
-                                            w!(b"Content-Type: ");
-                                            w!(response.content_type.as_bytes());
-                                            w!(b"\r\n");
+                                            // Pre-baked content-type for common types
+                                            match response.content_type {
+                                                "text/plain" => w!(CT_TEXT_PLAIN),
+                                                "application/json" => w!(CT_APP_JSON),
+                                                ct => {
+                                                    w!(b"Content-Type: ");
+                                                    w!(ct.as_bytes());
+                                                    w!(b"\r\n");
+                                                }
+                                            }
 
                                             let is_chunked = matches!(
                                                 response.body,

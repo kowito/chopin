@@ -58,18 +58,7 @@ impl RouteNode {
 /// Map Method enum to array index for O(1) dispatch
 #[inline(always)]
 fn method_index(m: Method) -> usize {
-    match m {
-        Method::Get => 0,
-        Method::Post => 1,
-        Method::Put => 2,
-        Method::Delete => 3,
-        Method::Patch => 4,
-        Method::Head => 5,
-        Method::Options => 6,
-        Method::Trace => 7,
-        Method::Connect => 8,
-        Method::Unknown => 9,
-    }
+    m as usize
 }
 
 #[derive(Clone)]
@@ -87,10 +76,19 @@ impl Router {
     }
 
     pub fn add(&mut self, method: Method, path: &str, handler: Handler) {
-        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        // Stack-allocated segments — no Vec heap allocation
+        let mut seg_buf = [""; MAX_SEGMENTS];
+        let mut seg_count = 0;
+        for s in path.split('/').filter(|s| !s.is_empty()) {
+            if seg_count >= MAX_SEGMENTS {
+                break;
+            }
+            seg_buf[seg_count] = s;
+            seg_count += 1;
+        }
         let mut current = &mut self.root;
 
-        for segment in segments {
+        for &segment in &seg_buf[..seg_count] {
             // Check if segment is a param or wildcard
             let is_param = segment.starts_with(':');
             let is_wildcard = segment.starts_with('*');
@@ -134,7 +132,22 @@ impl Router {
         current.handlers[method_index(method)] = Some(handler);
     }
 
+    #[inline]
     pub fn match_route<'a>(&'a self, method: Method, path: &'a str) -> Option<RouteMatch<'a>> {
+        // Fast path for root "/" — skip segment splitting entirely
+        if path == "/" || path.is_empty() {
+            let idx = method_index(method);
+            if let Some(ref h) = self.root.handlers[idx] {
+                let mut middleware_buf = [None::<MiddlewareFn>; MAX_MIDDLEWARE];
+                let mw_count = self.root.middleware.len().min(MAX_MIDDLEWARE);
+                for (i, mw) in self.root.middleware.iter().take(mw_count).enumerate() {
+                    middleware_buf[i] = Some(*mw);
+                }
+                return Some((h, [("", ""); MAX_PARAMS], 0, middleware_buf, mw_count));
+            }
+            return None;
+        }
+
         // Stack-allocated segments — no heap allocation
         let mut segments = [""; MAX_SEGMENTS];
         let mut seg_count: usize = 0;
@@ -167,6 +180,7 @@ impl Router {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
     fn match_recursive<'a, 'b>(
         &'a self,
         node: &'a RouteNode,
@@ -286,10 +300,18 @@ impl Router {
 
     /// Apply a middleware function to all routes under the given path prefix.
     pub fn layer_path(&mut self, path: &str, mw: MiddlewareFn) {
-        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut seg_buf = [""; MAX_SEGMENTS];
+        let mut seg_count = 0;
+        for s in path.split('/').filter(|s| !s.is_empty()) {
+            if seg_count >= MAX_SEGMENTS {
+                break;
+            }
+            seg_buf[seg_count] = s;
+            seg_count += 1;
+        }
         let mut current = &mut self.root;
 
-        for segment in segments {
+        for &segment in &seg_buf[..seg_count] {
             let is_param = segment.starts_with(':');
             let is_wildcard = segment.starts_with('*');
 
@@ -341,10 +363,18 @@ impl Router {
 
     #[must_use]
     pub fn nest(mut self, prefix: &str, other: Router) -> Self {
-        let segments: Vec<&str> = prefix.split('/').filter(|s| !s.is_empty()).collect();
+        let mut seg_buf = [""; MAX_SEGMENTS];
+        let mut seg_count = 0;
+        for s in prefix.split('/').filter(|s| !s.is_empty()) {
+            if seg_count >= MAX_SEGMENTS {
+                break;
+            }
+            seg_buf[seg_count] = s;
+            seg_count += 1;
+        }
         let mut current = &mut self.root;
 
-        for segment in segments {
+        for &segment in &seg_buf[..seg_count] {
             let is_param = segment.starts_with(':');
             let is_wildcard = segment.starts_with('*');
 

@@ -1,21 +1,23 @@
 // src/http.rs
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum Method {
-    Get,
-    Post,
-    Put,
-    Delete,
-    Patch,
-    Head,
-    Options,
-    Trace,
-    Connect,
-    Unknown,
+    Get = 0,
+    Post = 1,
+    Put = 2,
+    Delete = 3,
+    Patch = 4,
+    Head = 5,
+    Options = 6,
+    Trace = 7,
+    Connect = 8,
+    Unknown = 9,
 }
 
 impl Method {
     /// First-byte dispatch for fast HTTP method parsing (picohttpparser technique).
+    #[inline(always)]
     pub fn from_bytes(b: &[u8]) -> Self {
         if b.is_empty() {
             return Method::Unknown;
@@ -117,6 +119,7 @@ pub enum Body {
 }
 
 impl Body {
+    #[inline(always)]
     pub fn len(&self) -> usize {
         match self {
             Body::Empty => 0,
@@ -126,10 +129,12 @@ impl Body {
         }
     }
 
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[inline(always)]
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             Body::Empty => &[],

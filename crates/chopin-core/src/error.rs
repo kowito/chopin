@@ -10,6 +10,8 @@ pub enum ChopinError {
     Parse(ParseError),
     /// Slab allocator reached its maximum capacity.
     SlabFull,
+    /// System clock returned an invalid time.
+    ClockError,
     /// A background worker or task panicked.
     WorkerPanic(String),
     /// Generic or miscellaneous error.
@@ -22,6 +24,7 @@ impl std::fmt::Display for ChopinError {
             ChopinError::Io(e) => write!(f, "I/O error: {}", e),
             ChopinError::Parse(e) => write!(f, "Parse error: {:?}", e),
             ChopinError::SlabFull => write!(f, "Connection slab is full"),
+            ChopinError::ClockError => write!(f, "System clock went backwards"),
             ChopinError::WorkerPanic(msg) => write!(f, "Worker panic: {}", msg),
             ChopinError::Other(msg) => write!(f, "Error: {}", msg),
         }
