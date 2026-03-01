@@ -33,7 +33,6 @@ jobs:
   test:
     name: Test & Check
     runs-on: macos-14
-    # Runs on PRs, tags, and pushes to main (if not a version bump)
     if: |
       github.event_name == 'pull_request' || 
       startsWith(github.ref, 'refs/tags/v') ||
@@ -41,54 +40,26 @@ jobs:
       github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
-      
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
-      
-      - name: Cache cargo registry
-        uses: actions/cache@v3
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Cache cargo index
-        uses: actions/cache@v3
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Cache cargo build
-        uses: actions/cache@v3
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-      
       - name: Run tests
-        # Skip chopin-pg and chopin-orm tests as they require a running PostgreSQL instance
         run: cargo test --verbose --workspace --exclude chopin-pg --exclude chopin-orm
-      
-      - name: Build release
-        run: cargo build --release
-      
       - name: Check formatting
         run: cargo fmt --all -- --check
-      
       - name: Run clippy
         run: cargo clippy --all --all-targets -- -D warnings
 
-  bump-version:
-    name: Version Bump & Release
+  release:
+    name: Release & Publish
     runs-on: macos-14
     needs: test
-    # Trigger on push to main (not a bump commit) or manual dispatch
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, 'chore: bump version')) ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.bump_type != 'none')
+      (github.event_name == 'workflow_dispatch')
     permissions:
       contents: write
-      packages: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -152,47 +123,56 @@ jobs:
       - name: Update Cargo.lock
         run: cargo metadata --offline > /dev/null || true
       
+      - name: Publish all crates
+        run: |
+          if [ -n "${{ secrets.CARGO_TOKEN }}" ]; then
+            echo "🚀 Publishing version ${{ steps.new_version.outputs.new_version }} to crates.io..."
+            cargo publish -p chopin-core --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 60
+            cargo publish -p chopin-pg --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 60
+            cargo publish -p chopin-orm-macro --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 60
+            cargo publish -p chopin-orm --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+          else
+            echo "⚠️ CARGO_TOKEN not set, skipping publish"
+            exit 1
+          fi
+
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add crates/*/Cargo.toml Cargo.lock || true
-          git commit -m "chore: bump version to ${{ steps.new_version.outputs.new_version }}" || true
+          git commit -m "chore: bump version to ${{ steps.new_version.outputs.new_version }} [skip ci]" || true
           git tag "v${{ steps.new_version.outputs.new_version }}" || true
           git push origin main || true
           git push origin "v${{ steps.new_version.outputs.new_version }}" || true
 
-  publish:
-    name: Publish to crates.io
+  # Fallback for manual tag pushes
+  publish-tag:
+    name: Publish Manual Tag
     runs-on: macos-14
     needs: test
-    # Trigger ONLY on tag push
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
-      
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
-      
-      - name: Check CARGO_TOKEN is set
-        run: |
-          if [ -z "${{ secrets.CARGO_TOKEN }}" ]; then
-            echo "❌ CARGO_TOKEN secret is not configured!"
-            exit 1
-          fi
-      
       - name: Publish all crates
         run: |
-          echo "🚀 Publishing version ${{ github.ref_name }} to crates.io..."
-          # Publish order matters due to dependencies
-          # We use --no-verify here because the 'test' job already verified the code
-          # and it avoids re-running expensive tests during publish.
-          cargo publish -p chopin-core --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
-          sleep 60
-          cargo publish -p chopin-pg --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
-          sleep 60
-          cargo publish -p chopin-orm-macro --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
-          sleep 60
-          cargo publish -p chopin-orm --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+          if [ -n "${{ secrets.CARGO_TOKEN }}" ]; then
+            echo "🚀 Publishing tag ${{ github.ref_name }} to crates.io..."
+            cargo publish -p chopin-core --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 30
+            cargo publish -p chopin-pg --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 30
+            cargo publish -p chopin-orm-macro --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+            sleep 30
+            cargo publish -p chopin-orm --token ${{ secrets.CARGO_TOKEN }} --no-verify || true
+          else
+            echo "❌ CARGO_TOKEN not set"
+            exit 1
+          fi
