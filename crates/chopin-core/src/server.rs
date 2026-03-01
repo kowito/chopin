@@ -7,6 +7,36 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
+pub struct Chopin {
+    router: Router,
+}
+
+impl Default for Chopin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Chopin {
+    pub fn new() -> Self {
+        Self {
+            router: Router::new(),
+        }
+    }
+
+    pub fn mount_all_routes(mut self) -> Self {
+        for route in inventory::iter::<crate::router::RouteDef> {
+            self.router.add(route.method, route.path, route.handler);
+        }
+        self
+    }
+
+    pub fn serve(self, host_port: &str) -> crate::error::ChopinResult<()> {
+        let server = Server::bind(host_port);
+        server.serve(self.router)
+    }
+}
+
 pub struct Server {
     host_port: String,
     workers: usize,

@@ -13,6 +13,8 @@ num_cpus = "1.17.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.138"
 httpdate = "1.0.3"
+inventory = "0.3.22"
+chopin-macros = { version = "0.1.0", path = "../chopin-macros" }
 
 [dev-dependencies]
 hyper = { version = "1.4.1", features = ["full"] }
@@ -23,3 +25,5 @@ chopin-pg = { version = "0.5.2", path = "../chopin-pg" }
 chopin-orm = { version = "0.5.2", path = "../chopin-orm" }
 kowito-json = "0.2.8"
 lazy_static = "1.4.0"
+thiserror = "2.0.18"
+serde = { version = "1.0.228", features = ["derive"] }

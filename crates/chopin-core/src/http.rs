@@ -153,6 +153,37 @@ impl Response {
     }
 }
 
+pub trait IntoResponse {
+    fn into_response(self) -> Response;
+}
+
+impl IntoResponse for Response {
+    fn into_response(self) -> Response {
+        self
+    }
+}
+
+impl IntoResponse for String {
+    fn into_response(self) -> Response {
+        Response::ok(self.into_bytes())
+    }
+}
+
+impl IntoResponse for &'static str {
+    fn into_response(self) -> Response {
+        Response::ok(self.as_bytes().to_vec())
+    }
+}
+
+impl<T: IntoResponse, E: IntoResponse> IntoResponse for Result<T, E> {
+    fn into_response(self) -> Response {
+        match self {
+            Ok(v) => v.into_response(),
+            Err(e) => e.into_response(),
+        }
+    }
+}
+
 pub struct Context<'a> {
     pub req: Request<'a>,
     pub params: [(&'a str, &'a str); MAX_PARAMS],

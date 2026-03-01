@@ -18,5 +18,9 @@ pub use error::{ChopinError, ChopinResult};
 pub use extract::{FromRequest, Json, Query};
 pub use http::{Context, Method, Request, Response};
 pub use json::KJson;
-pub use router::Router;
-pub use server::Server;
+pub use router::{RouteDef, Router};
+pub use server::{Chopin, Server};
+
+// Re-export for macros
+pub use chopin_macros::*;
+pub use inventory;

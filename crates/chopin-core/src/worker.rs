@@ -208,13 +208,17 @@ impl Worker {
                                         .router
                                         .match_route(ctx.req.method, ctx.req.path)
                                     {
-                                        Some((handler, params, param_count)) => {
+                                        Some((handler, params, param_count, route_middleware)) => {
                                             ctx.params = params;
                                             ctx.param_count = param_count;
 
                                             // Extract the handler and the middleware stack
                                             let handler_ptr = *handler;
-                                            let mw_stack = self.router.global_middleware.clone();
+
+                                            // Combine router.global_middleware with route-specific middleware
+                                            let mut mw_stack =
+                                                self.router.global_middleware.clone();
+                                            mw_stack.extend(route_middleware);
 
                                             let result = std::panic::catch_unwind(
                                                 std::panic::AssertUnwindSafe(|| {
