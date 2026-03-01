@@ -211,7 +211,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chopin-cli"
-version = "0.1.0"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-core"
-version = "0.5.2"
+version = "0.5.5"
 dependencies = [
  "chopin-macros",
  "chopin-orm",
@@ -254,7 +254,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-macros"
-version = "0.1.0"
+version = "0.5.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-orm"
-version = "0.5.2"
+version = "0.5.5"
 dependencies = [
  "async-trait",
  "chopin-orm-macro",
@@ -274,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-orm-macro"
-version = "0.5.2"
+version = "0.5.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-pg"
-version = "0.5.2"
+version = "0.5.5"
 dependencies = [
  "libc",
  "monoio",
