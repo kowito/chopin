@@ -325,7 +325,7 @@ impl Worker {
                                             );
                                             match result {
                                                 Ok(r) => r,
-                                                Err(_) => crate::http::Response::internal_error(),
+                                                Err(_) => crate::http::Response::server_error(),
                                             }
                                         }
                                         None => crate::http::Response::not_found(),

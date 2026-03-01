@@ -50,7 +50,7 @@ where
                     manager.decode::<T>(token).map_err(|_| Response::new(401))
                 } else {
                     // Manager not initialized
-                    Err(Response::internal_error())
+                    Err(Response::server_error())
                 }
             })?;
 

@@ -10,13 +10,13 @@ fn json_handler(ctx: Context) -> Response {
     let msg = Message {
         message: "Hello, World!",
     };
-    // ctx.respond_json handles the serialization and engine adds Date/Server
-    ctx.respond_json(&msg)
+    // ctx.json() serializes with the Schema-JIT engine; the worker adds Date/Server headers
+    ctx.json(&msg)
 }
 
 fn plain_handler(_ctx: Context) -> Response {
-    // Response::ok handles text/plain and engine adds Date/Server
-    Response::ok("Hello, World!")
+    // Response::text() sets Content-Type: text/plain
+    Response::text("Hello, World!")
 }
 
 fn main() {

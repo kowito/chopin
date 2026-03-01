@@ -40,16 +40,16 @@ pub mod handlers {
 
     #[get("/todos")]
     pub fn list(_ctx: Context) -> Response {
-        Response::ok("list todos")
+        Response::text("list todos")
     }
 
     #[get("/todos/:id")]
     pub fn get_by_id(_ctx: Context) -> Response {
-        Response::ok("get todos")
+        Response::text("get todos")
     }
 
     #[post("/todos")]
     pub fn create(_ctx: Context) -> Response {
-        Response::ok("create todos")
+        Response::text("create todos")
     }
 }

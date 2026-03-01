@@ -79,6 +79,7 @@ pub struct Response {
 }
 
 impl Response {
+    /// Create a response with no body and a given status code.
     pub fn new(status: u16) -> Self {
         Self {
             status,
@@ -88,11 +89,14 @@ impl Response {
         }
     }
 
-    pub fn header(mut self, key: &'static str, value: impl Into<String>) -> Self {
+    /// Builder-style method to append an HTTP response header.
+    pub fn with_header(mut self, key: &'static str, value: impl Into<String>) -> Self {
         self.headers.push((key, value.into()));
         self
     }
-    pub fn ok(body: impl Into<Vec<u8>>) -> Self {
+
+    /// 200 OK with a plain-text body.
+    pub fn text(body: impl Into<Vec<u8>>) -> Self {
         Self {
             status: 200,
             body: Body::Bytes(body.into()),
@@ -101,7 +105,9 @@ impl Response {
         }
     }
 
-    pub fn json(body: impl Into<Vec<u8>>) -> Self {
+    /// 200 OK with a pre-serialized JSON byte body.
+    /// Use `Response::json()` when you have a typed value to serialize.
+    pub fn json_bytes(body: impl Into<Vec<u8>>) -> Self {
         Self {
             status: 200,
             body: Body::Bytes(body.into()),
@@ -110,12 +116,15 @@ impl Response {
         }
     }
 
-    pub fn json_fast<T: kowito_json::serialize::Serialize>(val: &T) -> Self {
-        let mut buf = Vec::with_capacity(128); // Initial small buffer
+    /// 200 OK — serializes a typed value to JSON using the Schema-JIT engine.
+    /// This is the primary way to return structured data from a handler.
+    pub fn json<T: kowito_json::serialize::Serialize>(val: &T) -> Self {
+        let mut buf = Vec::with_capacity(128);
         val.serialize(&mut buf);
-        Self::json(buf)
+        Self::json_bytes(buf)
     }
 
+    /// 404 Not Found.
     pub fn not_found() -> Self {
         Self {
             status: 404,
@@ -125,7 +134,8 @@ impl Response {
         }
     }
 
-    pub fn internal_error() -> Self {
+    /// 500 Internal Server Error.
+    pub fn server_error() -> Self {
         Self {
             status: 500,
             body: Body::Bytes(b"Internal Server Error".to_vec()),
@@ -134,6 +144,7 @@ impl Response {
         }
     }
 
+    /// 400 Bad Request.
     pub fn bad_request() -> Self {
         Self {
             status: 400,
@@ -143,6 +154,27 @@ impl Response {
         }
     }
 
+    /// 401 Unauthorized.
+    pub fn unauthorized() -> Self {
+        Self {
+            status: 401,
+            body: Body::Bytes(b"Unauthorized".to_vec()),
+            content_type: "text/plain",
+            headers: Vec::new(),
+        }
+    }
+
+    /// 403 Forbidden.
+    pub fn forbidden() -> Self {
+        Self {
+            status: 403,
+            body: Body::Bytes(b"Forbidden".to_vec()),
+            content_type: "text/plain",
+            headers: Vec::new(),
+        }
+    }
+
+    /// Chunked streaming response with `application/octet-stream` content type.
     pub fn stream(iter: impl Iterator<Item = Vec<u8>> + Send + 'static) -> Self {
         Self {
             status: 200,
@@ -165,13 +197,13 @@ impl IntoResponse for Response {
 
 impl IntoResponse for String {
     fn into_response(self) -> Response {
-        Response::ok(self.into_bytes())
+        Response::text(self.into_bytes())
     }
 }
 
 impl IntoResponse for &'static str {
     fn into_response(self) -> Response {
-        Response::ok(self.as_bytes().to_vec())
+        Response::text(self.as_bytes().to_vec())
     }
 }
 
@@ -191,7 +223,8 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    pub fn get_param(&self, key: &str) -> Option<&'a str> {
+    /// Extract a URL path parameter by name, e.g. `:id` → `ctx.param("id")`.
+    pub fn param(&self, key: &str) -> Option<&'a str> {
         for i in 0..self.param_count as usize {
             if self.params[i].0 == key {
                 return Some(self.params[i].1);
@@ -200,7 +233,8 @@ impl<'a> Context<'a> {
         None
     }
 
-    pub fn get_header(&self, key: &str) -> Option<&'a str> {
+    /// Retrieve a request header value by name (case-insensitive).
+    pub fn header(&self, key: &str) -> Option<&'a str> {
         for i in 0..self.req.header_count as usize {
             if self.req.headers[i].0.eq_ignore_ascii_case(key) {
                 return Some(self.req.headers[i].1);
@@ -209,8 +243,10 @@ impl<'a> Context<'a> {
         None
     }
 
+    /// Parse the request body as a multipart/form-data stream.
+    /// Returns `None` if the `Content-Type` header is not `multipart/form-data`.
     pub fn multipart(&self) -> Option<crate::multipart::Multipart<'a>> {
-        let ct = self.get_header("content-type")?;
+        let ct = self.header("content-type")?;
         if ct.starts_with("multipart/form-data")
             && let Some(idx) = ct.find("boundary=")
         {
@@ -220,11 +256,32 @@ impl<'a> Context<'a> {
         None
     }
 
+    /// Use the extractor pattern to parse typed data from the request
+    /// (e.g. `ctx.extract::<Json<MyBody>>()`).
     pub fn extract<T: crate::extract::FromRequest<'a>>(&'a self) -> Result<T, T::Error> {
         T::from_request(self)
     }
 
+    /// Serialize a typed value to JSON and return a `200 OK` response.
+    /// Shorthand for `Response::json(val)` inside a handler.
+    pub fn json<T: crate::json::Serialize>(&self, val: &T) -> Response {
+        Response::json(val)
+    }
+
+    // ── Deprecated aliases (kept for backward compatibility) ──────────────────
+
+    #[deprecated(since = "0.6.0", note = "Use `ctx.param(key)` instead")]
+    pub fn get_param(&self, key: &str) -> Option<&'a str> {
+        self.param(key)
+    }
+
+    #[deprecated(since = "0.6.0", note = "Use `ctx.header(key)` instead")]
+    pub fn get_header(&self, key: &str) -> Option<&'a str> {
+        self.header(key)
+    }
+
+    #[deprecated(since = "0.6.0", note = "Use `ctx.json(val)` instead")]
     pub fn respond_json<T: crate::json::Serialize>(&self, val: &T) -> Response {
-        Response::json_fast(val)
+        self.json(val)
     }
 }

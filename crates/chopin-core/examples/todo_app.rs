@@ -29,11 +29,6 @@ lazy_static::lazy_static! {
 // --- Handlers ---
 
 fn list_todos(_ctx: Context) -> Response {
-    // In a real app, this would use an async runtime block or the worker's event loop.
-    // For this showcase, we mock the database fetch as Chopin's core is sync.
-    // To do true async DB calls in Chopin, you integrate with Monoio.
-    // Here we'll just demonstrate the typing and routing.
-
     let todos = vec![
         Todo {
             id: 1,
@@ -47,14 +42,11 @@ fn list_todos(_ctx: Context) -> Response {
         },
     ];
 
-    Response::json_fast(&todos)
+    // Response::json() serializes typed values with Schema-JIT
+    Response::json(&todos)
 }
 
 fn create_todo(ctx: Context) -> Response {
-    // kowito-json is serialization-only for massive throughput.
-    // In production, you would use sonic-rs or serde_json to deserialize,
-    // or manually slice the &[u8] for simple string payloads.
-    // We mock the decoded title here for the showcase.
     let title_str = std::str::from_utf8(ctx.req.body).unwrap_or(r#"{"title": "Valid Todo"}"#);
 
     let title = if title_str.contains("title") {
@@ -64,7 +56,6 @@ fn create_todo(ctx: Context) -> Response {
     };
 
     let req_body = CreateTodo { title };
-
     let current_id = 3; // simulated auto-increment
 
     let new_todo = Todo {
@@ -73,16 +64,14 @@ fn create_todo(ctx: Context) -> Response {
         completed: false,
     };
 
-    // Simulate DB insert: QueryBuilder::insert::<Todo>().execute(&DB_POOL).unwrap();
-
-    let mut res = Response::json_fast(&new_todo);
+    let mut res = Response::json(&new_todo);
     res.status = 201; // Created
     res
 }
 
 fn get_todo(ctx: Context) -> Response {
-    // Extract parameter
-    let id_str = ctx.get_param("id").unwrap_or("0");
+    // ctx.param() extracts a named URL path parameter
+    let id_str = ctx.param("id").unwrap_or("0");
     let id: i32 = id_str.parse().unwrap_or(0);
 
     if id == 1 || id == 2 {
@@ -91,7 +80,7 @@ fn get_todo(ctx: Context) -> Response {
             title: format!("Todo #{}", id),
             completed: id == 1,
         };
-        Response::json_fast(&todo)
+        Response::json(&todo)
     } else {
         Response::not_found()
     }
@@ -101,9 +90,7 @@ fn logging_middleware(ctx: Context, next: chopin_core::router::BoxedHandler) -> 
     let method = format!("{:?}", ctx.req.method);
     let path = ctx.req.path.to_string();
 
-    // Call the next handler in the chain
     let res = next(ctx);
-
     println!("[Middleware] {} {} -> {}", method, path, res.status);
     res
 }
@@ -113,8 +100,8 @@ fn main() {
 
     let mut router = Router::new();
 
-    // 1. Add Middleware
-    router.wrap(logging_middleware);
+    // 1. Add Middleware — router.layer() applies globally to all routes
+    router.layer(logging_middleware);
 
     // 2. Define Routes
     router.get("/todos", list_todos);

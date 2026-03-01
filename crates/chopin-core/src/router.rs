@@ -223,12 +223,15 @@ impl Router {
         None
     }
 
-    // Middleware methods
-    pub fn wrap(&mut self, mw: MiddlewareFn) {
+    // ── Middleware registration ───────────────────────────────────────────────
+
+    /// Apply a middleware function to every route in this router (global layer).
+    pub fn layer(&mut self, mw: MiddlewareFn) {
         self.global_middleware.push(mw);
     }
 
-    pub fn wrap_path(&mut self, path: &str, mw: MiddlewareFn) {
+    /// Apply a middleware function to all routes under the given path prefix.
+    pub fn layer_path(&mut self, path: &str, mw: MiddlewareFn) {
         let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         let mut current = &mut self.root;
 
@@ -272,6 +275,16 @@ impl Router {
         }
 
         current.middleware.push(mw);
+    }
+
+    #[deprecated(since = "0.6.0", note = "Use `router.layer(mw)` instead")]
+    pub fn wrap(&mut self, mw: MiddlewareFn) {
+        self.layer(mw);
+    }
+
+    #[deprecated(since = "0.6.0", note = "Use `router.layer_path(path, mw)` instead")]
+    pub fn wrap_path(&mut self, path: &str, mw: MiddlewareFn) {
+        self.layer_path(path, mw);
     }
 
     // Modular Routing
@@ -403,7 +416,7 @@ mod tests {
     use super::*;
 
     fn test_handler(ctx: Context) -> Response {
-        Response::ok(ctx.req.path.to_string())
+        Response::text(ctx.req.path.to_string())
     }
 
     #[test]
@@ -505,7 +518,7 @@ mod tests {
     #[test]
     fn test_nested_middleware() {
         let mut auth_router = Router::new();
-        auth_router.wrap(dummy_middleware);
+        auth_router.layer(dummy_middleware);
         auth_router.post("/login", test_handler);
 
         let mut root = Router::new();

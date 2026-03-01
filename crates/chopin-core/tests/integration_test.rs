@@ -9,13 +9,13 @@ fn setup_test_server() {
 
     // Simple GET
     router.add(Method::Get, "/hello", |_: Context| {
-        Response::ok("Hello, World!")
+        Response::text("Hello, World!")
     });
 
     // Echo param
     router.add(Method::Get, "/echo/:msg", |ctx: Context| {
-        let msg = ctx.get_param("msg").unwrap_or("missing");
-        Response::ok(format!("Echo: {}", msg))
+        let msg = ctx.param("msg").unwrap_or("missing");
+        Response::text(format!("Echo: {}", msg))
     });
 
     // Chunked response
@@ -26,7 +26,7 @@ fn setup_test_server() {
 
     // Chunked request
     router.add(Method::Post, "/upload", |ctx: Context| {
-        Response::ok(format!("Received {} bytes", ctx.req.body.len()))
+        Response::text(format!("Received {} bytes", ctx.req.body.len()))
     });
 
     thread::spawn(|| {

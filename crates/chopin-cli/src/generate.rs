@@ -82,20 +82,21 @@ use super::services;
 
 #[get("/{name}")]
 pub fn list(_ctx: Context) -> Response {{
-    // TODO: call services::list() and return JSON
-    Response::ok("list {name}")
+    // TODO: call services::list() and return json
+    Response::text("list {name}")
 }}
 
 #[get("/{name}/:id")]
-pub fn get_by_id(_ctx: Context) -> Response {{
-    // TODO: extract :id param, call services::get_by_id()
-    Response::ok("get {name}")
+pub fn get_by_id(ctx: Context) -> Response {{
+    let _id = ctx.param("id").unwrap_or("0");
+    // TODO: call services::get_by_id(_id)
+    Response::text("get {name}")
 }}
 
 #[post("/{name}")]
 pub fn create(_ctx: Context) -> Response {{
-    // TODO: parse body, call services::create()
-    Response::ok("create {name}")
+    // TODO: parse body with ctx.extract::<Json<...>>(), call services::create()
+    Response::text("create {name}")
 }}
 "#,
         name = name
@@ -148,7 +149,7 @@ pub fn generate_handler(project_dir: &Path, app: &str, name: &str) -> Result<()>
         r#"
 #[get("/{app}/{name}")]
 pub fn {name}(_ctx: Context) -> Response {{
-    Response::ok("Hello from {name}")
+    Response::text("Hello from {name}")
 }}
 "#
     );
