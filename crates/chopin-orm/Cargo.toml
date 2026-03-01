@@ -1,8 +1,12 @@
 [package]
 name = "chopin-orm"
-version = "0.5.5"
-edition = "2024"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A lightweight, zero-overhead ORM for the Chopin framework."
 
 [dependencies]
 chopin-pg = { version = "0.5.5", path = "../chopin-pg" }

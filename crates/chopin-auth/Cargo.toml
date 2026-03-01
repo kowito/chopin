@@ -1,7 +1,12 @@
 [package]
 name = "chopin-auth"
-version = "0.5.4"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Zero-overhead JWT authentication and RBAC for the Chopin framework."
 
 [dependencies]
 chopin-core = { version = "0.5.4", path = "../chopin-core" }

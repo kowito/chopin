@@ -1,9 +1,12 @@
 [package]
 name = "chopin-pg"
-version = "0.5.5"
-edition = "2024"
-license = "MIT"
-description = "Zero-copy PostgreSQL driver for the Chopin thread-per-core architecture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A high-performance, asynchronous PostgreSQL driver for the Chopin framework."
 
 [dependencies]
 libc = "0.2.180"

@@ -1,9 +1,12 @@
 [package]
 name = "chopin-cli"
-version = "0.5.5"
-edition = "2024"
-authors = ["kowito <kowit.s.c@gmail.com>"]
-description = "CLI tool for the Chopin HTTP framework"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "CLI tool for scaffolding and managing Chopin applications."
 
 [dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
