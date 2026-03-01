@@ -12,3 +12,17 @@ repository = "https://github.com/kowito/chopin"
 homepage = "https://github.com/kowito/chopin"
 categories = ["web-programming::http-server", "asynchronous"]
 keywords = ["chopin", "http", "performance", "web"]
+readme = "README.md"
+
+[workspace.dependencies]
+chopin-core = { version = "0.5.5", path = "crates/chopin-core" }
+chopin-auth = { version = "0.5.5", path = "crates/chopin-auth" }
+chopin-pg = { version = "0.5.5", path = "crates/chopin-pg" }
+chopin-orm = { version = "0.5.5", path = "crates/chopin-orm" }
+chopin-macros = { version = "0.5.5", path = "crates/chopin-macros" }
+chopin-orm-macro = { version = "0.5.5", path = "crates/chopin-orm-macro" }
+chopin-cli = { version = "0.5.5", path = "crates/chopin-cli" }
+kowito-json = "0.2.8"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.138"
+thiserror = "2.0.18"

@@ -11,24 +11,24 @@ description = "The extremely fast, zero-overhead HTTP engine for the Chopin fram
 [dependencies]
 core_affinity = "0.8.3"
 ctrlc = "3.4.5"
-kowito-json = "0.2.8"
+kowito-json = { workspace = true }
 libc = "0.2.180"
 num_cpus = "1.17.0"
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { workspace = true }
 serde_urlencoded = "0.7"
-serde_json = "1.0.138"
+serde_json = { workspace = true }
 httpdate = "1.0.3"
 inventory = "0.3.22"
-chopin-macros = { version = "0.5.5", path = "../chopin-macros" }
+chopin-macros = { workspace = true }
 
 [dev-dependencies]
 hyper = { version = "1.4.1", features = ["full"] }
 tokio = { version = "1.40.0", features = ["full"] }
 http-body-util = "0.1.2"
 hyper-util = { version = "0.1.7", features = ["full"] }
-chopin-pg = { version = "0.5.5", path = "../chopin-pg" }
-chopin-orm = { version = "0.5.5", path = "../chopin-orm" }
-kowito-json = "0.2.8"
+chopin-pg = { workspace = true }
+chopin-orm = { workspace = true }
+kowito-json = { workspace = true }
 lazy_static = "1.4.0"
-thiserror = "2.0.18"
-serde = { version = "1.0.228", features = ["derive"] }
+thiserror = { workspace = true }
+serde = { workspace = true }

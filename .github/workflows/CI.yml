@@ -109,16 +109,15 @@ jobs:
       - name: Update workspace version
         run: |
           NEW_VER=${{ steps.new_version.outputs.new_version }}
-          echo "Updating to $NEW_VER"
-          for file in crates/*/Cargo.toml; do
-            sed -i '' "s/^version = \"[^\"]*\"/version = \"$NEW_VER\"/" "$file" || \
-            sed -i "s/^version = \"[^\"]*\"/version = \"$NEW_VER\"/" "$file"
-          done
-          # Also update internal dependencies
-          for file in crates/*/Cargo.toml; do
-            sed -i '' "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\", path = \"\.\./version = \"$NEW_VER\", path = \"\.\./" "$file" || \
-            sed -i "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\", path = \"\.\./version = \"$NEW_VER\", path = \"\.\./" "$file"
-          done
+          echo "Updating workspace to $NEW_VER"
+          
+          # Use a platform-agnostic way to update the root Cargo.toml
+          # 1. Update the package version
+          sed -i "s/^version = \".*\"/version = \"$NEW_VER\"/" Cargo.toml
+          
+          # 2. Update workspace dependencies to match
+          # This specifically targets lines in [workspace.dependencies] that have path = "crates/..."
+          sed -i "s/version = \".*\", path = \"crates/version = \"$NEW_VER\", path = \"crates/g" Cargo.toml
       
       - name: Update Cargo.lock
         run: cargo update --workspace
@@ -127,13 +126,11 @@ jobs:
         run: |
           if [ -n "${{ secrets.CARGO_TOKEN }}" ]; then
             echo "🚀 Publishing version ${{ steps.new_version.outputs.new_version }} to crates.io..."
-            # 1. Pubish macros first (dependency of core)
+            # Order: macros -> core -> others
             cargo publish -p chopin-macros --token ${{ secrets.CARGO_TOKEN }} --no-verify --allow-dirty || true
             sleep 60
-            # 2. Publish core
             cargo publish -p chopin-core --token ${{ secrets.CARGO_TOKEN }} --no-verify --allow-dirty || true
             sleep 60
-            # 3. Publish leaf crates
             cargo publish -p chopin-auth --token ${{ secrets.CARGO_TOKEN }} --no-verify --allow-dirty || true
             sleep 30
             cargo publish -p chopin-pg --token ${{ secrets.CARGO_TOKEN }} --no-verify --allow-dirty || true
@@ -152,7 +149,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add crates/*/Cargo.toml Cargo.lock || true
+          git add Cargo.toml crates/*/Cargo.toml Cargo.lock || true
           git commit -m "chore: bump version to ${{ steps.new_version.outputs.new_version }} [skip ci]" || true
           git tag "v${{ steps.new_version.outputs.new_version }}" || true
           git push origin main || true

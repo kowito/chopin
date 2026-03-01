@@ -9,8 +9,8 @@ homepage.workspace = true
 description = "A lightweight, zero-overhead ORM for the Chopin framework."
 
 [dependencies]
-chopin-pg = { version = "0.5.5", path = "../chopin-pg" }
-chopin-orm-macro = { path = "../chopin-orm-macro" }
+chopin-pg = { workspace = true }
+chopin-orm-macro = { workspace = true }
 async-trait = "0.1.86"
 log = "0.4"
 
