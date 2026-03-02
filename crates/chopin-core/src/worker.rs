@@ -373,16 +373,11 @@ impl Worker {
                                                 w!(b"Server: chopin\r\n");
                                             }
 
-                                            // Add real-time Date header (get fresh timestamp for each response)
-                                            let request_now = SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .map_err(|_| ChopinError::ClockError)?
-                                                .as_secs()
-                                                as u32;
+                                            // Date header: format_http_date uses the loop's `now`
+                                            // (refreshed every 1024 iters) — zero extra syscall.
                                             let mut date_buf = [0u8; 37];
-                                            let date_len =
-                                                format_http_date(request_now, &mut date_buf);
-                                            w!(&date_buf[..date_len]);
+                                            format_http_date(now, &mut date_buf);
+                                            w!(&date_buf[..]);
 
                                             // Pre-baked content-type for common types
                                             match response.content_type {
