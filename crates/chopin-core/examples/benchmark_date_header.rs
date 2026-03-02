@@ -16,8 +16,11 @@ fn main() {
         "Performed {} SystemTime::now() calls in {:?}",
         iterations, elapsed
     );
-    println!("  Average: {:.2} ns/call ({:.2} μs/call)", 
-        ns_per_call, ns_per_call / 1000.0);
+    println!(
+        "  Average: {:.2} ns/call ({:.2} μs/call)",
+        ns_per_call,
+        ns_per_call / 1000.0
+    );
 
     // Test 2: format_http_date performance
     println!("\n=== Test 2: format_http_date() overhead ===");
@@ -38,8 +41,11 @@ fn main() {
         "Performed {} format_http_date() calls in {:?}",
         iterations, elapsed
     );
-    println!("  Average: {:.2} ns/call ({:.2} μs/call)", 
-        ns_per_call, ns_per_call / 1000.0);
+    println!(
+        "  Average: {:.2} ns/call ({:.2} μs/call)",
+        ns_per_call,
+        ns_per_call / 1000.0
+    );
 
     // Test 3: Combined per-response cost
     println!("\n=== Test 3: Combined per-response cost (SystemTime + format_http_date) ===");
@@ -59,15 +65,24 @@ fn main() {
         "Performed {} per-response operations in {:?}",
         iterations, elapsed
     );
-    println!("  Average: {:.2} ns/response ({:.2} μs/response)", 
-        ns_per_response, ns_per_response / 1000.0);
-    println!("  Throughput: {:.0} responses/second", 
-        1_000_000_000.0 / ns_per_response);
+    println!(
+        "  Average: {:.2} ns/response ({:.2} μs/response)",
+        ns_per_response,
+        ns_per_response / 1000.0
+    );
+    println!(
+        "  Throughput: {:.0} responses/second",
+        1_000_000_000.0 / ns_per_response
+    );
 
     println!("\n=== Summary ===");
     println!("If each response calls SystemTime::now():");
-    println!("  - At 100k req/s: {:.3}% CPU overhead", 
-        (ns_per_response / 10_000.0) * 100.0);
-    println!("  - At 1M req/s: {:.3}% CPU overhead", 
-        (ns_per_response / 1_000.0) * 100.0);
+    println!(
+        "  - At 100k req/s: {:.3}% CPU overhead",
+        (ns_per_response / 10_000.0) * 100.0
+    );
+    println!(
+        "  - At 1M req/s: {:.3}% CPU overhead",
+        (ns_per_response / 1_000.0) * 100.0
+    );
 }

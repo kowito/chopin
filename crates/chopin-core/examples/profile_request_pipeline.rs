@@ -1,7 +1,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Simulate a typical HTTP request parsing
-fn simulate_request_parsing() -> (std::time::Duration, std::time::Duration, std::time::Duration) {
+fn simulate_request_parsing() -> (
+    std::time::Duration,
+    std::time::Duration,
+    std::time::Duration,
+) {
     use std::time::Instant;
 
     // Simulate reading socket buffer
@@ -94,15 +98,41 @@ fn main() {
     println!("Single request measurement:");
     let (parse_time, route_time, serialize_time) = simulate_request_parsing();
 
-    println!("  Parsing:        {:>10.2?}  ({:>6.1}%)", parse_time, 
-        (parse_time.as_nanos() as f64 / (parse_time.as_nanos() as f64 + route_time.as_nanos() as f64 + serialize_time.as_nanos() as f64)) * 100.0);
-    println!("  Routing:        {:>10.2?}  ({:>6.1}%)", route_time,
-        (route_time.as_nanos() as f64 / (parse_time.as_nanos() as f64 + route_time.as_nanos() as f64 + serialize_time.as_nanos() as f64)) * 100.0);
-    println!("  Serialization:  {:>10.2?}  ({:>6.1}%)", serialize_time,
-        (serialize_time.as_nanos() as f64 / (parse_time.as_nanos() as f64 + route_time.as_nanos() as f64 + serialize_time.as_nanos() as f64)) * 100.0);
+    println!(
+        "  Parsing:        {:>10.2?}  ({:>6.1}%)",
+        parse_time,
+        (parse_time.as_nanos() as f64
+            / (parse_time.as_nanos() as f64
+                + route_time.as_nanos() as f64
+                + serialize_time.as_nanos() as f64))
+            * 100.0
+    );
+    println!(
+        "  Routing:        {:>10.2?}  ({:>6.1}%)",
+        route_time,
+        (route_time.as_nanos() as f64
+            / (parse_time.as_nanos() as f64
+                + route_time.as_nanos() as f64
+                + serialize_time.as_nanos() as f64))
+            * 100.0
+    );
+    println!(
+        "  Serialization:  {:>10.2?}  ({:>6.1}%)",
+        serialize_time,
+        (serialize_time.as_nanos() as f64
+            / (parse_time.as_nanos() as f64
+                + route_time.as_nanos() as f64
+                + serialize_time.as_nanos() as f64))
+            * 100.0
+    );
 
-    let total = parse_time.as_nanos() as f64 + route_time.as_nanos() as f64 + serialize_time.as_nanos() as f64;
-    println!("  TOTAL:          {:>10.2?}\n", std::time::Duration::from_nanos(total as u64));
+    let total = parse_time.as_nanos() as f64
+        + route_time.as_nanos() as f64
+        + serialize_time.as_nanos() as f64;
+    println!(
+        "  TOTAL:          {:>10.2?}\n",
+        std::time::Duration::from_nanos(total as u64)
+    );
 
     // Now profile at scale
     println!("=== Scale Profiling (1 million requests) ===\n");
@@ -126,9 +156,21 @@ fn main() {
     let serialize_pct = (total_serialize.as_nanos() as f64 / elapsed_all.as_nanos() as f64) * 100.0;
 
     println!("Over {} requests:", iterations);
-    println!("  Parsing:        {:>12}  ({:>6.2}%)", format!("{:.2?}", total_parse), parse_pct);
-    println!("  Routing:        {:>12}  ({:>6.2}%)", format!("{:.2?}", total_route), route_pct);
-    println!("  Serialization:  {:>12}  ({:>6.2}%)", format!("{:.2?}", total_serialize), serialize_pct);
+    println!(
+        "  Parsing:        {:>12}  ({:>6.2}%)",
+        format!("{:.2?}", total_parse),
+        parse_pct
+    );
+    println!(
+        "  Routing:        {:>12}  ({:>6.2}%)",
+        format!("{:.2?}", total_route),
+        route_pct
+    );
+    println!(
+        "  Serialization:  {:>12}  ({:>6.2}%)",
+        format!("{:.2?}", total_serialize),
+        serialize_pct
+    );
     println!("  TOTAL:          {:>12}", format!("{:.2?}", elapsed_all));
     println!("  Per request:    {:>12.2?}", elapsed_all / iterations);
 
@@ -138,12 +180,15 @@ fn main() {
 
     // Highlight the bottleneck
     println!("=== BOTTLENECK ANALYSIS ===");
-    let stages = vec![
+    let stages = [
         ("Parsing", parse_pct),
         ("Routing", route_pct),
         ("Serialization", serialize_pct),
     ];
-    let (stage, pct) = stages.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap();
+    let (stage, pct) = stages
+        .iter()
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+        .unwrap();
     println!("🔴 BOTTLENECK: {} ({:.2}% of total time)", stage, pct);
     println!("   This is where optimization efforts should focus.\n");
 
@@ -153,7 +198,10 @@ fn main() {
     println!("  - accept():      ~5,000 ns (per connection)");
     println!("  - read():        ~1,000 ns (per batch of requests)");
     println!("  - write():       ~1,000 ns (per response)");
-    println!("  - Total CPU work above: {:.2?} (excludes syscalls)", elapsed_all / iterations);
+    println!(
+        "  - Total CPU work above: {:.2?} (excludes syscalls)",
+        elapsed_all / iterations
+    );
     println!("\nNote: If syscalls dominate, consider:");
     println!("  - Batch I/O (io_uring, io_buffering)");
     println!("  - SO_REUSEADDR for rapid restart");

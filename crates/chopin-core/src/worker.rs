@@ -23,9 +23,11 @@ const CT_APP_JSON: &[u8] = b"Content-Type: application/json\r\n";
 const STATUS_200_PREFIX: &[u8] = b"HTTP/1.1 200 OK\r\nServer: chopin\r\n";
 
 /// Pre-baked 200 OK fast-paths: status + server + content-type in one memcpy.
-const FAST_200_JSON: &[u8] = b"HTTP/1.1 200 OK\r\nServer: chopin\r\nContent-Type: application/json\r\n";
+const FAST_200_JSON: &[u8] =
+    b"HTTP/1.1 200 OK\r\nServer: chopin\r\nContent-Type: application/json\r\n";
 const FAST_200_TEXT: &[u8] = b"HTTP/1.1 200 OK\r\nServer: chopin\r\nContent-Type: text/plain\r\n";
-const FAST_200_HTML: &[u8] = b"HTTP/1.1 200 OK\r\nServer: chopin\r\nContent-Type: text/html; charset=utf-8\r\n";
+const FAST_200_HTML: &[u8] =
+    b"HTTP/1.1 200 OK\r\nServer: chopin\r\nContent-Type: text/html; charset=utf-8\r\n";
 
 /// Format an HTTP status line into a fixed 40-byte buffer. Returns the slice length.
 #[inline(always)]
@@ -371,10 +373,22 @@ impl Worker {
                                             // (status + server + content-type pre-baked together).
                                             let ct_written = if response.status == 200 {
                                                 match response.content_type {
-                                                    "application/json" => { w!(FAST_200_JSON); true }
-                                                    "text/plain" => { w!(FAST_200_TEXT); true }
-                                                    "text/html; charset=utf-8" => { w!(FAST_200_HTML); true }
-                                                    _ => { w!(STATUS_200_PREFIX); false }
+                                                    "application/json" => {
+                                                        w!(FAST_200_JSON);
+                                                        true
+                                                    }
+                                                    "text/plain" => {
+                                                        w!(FAST_200_TEXT);
+                                                        true
+                                                    }
+                                                    "text/html; charset=utf-8" => {
+                                                        w!(FAST_200_HTML);
+                                                        true
+                                                    }
+                                                    _ => {
+                                                        w!(STATUS_200_PREFIX);
+                                                        false
+                                                    }
                                                 }
                                             } else {
                                                 let mut sl_buf = [0u8; 40];
