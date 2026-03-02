@@ -1,4 +1,7 @@
 // src/worker.rs
+// Note: nested ifs are used instead of let guards for stable Rust compatibility
+// with benchmark environments.
+
 use crate::conn::ConnState;
 use crate::error::{ChopinError, ChopinResult};
 use crate::slab::ConnectionSlab;
@@ -87,6 +90,7 @@ impl Worker {
         }
     }
 
+    #[allow(clippy::collapsible_if)]
     pub fn run(&mut self, shutdown: Arc<AtomicBool>) -> ChopinResult<()> {
         // 1. Setup epoll/kqueue instance
         let epoll = Epoll::new()?;
@@ -122,6 +126,7 @@ impl Worker {
             iter_count = iter_count.wrapping_add(1);
 
             // Update time and prune every 1024 iterations
+            #[allow(clippy::manual_is_multiple_of)]
             if iter_count % 1024 == 0 {
                 now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -610,7 +615,7 @@ impl Worker {
                             }
 
                             // ── Write ──
-                            if (next_state == ConnState::Writing || is_write) {
+                            if next_state == ConnState::Writing || is_write {
                                 if let Some(conn) = slab.get_mut(idx) {
                                     let write_total = conn.write_len as usize;
                                     let ws = conn.write_pos as usize;

@@ -330,6 +330,7 @@ impl<'a> Context<'a> {
 
     /// Parse the request body as a multipart/form-data stream.
     /// Returns `None` if the `Content-Type` header is not `multipart/form-data`.
+    #[allow(clippy::collapsible_if)]
     pub fn multipart(&self) -> Option<crate::multipart::Multipart<'a>> {
         let ct = self.header("content-type")?;
         if ct.starts_with("multipart/form-data") {

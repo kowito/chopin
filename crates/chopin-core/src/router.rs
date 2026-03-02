@@ -179,7 +179,7 @@ impl Router {
         handler.map(|h| (h, params, param_count, middleware_buf, mw_count))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::collapsible_if)]
     #[inline(always)]
     fn match_recursive<'a, 'b>(
         &'a self,
