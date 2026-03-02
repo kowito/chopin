@@ -1,4 +1,4 @@
-# Chopin Release Notes: v0.5.0 – v0.5.8 (Codename: Nocturne)
+# Chopin Release Notes: v0.5.0 – v0.5.9 (Codename: Nocturne)
 
 The 0.5.x series, codenamed **Nocturne**, marks the most significant evolution of Chopin to date. We've transitioned from a proof-of-concept networking engine to a production-hardened web framework with industry-leading performance and modern ergonomics.
 
@@ -25,6 +25,17 @@ The release of `chopin-orm` brings type-safe database interactions to the ecosys
 - **Zero-Overhead Driver**: Built on `chopin-pg`, our raw syscall-based PostgreSQL driver.
 - **Type-Safe Query Builder**: Compile-time checked queries without the performance penalty of traditional ORMs.
 - **Linear Scaling**: The ORM matches the raw driver performance across 1k, 100k, and 1M row benchmarks.
+
+## v0.5.9 — Documentation & Website Update
+
+### 📖 Comprehensive User Manual (Website)
+`docs/index.html` and `docs/developer_guide.html` have been rewritten to serve as a full user manual rather than a marketing overview.
+
+- **Extractors**: Corrected `Json<T>` and `Query<T>` examples with accurate `ctx.extract::<T>()` API; removed stale `KJson` / `#[derive(Default)]` pseudocode.
+- **Zero-Copy File Serving section**: New dedicated section covering `Response::file(path)`, `Response::sendfile(fd, offset, len, content_type)`, and a complete MIME type reference table.
+- **Response API reference**: Full constructor table (11 methods with status codes), `with_header()` builder chain examples, and a Context helpers quick-reference block.
+- **Developer Guide expanded**: Added Extractors as a standalone section (#3), expanded Routing section with all HTTP methods, wildcard paths, and manual registration; expanded Performance section from 2 items to 6 cards (writev, sendfile, pre-composed middleware, mimalloc, core affinity, kernel socket handoff).
+- **API accuracy pass**: Fixed `ctx.respond_json` → `ctx.json`, `response.headers.push` → `response.with_header()`, toolchain `"1.75+"` → `"nightly"`, and all `0.5.8` version references throughout.
 
 ## v0.5.8 — Zero-Copy I/O & Hot-Path Optimization
 
@@ -58,6 +69,7 @@ Every HTTP response now carries a compliant RFC 7231 `Date` header computed fres
 - **v0.5.5 - v0.5.6**: Documentation update and ORM performance tuning.
 - **v0.5.7**: Major Naming Convention Overhaul (`Response::text`, `ctx.param`, `router.layer`).
 - **v0.5.8**: Zero-copy I/O (writev + sendfile), pre-composed middleware chains, mimalloc integration.
+- **v0.5.9**: Comprehensive website update — full user manual with accurate extractors, file serving reference, Response API table, and expanded developer guide.
 
 ---
 "Simple as a melody, fast as a nocturne."
