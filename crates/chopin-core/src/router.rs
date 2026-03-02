@@ -222,8 +222,8 @@ impl Router {
         // Binary search over sorted static children for O(log n) exact match
         if static_end > 0 {
             let statics = &node.children[..static_end];
-            if let Ok(idx) = statics.binary_search_by(|c| c.path.as_str().cmp(segment))
-                && let Some(handler) = self.match_recursive(
+            if let Ok(idx) = statics.binary_search_by(|c| c.path.as_str().cmp(segment)) {
+                if let Some(handler) = self.match_recursive(
                     &statics[idx],
                     method,
                     segments,
@@ -232,9 +232,9 @@ impl Router {
                     param_count,
                     middleware,
                     mw_count,
-                )
-            {
-                return Some(handler);
+                ) {
+                    return Some(handler);
+                }
             }
         }
 
@@ -242,11 +242,11 @@ impl Router {
         for child in &node.children[static_end..] {
             if child.is_param {
                 let old_count = *param_count;
-                if (*param_count as usize) < MAX_PARAMS
-                    && let Some(ref name) = child.param_name
-                {
-                    params[*param_count as usize] = (name.as_str(), segment);
-                    *param_count += 1;
+                if (*param_count as usize) < MAX_PARAMS {
+                    if let Some(ref name) = child.param_name {
+                        params[*param_count as usize] = (name.as_str(), segment);
+                        *param_count += 1;
+                    }
                 }
                 if let Some(handler) = self.match_recursive(
                     child,
@@ -268,11 +268,11 @@ impl Router {
         // Try wildcard match (after params in sorted order)
         for child in &node.children[static_end..] {
             if child.is_wildcard {
-                if (*param_count as usize) < MAX_PARAMS
-                    && let Some(ref name) = child.param_name
-                {
-                    params[*param_count as usize] = (name.as_str(), segment);
-                    *param_count += 1;
+                if (*param_count as usize) < MAX_PARAMS {
+                    if let Some(ref name) = child.param_name {
+                        params[*param_count as usize] = (name.as_str(), segment);
+                        *param_count += 1;
+                    }
                 }
                 let idx = method_index(method);
                 if let Some(ref h) = child.handlers[idx] {

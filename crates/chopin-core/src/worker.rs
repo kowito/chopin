@@ -122,7 +122,7 @@ impl Worker {
             iter_count = iter_count.wrapping_add(1);
 
             // Update time and prune every 1024 iterations
-            if iter_count.is_multiple_of(1024) {
+            if iter_count % 1024 == 0 {
                 now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map_err(|_| ChopinError::ClockError)?
@@ -202,37 +202,39 @@ impl Worker {
                         let fd = conn_ref.fd;
                         let mut next_state = conn_ref.state;
 
-                        if is_read && let Some(conn) = slab.get_mut(idx) {
-                            let read_start = conn.read_len as usize;
-                            if read_start < conn.read_buf.len() {
-                                match syscalls::read_nonblocking(
-                                    fd,
-                                    &mut conn.read_buf[read_start..],
-                                ) {
-                                    Ok(0) => {
-                                        // EOF - client closed connection (if no data read)
-                                        if read_start == 0 {
-                                            next_state = ConnState::Closing;
-                                        } else {
+                        if is_read {
+                            if let Some(conn) = slab.get_mut(idx) {
+                                let read_start = conn.read_len as usize;
+                                if read_start < conn.read_buf.len() {
+                                    match syscalls::read_nonblocking(
+                                        fd,
+                                        &mut conn.read_buf[read_start..],
+                                    ) {
+                                        Ok(0) => {
+                                            // EOF - client closed connection (if no data read)
+                                            if read_start == 0 {
+                                                next_state = ConnState::Closing;
+                                            } else {
+                                                next_state = ConnState::Parsing;
+                                            }
+                                        }
+                                        Ok(n) => {
+                                            conn.read_len += n as u16;
                                             next_state = ConnState::Parsing;
                                         }
+                                        Err(ChopinError::Io(ref e))
+                                            if e.kind() == std::io::ErrorKind::WouldBlock =>
+                                        {
+                                            // Not ready, keep waiting
+                                        }
+                                        Err(_) => {
+                                            next_state = ConnState::Closing;
+                                        }
                                     }
-                                    Ok(n) => {
-                                        conn.read_len += n as u16;
-                                        next_state = ConnState::Parsing;
-                                    }
-                                    Err(ChopinError::Io(ref e))
-                                        if e.kind() == std::io::ErrorKind::WouldBlock =>
-                                    {
-                                        // Not ready, keep waiting
-                                    }
-                                    Err(_) => {
-                                        next_state = ConnState::Closing;
-                                    }
+                                } else {
+                                    // Buffer too full, can't read more without blowing up
+                                    next_state = ConnState::Closing;
                                 }
-                            } else {
-                                // Buffer too full, can't read more without blowing up
-                                next_state = ConnState::Closing;
                             }
                         }
 
@@ -586,66 +588,67 @@ impl Worker {
                             } // end inner while (pipeline parse loop)
 
                             // Deferred compaction: single memcpy after all pipelined parses
-                            if read_offset > 0
-                                && let Some(conn) = slab.get_mut(idx)
-                            {
-                                let remaining = conn.read_len as usize;
-                                if remaining > 0 {
-                                    conn.read_buf
-                                        .copy_within(read_offset..read_offset + remaining, 0);
+                            if read_offset > 0 {
+                                if let Some(conn) = slab.get_mut(idx) {
+                                    let remaining = conn.read_len as usize;
+                                    if remaining > 0 {
+                                        conn.read_buf
+                                            .copy_within(read_offset..read_offset + remaining, 0);
+                                    }
                                 }
                             }
 
                             // If we serialised responses but the inner loop exited in
                             // Reading state (single keep-alive request — not pipelined,
                             // not Connection: close), we still need to flush the write buffer.
-                            if next_state == ConnState::Reading
-                                && let Some(conn) = slab.get(idx)
-                                && conn.write_len > 0
-                            {
-                                next_state = ConnState::Writing;
+                            if next_state == ConnState::Reading {
+                                if let Some(conn) = slab.get(idx) {
+                                    if conn.write_len > 0 {
+                                        next_state = ConnState::Writing;
+                                    }
+                                }
                             }
 
                             // ── Write ──
-                            if (next_state == ConnState::Writing || is_write)
-                                && let Some(conn) = slab.get_mut(idx)
-                            {
-                                let write_total = conn.write_len as usize;
-                                let ws = conn.write_pos as usize;
-                                if ws < write_total {
-                                    match syscalls::write_nonblocking(
-                                        fd,
-                                        &conn.write_buf[ws..write_total],
-                                    ) {
-                                        Ok(n) if n > 0 => {
-                                            self.metrics.add_bytes(n);
-                                            conn.write_pos += n as u16;
-                                            if conn.write_pos as usize >= write_total {
-                                                // Fully flushed — reset write buffer
-                                                conn.write_len = 0;
-                                                conn.write_pos = 0;
-                                                let ka = (conn.flags
-                                                    & crate::conn::CONN_KEEP_ALIVE)
-                                                    != 0;
-                                                if ka && !is_shutting_down {
-                                                    if conn.read_len > 0 {
-                                                        // More pipelined data to parse!
-                                                        next_state = ConnState::Parsing;
-                                                        conn.state = ConnState::Parsing;
-                                                        continue 'pipeline;
+                            if (next_state == ConnState::Writing || is_write) {
+                                if let Some(conn) = slab.get_mut(idx) {
+                                    let write_total = conn.write_len as usize;
+                                    let ws = conn.write_pos as usize;
+                                    if ws < write_total {
+                                        match syscalls::write_nonblocking(
+                                            fd,
+                                            &conn.write_buf[ws..write_total],
+                                        ) {
+                                            Ok(n) if n > 0 => {
+                                                self.metrics.add_bytes(n);
+                                                conn.write_pos += n as u16;
+                                                if conn.write_pos as usize >= write_total {
+                                                    // Fully flushed — reset write buffer
+                                                    conn.write_len = 0;
+                                                    conn.write_pos = 0;
+                                                    let ka = (conn.flags
+                                                        & crate::conn::CONN_KEEP_ALIVE)
+                                                        != 0;
+                                                    if ka && !is_shutting_down {
+                                                        if conn.read_len > 0 {
+                                                            // More pipelined data to parse!
+                                                            next_state = ConnState::Parsing;
+                                                            conn.state = ConnState::Parsing;
+                                                            continue 'pipeline;
+                                                        } else {
+                                                            conn.state = ConnState::Reading;
+                                                            next_state = ConnState::Reading;
+                                                        }
                                                     } else {
-                                                        conn.state = ConnState::Reading;
-                                                        next_state = ConnState::Reading;
+                                                        conn.state = ConnState::Closing;
+                                                        next_state = ConnState::Closing;
                                                     }
-                                                } else {
-                                                    conn.state = ConnState::Closing;
-                                                    next_state = ConnState::Closing;
                                                 }
                                             }
-                                        }
-                                        Ok(_) => {}
-                                        Err(_) => {
-                                            next_state = ConnState::Closing;
+                                            Ok(_) => {}
+                                            Err(_) => {
+                                                next_state = ConnState::Closing;
+                                            }
                                         }
                                     }
                                 }
@@ -682,11 +685,11 @@ impl Worker {
         }
 
         for i in 0..slab.capacity() {
-            if let Some(conn) = slab.get(i)
-                && conn.state != ConnState::Free
-            {
-                unsafe {
-                    libc::close(conn.fd);
+            if let Some(conn) = slab.get(i) {
+                if conn.state != ConnState::Free {
+                    unsafe {
+                        libc::close(conn.fd);
+                    }
                 }
             }
         }
