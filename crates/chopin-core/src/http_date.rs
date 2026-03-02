@@ -1,13 +1,13 @@
-/// HTTP utilities for RFC 7231 compliant operations and common HTTP helpers.
-///
-/// Provides:
-/// - Extreme performance constant-time scalar date formatting (~200-300 cycles)
-/// - Optional AVX2-accelerated date formatting (~100-150 cycles on supporting CPUs)  
-/// - Status code utilities
-/// - Header formatting helpers
-/// - All operations use stable Rust with runtime CPU detection
-
-/// Two-digit lookup table (00..99) for branchless formatting
+//! HTTP utilities for RFC 7231 compliant operations and common HTTP helpers.
+//!
+//! Provides:
+//! - Extreme performance constant-time scalar date formatting (~200-300 cycles)
+//! - Optional AVX2-accelerated date formatting (~100-150 cycles on supporting CPUs)
+//! - Status code utilities
+//! - Header formatting helpers
+//! - All operations use stable Rust with runtime CPU detection
+//!
+//! Two-digit lookup table (00..99) for branchless formatting
 const DIGITS2: [[u8; 2]; 100] = const {
     let mut arr = [[b'0', b'0']; 100];
     let mut i = 0;
@@ -26,8 +26,8 @@ const DAYS_OF_WEEK: [[u8; 3]; 7] = [
 
 /// Months (3-byte strings)
 const MONTHS: [[u8; 3]; 12] = [
-    *b"Jan", *b"Feb", *b"Mar", *b"Apr", *b"May", *b"Jun",
-    *b"Jul", *b"Aug", *b"Sep", *b"Oct", *b"Nov", *b"Dec",
+    *b"Jan", *b"Feb", *b"Mar", *b"Apr", *b"May", *b"Jun", *b"Jul", *b"Aug", *b"Sep", *b"Oct",
+    *b"Nov", *b"Dec",
 ];
 
 #[cfg(target_arch = "x86_64")]
@@ -36,11 +36,11 @@ use std::arch::x86_64::*;
 /// HTTP status code categories
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusCategory {
-    Informational,  // 1xx
-    Success,        // 2xx
-    Redirection,    // 3xx
-    ClientError,    // 4xx
-    ServerError,    // 5xx
+    Informational, // 1xx
+    Success,       // 2xx
+    Redirection,   // 3xx
+    ClientError,   // 4xx
+    ServerError,   // 5xx
 }
 
 /// Get the category of an HTTP status code
@@ -126,11 +126,7 @@ fn format_http_date_scalar(unix_secs: u32, out: &mut [u8; 37]) -> usize {
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if month <= 2 {
-        year_era + 1
-    } else {
-        year_era
-    } as u32;
+    let year = if month <= 2 { year_era + 1 } else { year_era } as u32;
     let month = month as usize; // 1-12
 
     // ----- Formatting using lookup tables -----
@@ -189,11 +185,7 @@ unsafe fn format_http_date_avx2(unix_secs: u32, out: &mut [u8; 37]) -> usize {
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if month <= 2 {
-        year_era + 1
-    } else {
-        year_era
-    } as u32;
+    let year = if month <= 2 { year_era + 1 } else { year_era } as u32;
     let month = month as usize;
 
     // Prepare two-digit bytes
@@ -208,7 +200,12 @@ unsafe fn format_http_date_avx2(unix_secs: u32, out: &mut [u8; 37]) -> usize {
 
     // Build the output buffer using SIMD operations
     let prefix = _mm256_setr_epi8(
-        b'D' as i8, b'a' as i8, b't' as i8, b'e' as i8, b':' as i8, b' ' as i8,
+        b'D' as i8,
+        b'a' as i8,
+        b't' as i8,
+        b'e' as i8,
+        b':' as i8,
+        b' ' as i8,
         DAYS_OF_WEEK[dow][0] as i8,
         DAYS_OF_WEEK[dow][1] as i8,
         DAYS_OF_WEEK[dow][2] as i8,
@@ -406,11 +403,11 @@ mod tests {
     #[test]
     fn test_digits2_lookup() {
         // Verify the DIGITS2 lookup table
-        for i in 0..100 {
+        for (i, _) in DIGITS2.iter().enumerate() {
             let expected = format!("{:02}", i);
             assert_eq!(
                 DIGITS2[i][0] as char,
-                expected.chars().nth(0).unwrap(),
+                expected.chars().next().unwrap(),
                 "First digit mismatch for {}",
                 i
             );
@@ -428,33 +425,43 @@ mod tests {
         // Test various dates with known timestamps
         let test_cases = vec![
             // (unix_timestamp, day, month, year)
-            (0, 1, 1, 1970),               // 1970-01-01
-            (86400, 2, 1, 1970),           // 1970-01-02
-            (31536000, 1, 1, 1971),        // 1971-01-01
-            (1000000000, 9, 9, 2001),      // 2001-09-09
-            (1609459200, 1, 1, 2021),      // 2021-01-01
-            (1740910853, 2, 3, 2025),      // 2025-03-02
+            (0, 1, 1, 1970),          // 1970-01-01
+            (86400, 2, 1, 1970),      // 1970-01-02
+            (31536000, 1, 1, 1971),   // 1971-01-01
+            (1000000000, 9, 9, 2001), // 2001-09-09
+            (1609459200, 1, 1, 2021), // 2021-01-01
+            (1740910853, 2, 3, 2025), // 2025-03-02
         ];
 
         for (ts, expected_day, expected_month, expected_year) in test_cases {
             let mut buf = [0u8; 37];
             format_http_date(ts, &mut buf);
             let result = std::str::from_utf8(&buf).unwrap();
-            
+
             // Manually parse to verify
             let day_str = &result[11..13];
             let month_str = &result[14..17];
             let year_str = &result[18..22];
-            
+
             let day: u32 = day_str.trim().parse().unwrap();
             let year: u32 = year_str.parse().unwrap();
-            
+
             let month = match month_str {
-                "Jan" => 1, "Feb" => 2, "Mar" => 3, "Apr" => 4, "May" => 5, "Jun" => 6,
-                "Jul" => 7, "Aug" => 8, "Sep" => 9, "Oct" => 10, "Nov" => 11, "Dec" => 12,
+                "Jan" => 1,
+                "Feb" => 2,
+                "Mar" => 3,
+                "Apr" => 4,
+                "May" => 5,
+                "Jun" => 6,
+                "Jul" => 7,
+                "Aug" => 8,
+                "Sep" => 9,
+                "Oct" => 10,
+                "Nov" => 11,
+                "Dec" => 12,
                 _ => panic!("Invalid month: {}", month_str),
             };
-            
+
             assert_eq!(
                 (day, month, year),
                 (expected_day, expected_month, expected_year),

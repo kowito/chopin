@@ -436,9 +436,15 @@ impl Worker {
                                                 w!(b"Server: chopin\r\n");
                                             }
 
-                                            // Add real-time Date header
+                                            // Add real-time Date header (get fresh timestamp for each response)
+                                            let request_now = SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .map_err(|_| ChopinError::ClockError)?
+                                                .as_secs()
+                                                as u32;
                                             let mut date_buf = [0u8; 37];
-                                            let date_len = format_http_date(now, &mut date_buf);
+                                            let date_len =
+                                                format_http_date(request_now, &mut date_buf);
                                             w!(&date_buf[..date_len]);
 
                                             // Pre-baked content-type for common types
@@ -552,17 +558,27 @@ impl Worker {
                                                 // wstart==0 ⇒ wbuf aliases full write_buf
                                                 // Format error response with dynamic Date header
                                                 let mut pos_err = 0;
-                                                let err_prefix = b"HTTP/1.1 500 Internal Server Error\r\n";
-                                                wbuf[pos_err..pos_err + err_prefix.len()].copy_from_slice(err_prefix);
+                                                let err_prefix =
+                                                    b"HTTP/1.1 500 Internal Server Error\r\n";
+                                                wbuf[pos_err..pos_err + err_prefix.len()]
+                                                    .copy_from_slice(err_prefix);
                                                 pos_err += err_prefix.len();
-                                                
+
+                                                let error_now = SystemTime::now()
+                                                    .duration_since(UNIX_EPOCH)
+                                                    .map_err(|_| ChopinError::ClockError)?
+                                                    .as_secs()
+                                                    as u32;
                                                 let mut date_buf = [0u8; 37];
-                                                let date_len = format_http_date(now, &mut date_buf);
-                                                wbuf[pos_err..pos_err + date_len].copy_from_slice(&date_buf[..date_len]);
+                                                let date_len =
+                                                    format_http_date(error_now, &mut date_buf);
+                                                wbuf[pos_err..pos_err + date_len]
+                                                    .copy_from_slice(&date_buf[..date_len]);
                                                 pos_err += date_len;
-                                                
+
                                                 let err_suffix = b"Content-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error";
-                                                wbuf[pos_err..pos_err + err_suffix.len()].copy_from_slice(err_suffix);
+                                                wbuf[pos_err..pos_err + err_suffix.len()]
+                                                    .copy_from_slice(err_suffix);
                                                 pos = pos_err + err_suffix.len();
                                                 keep_alive = false;
                                             }
