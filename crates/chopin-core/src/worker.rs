@@ -304,60 +304,18 @@ impl Worker {
                                                 .router
                                                 .match_route(ctx.req.method, ctx.req.path)
                                             {
-                                                Some((
-                                                    handler,
-                                                    params,
-                                                    param_count,
-                                                    route_middleware,
-                                                    route_mw_count,
-                                                )) => {
+                                                Some((handler, params, param_count, composed)) => {
                                                     ctx.params = params;
                                                     ctx.param_count = param_count;
                                                     let handler_ptr = *handler;
-                                                    let global_mw = &self.router.global_middleware;
-                                                    let total_mw = global_mw.len() + route_mw_count;
 
                                                     #[cfg(feature = "catch-panic")]
                                                     let result = std::panic::catch_unwind(
                                                         std::panic::AssertUnwindSafe(|| {
-                                                            if total_mw == 0 {
-                                                                handler_ptr(ctx)
+                                                            if let Some(c) = composed {
+                                                                (**c)(ctx)
                                                             } else {
-                                                                let mut current_handler: crate::router::BoxedHandler =
-                                                                    std::sync::Arc::new(
-                                                                        handler_ptr,
-                                                                    );
-                                                                for i in (0..route_mw_count).rev() {
-                                                                    if let Some(mw) =
-                                                                        route_middleware[i]
-                                                                    {
-                                                                        let next = current_handler;
-                                                                        current_handler =
-                                                                            std::sync::Arc::new(
-                                                                                move |ctx| {
-                                                                                    mw(
-                                                                                        ctx,
-                                                                                        next.clone(
-                                                                                        ),
-                                                                                    )
-                                                                                },
-                                                                            );
-                                                                    }
-                                                                }
-                                                                for mw in global_mw.iter().rev() {
-                                                                    let mw = *mw;
-                                                                    let next = current_handler;
-                                                                    current_handler =
-                                                                        std::sync::Arc::new(
-                                                                            move |ctx| {
-                                                                                mw(
-                                                                                    ctx,
-                                                                                    next.clone(),
-                                                                                )
-                                                                            },
-                                                                        );
-                                                                }
-                                                                current_handler(ctx)
+                                                                handler_ptr(ctx)
                                                             }
                                                         }),
                                                     );
@@ -370,31 +328,10 @@ impl Worker {
                                                     };
 
                                                     #[cfg(not(feature = "catch-panic"))]
-                                                    let response = if total_mw == 0 {
-                                                        handler_ptr(ctx)
+                                                    let response = if let Some(c) = composed {
+                                                        (**c)(ctx)
                                                     } else {
-                                                        let mut current_handler: crate::router::BoxedHandler =
-                                                            std::sync::Arc::new(handler_ptr);
-                                                        for i in (0..route_mw_count).rev() {
-                                                            if let Some(mw) = route_middleware[i] {
-                                                                let next = current_handler;
-                                                                current_handler =
-                                                                    std::sync::Arc::new(
-                                                                        move |ctx| {
-                                                                            mw(ctx, next.clone())
-                                                                        },
-                                                                    );
-                                                            }
-                                                        }
-                                                        for mw in global_mw.iter().rev() {
-                                                            let mw = *mw;
-                                                            let next = current_handler;
-                                                            current_handler =
-                                                                std::sync::Arc::new(move |ctx| {
-                                                                    mw(ctx, next.clone())
-                                                                });
-                                                        }
-                                                        current_handler(ctx)
+                                                        handler_ptr(ctx)
                                                     };
 
                                                     response
@@ -509,10 +446,34 @@ impl Worker {
                                                 match response.body {
                                                     crate::http::Body::Empty => {}
                                                     crate::http::Body::Static(b) => {
-                                                        w!(b);
+                                                        if wstart == 0
+                                                            && pos + b.len()
+                                                                <= crate::conn::WRITE_BUF_SIZE
+                                                        {
+                                                            // Zero-copy: store ptr for writev
+                                                            conn.body_ptr = b.as_ptr() as usize;
+                                                            conn.body_total = b.len() as u32;
+                                                        } else {
+                                                            // Body too large or pipelining:
+                                                            // copy into write_buf (triggers overflow→500)
+                                                            w!(b);
+                                                        }
                                                     }
-                                                    crate::http::Body::Bytes(ref b) => {
-                                                        w!(b.as_slice());
+                                                    crate::http::Body::Bytes(b) => {
+                                                        if wstart == 0
+                                                            && pos + b.len()
+                                                                <= crate::conn::WRITE_BUF_SIZE
+                                                        {
+                                                            // Zero-copy: move into pinned storage
+                                                            let boxed = b.into_boxed_slice();
+                                                            conn.body_ptr = boxed.as_ptr() as usize;
+                                                            conn.body_total = boxed.len() as u32;
+                                                            conn.body_owned = Some(boxed);
+                                                        } else {
+                                                            // Body too large or pipelining:
+                                                            // copy into write_buf (triggers overflow→500)
+                                                            w!(b.as_slice());
+                                                        }
                                                     }
                                                     crate::http::Body::Stream(mut iter) => {
                                                         for chunk in iter.by_ref() {
@@ -615,6 +576,14 @@ impl Worker {
                                                 break;
                                             }
 
+                                            // If we deferred body for writev zero-copy,
+                                            // flush before pipelining more responses to
+                                            // preserve HTTP response ordering.
+                                            if conn.body_ptr != 0 {
+                                                next_state = ConnState::Writing;
+                                                break;
+                                            }
+
                                             // Continue inner loop → next pipelined request
                                         }
                                         Err(crate::parser::ParseError::Incomplete) => {
@@ -663,10 +632,44 @@ impl Worker {
                             // ── Write ──
                             if next_state == ConnState::Writing || is_write {
                                 if let Some(conn) = slab.get_mut(idx) {
-                                    // Phase 1: Flush write_buf (HTTP headers + non-file body)
                                     let write_total = conn.write_len as usize;
                                     let ws = conn.write_pos as usize;
-                                    if ws < write_total {
+
+                                    // Phase 1: headers + body — attempt writev when both ready
+                                    if ws == 0 && conn.body_ptr != 0 && conn.body_sent == 0 {
+                                        // First attempt: send headers + body in one writev
+                                        let header_slice = &conn.write_buf[0..write_total];
+                                        // SAFETY: body_ptr points to either 'static data
+                                        // (Body::Static) or a Box<[u8]> stored in
+                                        // conn.body_owned, live until body_clear().
+                                        let body_slice = unsafe {
+                                            std::slice::from_raw_parts(
+                                                conn.body_ptr as *const u8,
+                                                conn.body_total as usize,
+                                            )
+                                        };
+                                        match syscalls::writev_nonblocking(
+                                            fd,
+                                            &[header_slice, body_slice],
+                                        ) {
+                                            Ok(n) if n > 0 => {
+                                                self.metrics.add_bytes(n);
+                                                if n >= write_total {
+                                                    conn.write_pos = write_total as u16;
+                                                    conn.body_sent = (n - write_total) as u32;
+                                                } else {
+                                                    conn.write_pos = n as u16;
+                                                }
+                                            }
+                                            Ok(_) => {} // WouldBlock — wait for EPOLLOUT
+                                            Err(_) => {
+                                                conn.close_sendfile();
+                                                conn.body_clear();
+                                                next_state = ConnState::Closing;
+                                            }
+                                        }
+                                    } else if ws < write_total {
+                                        // Phase 1a: flush remaining headers only
                                         match syscalls::write_nonblocking(
                                             fd,
                                             &conn.write_buf[ws..write_total],
@@ -678,14 +681,45 @@ impl Worker {
                                             Ok(_) => {} // WouldBlock — wait for EPOLLOUT
                                             Err(_) => {
                                                 conn.close_sendfile();
+                                                conn.body_clear();
                                                 next_state = ConnState::Closing;
                                             }
                                         }
                                     }
 
-                                    // Phase 2: Zero-copy sendfile (only after headers fully flushed)
+                                    // Phase 1b: flush remaining body bytes (after headers sent)
+                                    if next_state != ConnState::Closing
+                                        && conn.write_pos as usize >= write_total
+                                        && conn.body_ptr != 0
+                                        && conn.body_sent < conn.body_total
+                                    {
+                                        let body_remaining =
+                                            (conn.body_total - conn.body_sent) as usize;
+                                        let body_slice = unsafe {
+                                            std::slice::from_raw_parts(
+                                                (conn.body_ptr + conn.body_sent as usize)
+                                                    as *const u8,
+                                                body_remaining,
+                                            )
+                                        };
+                                        match syscalls::write_nonblocking(fd, body_slice) {
+                                            Ok(n) if n > 0 => {
+                                                self.metrics.add_bytes(n);
+                                                conn.body_sent += n as u32;
+                                            }
+                                            Ok(_) => {} // WouldBlock — wait for EPOLLOUT
+                                            Err(_) => {
+                                                conn.close_sendfile();
+                                                conn.body_clear();
+                                                next_state = ConnState::Closing;
+                                            }
+                                        }
+                                    }
+
+                                    // Phase 2: Zero-copy sendfile (after headers + body flushed)
                                     if next_state != ConnState::Closing
                                         && conn.write_pos as usize >= conn.write_len as usize
+                                        && (conn.body_ptr == 0 || conn.body_sent >= conn.body_total)
                                         && conn.sendfile_remaining > 0
                                     {
                                         match syscalls::sendfile_nonblocking(
@@ -706,14 +740,14 @@ impl Worker {
                                         }
                                     }
 
-                                    // Check if fully done (headers flushed AND no sendfile pending)
+                                    // Check if fully done (headers + body + sendfile all flushed)
                                     if next_state != ConnState::Closing
                                         && conn.write_pos as usize >= conn.write_len as usize
+                                        && (conn.body_ptr == 0 || conn.body_sent >= conn.body_total)
                                         && conn.sendfile_remaining == 0
                                     {
-                                        // Close the sendfile fd if one was active
                                         conn.close_sendfile();
-                                        // Reset write buffer
+                                        conn.body_clear();
                                         conn.write_len = 0;
                                         conn.write_pos = 0;
                                         let ka = (conn.flags & crate::conn::CONN_KEEP_ALIVE) != 0;
@@ -746,9 +780,9 @@ impl Worker {
                         }
 
                         if next_state == ConnState::Closing {
-                            // Clean up any in-progress sendfile before closing
                             if let Some(conn) = slab.get_mut(idx) {
                                 conn.close_sendfile();
+                                conn.body_clear();
                             }
                             epoll.delete(fd).ok();
                             unsafe {
@@ -773,6 +807,7 @@ impl Worker {
             if let Some(conn) = slab.get_mut(i) {
                 if conn.state != ConnState::Free {
                     conn.close_sendfile();
+                    conn.body_clear();
                     unsafe {
                         libc::close(conn.fd);
                     }
@@ -794,28 +829,34 @@ impl Worker {
         if let Some(mut drain) = wheel.advance(now, TIMEOUT) {
             while let Some(indices) = drain.next_slot() {
                 for idx in indices {
-                    if let Some(conn) = slab.get(idx) {
-                        if conn.state == ConnState::Free {
-                            continue; // Already freed
-                        }
-                        if now.wrapping_sub(conn.last_active) > TIMEOUT {
-                            let fd = conn.fd;
-                            // Clean up any in-progress sendfile
-                            if conn.sendfile_fd >= 0 {
-                                unsafe {
-                                    libc::close(conn.sendfile_fd);
-                                }
+                    let (timed_out, fd, last_active) = {
+                        if let Some(conn) = slab.get(idx) {
+                            if conn.state == ConnState::Free {
+                                continue; // Already freed
                             }
-                            epoll.delete(fd).ok();
-                            unsafe {
-                                libc::close(fd);
-                            }
-                            slab.free(idx);
-                            self.metrics.dec_conn();
+                            (
+                                now.wrapping_sub(conn.last_active) > TIMEOUT,
+                                conn.fd,
+                                conn.last_active,
+                            )
                         } else {
-                            // Connection still alive — re-insert at its current slot
-                            drain.reinsert(idx, conn.last_active);
+                            continue;
                         }
+                    };
+                    if timed_out {
+                        if let Some(conn) = slab.get_mut(idx) {
+                            conn.close_sendfile();
+                            conn.body_clear();
+                        }
+                        epoll.delete(fd).ok();
+                        unsafe {
+                            libc::close(fd);
+                        }
+                        slab.free(idx);
+                        self.metrics.dec_conn();
+                    } else {
+                        // Connection still alive — re-insert at its current slot
+                        drain.reinsert(idx, last_active);
                     }
                 }
             }

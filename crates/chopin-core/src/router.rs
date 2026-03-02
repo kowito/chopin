@@ -17,8 +17,7 @@ pub type RouteMatch<'a> = (
     &'a Handler,
     [(&'a str, &'a str); MAX_PARAMS],
     u8,
-    [Option<MiddlewareFn>; MAX_MIDDLEWARE], // stack-allocated middleware list
-    usize,                                  // middleware count
+    Option<&'a BoxedHandler>, // pre-composed middleware chain; None when no middleware
 );
 
 #[derive(Clone, Copy)]
@@ -39,6 +38,7 @@ pub(crate) struct RouteNode {
     pub(crate) param_name: Option<String>,
     pub(crate) is_wildcard: bool,
     pub(crate) middleware: Vec<MiddlewareFn>,
+    pub(crate) composed_handlers: [Option<BoxedHandler>; METHOD_COUNT],
 }
 
 impl RouteNode {
@@ -51,6 +51,7 @@ impl RouteNode {
             param_name: None,
             is_wildcard: false,
             middleware: Vec::new(),
+            composed_handlers: std::array::from_fn(|_| None),
         }
     }
 }
@@ -138,12 +139,12 @@ impl Router {
         if path == "/" || path.is_empty() {
             let idx = method_index(method);
             if let Some(ref h) = self.root.handlers[idx] {
-                let mut middleware_buf = [None::<MiddlewareFn>; MAX_MIDDLEWARE];
-                let mw_count = self.root.middleware.len().min(MAX_MIDDLEWARE);
-                for (i, mw) in self.root.middleware.iter().take(mw_count).enumerate() {
-                    middleware_buf[i] = Some(*mw);
-                }
-                return Some((h, [("", ""); MAX_PARAMS], 0, middleware_buf, mw_count));
+                return Some((
+                    h,
+                    [("", ""); MAX_PARAMS],
+                    0,
+                    self.root.composed_handlers[idx].as_ref(),
+                ));
             }
             return None;
         }
@@ -162,24 +163,19 @@ impl Router {
 
         let mut params = [("", ""); MAX_PARAMS];
         let mut param_count: u8 = 0;
-        // Stack-allocated middleware accumulator
-        let mut middleware_buf = [None::<MiddlewareFn>; MAX_MIDDLEWARE];
-        let mut mw_count: usize = 0;
 
-        let handler = self.match_recursive(
+        let result = self.match_recursive(
             &self.root,
             method,
             segments,
             0,
             &mut params,
             &mut param_count,
-            &mut middleware_buf,
-            &mut mw_count,
         );
-        handler.map(|h| (h, params, param_count, middleware_buf, mw_count))
+        result.map(|(h, c)| (h, params, param_count, c))
     }
 
-    #[allow(clippy::too_many_arguments, clippy::collapsible_if)]
+    #[allow(clippy::collapsible_if)]
     #[inline(always)]
     fn match_recursive<'a, 'b>(
         &'a self,
@@ -189,26 +185,15 @@ impl Router {
         depth: usize,
         params: &mut [(&'b str, &'b str); MAX_PARAMS],
         param_count: &mut u8,
-        middleware: &mut [Option<MiddlewareFn>; MAX_MIDDLEWARE],
-        mw_count: &mut usize,
-    ) -> Option<&'a Handler>
+    ) -> Option<(&'a Handler, Option<&'a BoxedHandler>)>
     where
         'a: 'b,
     {
-        let mw_start_len = *mw_count;
-        for mw_fn in &node.middleware {
-            if *mw_count < MAX_MIDDLEWARE {
-                middleware[*mw_count] = Some(*mw_fn);
-                *mw_count += 1;
-            }
-        }
-
         if depth == segments.len() {
             let idx = method_index(method);
             if let Some(ref h) = node.handlers[idx] {
-                return Some(h);
+                return Some((h, node.composed_handlers[idx].as_ref()));
             }
-            *mw_count = mw_start_len;
             return None;
         }
 
@@ -223,17 +208,15 @@ impl Router {
         if static_end > 0 {
             let statics = &node.children[..static_end];
             if let Ok(idx) = statics.binary_search_by(|c| c.path.as_str().cmp(segment)) {
-                if let Some(handler) = self.match_recursive(
+                if let Some(result) = self.match_recursive(
                     &statics[idx],
                     method,
                     segments,
                     depth + 1,
                     params,
                     param_count,
-                    middleware,
-                    mw_count,
                 ) {
-                    return Some(handler);
+                    return Some(result);
                 }
             }
         }
@@ -248,17 +231,10 @@ impl Router {
                         *param_count += 1;
                     }
                 }
-                if let Some(handler) = self.match_recursive(
-                    child,
-                    method,
-                    segments,
-                    depth + 1,
-                    params,
-                    param_count,
-                    middleware,
-                    mw_count,
-                ) {
-                    return Some(handler);
+                if let Some(result) =
+                    self.match_recursive(child, method, segments, depth + 1, params, param_count)
+                {
+                    return Some(result);
                 }
                 // Backtrack
                 *param_count = old_count;
@@ -276,18 +252,11 @@ impl Router {
                 }
                 let idx = method_index(method);
                 if let Some(ref h) = child.handlers[idx] {
-                    for mw_fn in &child.middleware {
-                        if *mw_count < MAX_MIDDLEWARE {
-                            middleware[*mw_count] = Some(*mw_fn);
-                            *mw_count += 1;
-                        }
-                    }
-                    return Some(h);
+                    return Some((h, child.composed_handlers[idx].as_ref()));
                 }
             }
         }
 
-        *mw_count = mw_start_len;
         None
     }
 
@@ -453,9 +422,12 @@ impl Router {
 
     /// Prepare the router for production use. Sorts static children at every
     /// level so `match_recursive` can binary-search instead of linear-scan.
+    /// Pre-composes middleware chains so the hot path pays zero `Arc::new` cost.
     /// Call once after all routes are registered, before serving.
     pub fn finalize(&mut self) {
         Self::sort_children_recursive(&mut self.root);
+        let global_mw: Vec<MiddlewareFn> = self.global_middleware.clone();
+        Self::compose_tree(&mut self.root, &global_mw, &[]);
     }
 
     fn sort_children_recursive(node: &mut RouteNode) {
@@ -474,6 +446,46 @@ impl Router {
         });
         for child in &mut node.children {
             Self::sort_children_recursive(child);
+        }
+    }
+
+    /// Pre-compose middleware chains at `finalize()` time so the hot request
+    /// path pays zero `Arc::new` cost — just a single `Arc` clone (~3 ns).
+    /// `ancestor_mw` carries route-level middleware accumulated while descending
+    /// from the root, mirroring the original `match_recursive` accumulation.
+    #[allow(clippy::collapsible_if)]
+    fn compose_tree(
+        node: &mut RouteNode,
+        global_mw: &[MiddlewareFn],
+        ancestor_mw: &[MiddlewareFn],
+    ) {
+        // Effective route middleware for handlers at this node =
+        // ancestor_mw (outer) ++ node.middleware (inner)
+        let mut node_route_mw: Vec<MiddlewareFn> = ancestor_mw.to_vec();
+        node_route_mw.extend_from_slice(&node.middleware);
+
+        for method_idx in 0..METHOD_COUNT {
+            if let Some(handler) = node.handlers[method_idx] {
+                if !node_route_mw.is_empty() || !global_mw.is_empty() {
+                    let mut composed: BoxedHandler = Arc::new(handler);
+                    // Route-level middleware (innermost → outermost, matching original)
+                    for mw in node_route_mw.iter().rev() {
+                        let next = composed.clone();
+                        let mw = *mw;
+                        composed = Arc::new(move |ctx| mw(ctx, next.clone()));
+                    }
+                    // Global middleware (outermost layer)
+                    for mw in global_mw.iter().rev() {
+                        let next = composed.clone();
+                        let mw = *mw;
+                        composed = Arc::new(move |ctx| mw(ctx, next.clone()));
+                    }
+                    node.composed_handlers[method_idx] = Some(composed);
+                }
+            }
+        }
+        for child in &mut node.children {
+            Self::compose_tree(child, global_mw, &node_route_mw);
         }
     }
 
@@ -541,7 +553,7 @@ mod tests {
 
         let match1 = router.match_route(Method::Get, "/users/123");
         assert!(match1.is_some());
-        let (_, params1, _, _, _) = match1.unwrap();
+        let (_, params1, _, _) = match1.unwrap();
         assert_eq!(
             params1
                 .iter()
@@ -553,7 +565,7 @@ mod tests {
 
         let match2 = router.match_route(Method::Post, "/users/123/posts/abc");
         assert!(match2.is_some());
-        let (_, params2, _, _, _) = match2.unwrap();
+        let (_, params2, _, _) = match2.unwrap();
         assert_eq!(
             params2
                 .iter()
@@ -580,7 +592,7 @@ mod tests {
 
         let match1 = router.match_route(Method::Get, "/assets/js/app.js");
         assert!(match1.is_some());
-        let (_, params1, _, _, _) = match1.unwrap();
+        let (_, params1, _, _) = match1.unwrap();
         assert_eq!(
             params1
                 .iter()
@@ -634,11 +646,11 @@ mod tests {
 
         let m1 = root.match_route(Method::Post, "/api/login");
         assert!(m1.is_some());
-        assert_eq!(m1.unwrap().4, 1); // Only auth gets middleware
+        assert!(m1.unwrap().3.is_some()); // middleware composed → Some(BoxedHandler)
 
         let m2 = root.match_route(Method::Get, "/status");
         assert!(m2.is_some());
-        assert_eq!(m2.unwrap().4, 0); // Root doesn't
+        assert!(m2.unwrap().3.is_none()); // no middleware → None
     }
 
     #[test]

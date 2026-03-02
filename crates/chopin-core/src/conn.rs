@@ -37,6 +37,12 @@ pub struct Conn {
     pub sendfile_offset: u64, // Current offset in the file
     pub sendfile_remaining: u64, // Bytes still to transfer
 
+    // Zero-copy body tracking (writev path — set for Body::Static/Bytes when wstart == 0)
+    pub body_ptr: usize, // raw ptr to body bytes (0 = no body pending)
+    pub body_total: u32, // total body length in bytes
+    pub body_sent: u32,  // bytes already flushed
+    pub body_owned: Option<Box<[u8]>>, // owns Body::Bytes allocation; None for Static/empty
+
     pub read_buf: [u8; READ_BUF_SIZE],
     pub write_buf: [u8; WRITE_BUF_SIZE],
 }
@@ -56,6 +62,10 @@ impl Conn {
             sendfile_fd: -1,
             sendfile_offset: 0,
             sendfile_remaining: 0,
+            body_ptr: 0,
+            body_total: 0,
+            body_sent: 0,
+            body_owned: None,
             read_buf: [0; READ_BUF_SIZE],
             write_buf: [0; WRITE_BUF_SIZE],
         }
@@ -72,6 +82,15 @@ impl Conn {
             self.sendfile_offset = 0;
             self.sendfile_remaining = 0;
         }
+    }
+
+    /// Clear any pending zero-copy body state (writev path).
+    #[inline]
+    pub fn body_clear(&mut self) {
+        self.body_ptr = 0;
+        self.body_total = 0;
+        self.body_sent = 0;
+        self.body_owned = None;
     }
 }
 
@@ -92,13 +111,13 @@ mod tests {
 
         // Header fields: fd(4) + state(1) + flags(1) + read_len(2) + write_pos(2) +
         //                write_len(2) + last_active(4) + requests_served(4) +
-        //                sendfile_fd(4) + sendfile_offset(8) + sendfile_remaining(8) = 40 bytes
-        // Padded to next 64-byte boundary = 64 bytes total for the header block.
-        let header_block = 64_usize;
-        let total_size = header_block + READ_BUF_SIZE + WRITE_BUF_SIZE;
+        //                sendfile_fd(4) + sendfile_offset(8) + sendfile_remaining(8) +
+        //                body_ptr(8) + body_total(4) + body_sent(4) + body_owned(16) = 72 bytes
+        // + 8192 (read_buf) + 16384 (write_buf) = 24648, padded to 24704 (next 64-byte boundary).
+        let total_size = std::mem::size_of::<Conn>();
 
-        // Assert total size is a multiple of 64
+        assert_eq!(std::mem::align_of::<Conn>(), 64);
         assert_eq!(total_size % 64, 0, "Conn total size not a multiple of 64!");
-        assert_eq!(std::mem::size_of::<Conn>(), total_size);
+        assert_eq!(total_size, READ_BUF_SIZE + WRITE_BUF_SIZE + 128);
     }
 }
