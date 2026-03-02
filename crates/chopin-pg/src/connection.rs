@@ -1156,7 +1156,9 @@ impl PgConnection {
         let mut columns_rc: Rc<Vec<codec::ColumnDesc>> = Rc::new(Vec::new());
 
         loop {
-            self.fill_read_buf(None)?;
+            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
+                self.fill_read_buf(None)?;
+            }
 
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
                 let header = codec::decode_header(&self.read_buf)
@@ -1217,7 +1219,9 @@ impl PgConnection {
         };
 
         loop {
-            self.fill_read_buf(None)?;
+            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
+                self.fill_read_buf(None)?;
+            }
 
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
                 let header = codec::decode_header(&self.read_buf)
@@ -1228,7 +1232,15 @@ impl PgConnection {
                     BackendTag::ParseComplete => {}
                     BackendTag::ParameterDescription => {}
                     BackendTag::RowDescription => {
-                        let columns = codec::parse_row_description(body);
+                        let mut columns = codec::parse_row_description(body);
+                        // The driver always requests binary-format results in the
+                        // Bind message (&[1]).  RowDescription from a Describe
+                        // *Statement* always has format_code = Text (0x0) because
+                        // no Bind has occurred yet.  Override every column to
+                        // Binary so DataRow bytes are decoded correctly.
+                        for col in &mut columns {
+                            col.format_code = FormatCode::Binary;
+                        }
                         if is_new {
                             if let Some(evicted) = self.stmt_cache.insert(
                                 sql,
@@ -1286,7 +1298,11 @@ impl PgConnection {
 
     fn drain_to_ready(&mut self) -> PgResult<()> {
         loop {
-            self.fill_read_buf(None)?;
+            // Only read from the socket when the buffer has no complete message;
+            // data may already be buffered from an earlier fill_read_buf call.
+            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
+                self.fill_read_buf(None)?;
+            }
             while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
                 let header = codec::decode_header(&self.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
@@ -1648,7 +1664,14 @@ impl<'a> CopyReader<'a> {
         }
 
         loop {
-            self.conn.fill_read_buf(None)?;
+            // Only refill the buffer when it doesn't already hold a complete
+            // message.  If a previous fill read the entire COPY response in
+            // one TCP segment, the CopyData / CopyDone / ReadyForQuery bytes
+            // are already in `read_buf` and we must not block waiting for
+            // more socket data before processing them.
+            if codec::message_complete(&self.conn.read_buf[..self.conn.read_pos]).is_none() {
+                self.conn.fill_read_buf(None)?;
+            }
 
             while let Some(msg_len) =
                 codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])

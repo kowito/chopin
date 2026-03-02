@@ -89,46 +89,59 @@ impl<'a> Executor for Transaction<'a> {
 
 pub trait Model: FromRow + Sized + Send + Sync {
     fn table_name() -> &'static str;
-    fn primary_key_column() -> &'static str;
+    fn primary_key_columns() -> &'static [&'static str];
+    fn generated_columns() -> &'static [&'static str];
     fn columns() -> &'static [&'static str];
 
-    fn primary_key_value(&self) -> PgValue;
-    fn set_primary_key(&mut self, value: PgValue) -> OrmResult<()>;
+    fn primary_key_values(&self) -> Vec<PgValue>;
+    fn set_generated_values(&mut self, values: Vec<PgValue>) -> OrmResult<()>;
     fn get_values(&self) -> Vec<PgValue>;
 
-    /// Insert the model into the database. Updates the primary key if it's auto-generated.
+    /// Insert the model into the database. Retrieves generated columns.
     fn insert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
         let all_cols = Self::columns();
-        let pk_col = Self::primary_key_column();
+        let gen_cols = Self::generated_columns();
 
         let mut cols = Vec::new();
         let values = self.get_values();
         let mut final_values = Vec::new();
 
         for (i, col) in all_cols.iter().enumerate() {
-            if *col != pk_col {
+            if !gen_cols.contains(col) {
                 cols.push(*col);
                 final_values.push(values[i].clone());
             }
         }
 
         let bindings: Vec<String> = (1..=cols.len()).map(|i| format!("${}", i)).collect();
+        let returning = if gen_cols.is_empty() {
+             "".to_string()
+        } else {
+             format!(" RETURNING {}", gen_cols.join(", "))
+        };
+
         let query = format!(
-            "INSERT INTO {} ({}) VALUES ({}) RETURNING {}",
+            "INSERT INTO {} ({}) VALUES ({}){}",
             Self::table_name(),
             cols.join(", "),
             bindings.join(", "),
-            Self::primary_key_column()
+            returning
         );
 
         let params: Vec<&dyn chopin_pg::types::ToSql> =
             final_values.iter().map(|v| v as _).collect();
 
-        // We know we inserted one row, get returning pk.
-        let rows = executor.query(&query, &params)?;
-        if let Some(row) = rows.first() {
-            let pk_val = row.get(0)?;
-            self.set_primary_key(pk_val)?;
+        if gen_cols.is_empty() {
+            executor.execute(&query, &params)?;
+        } else {
+            let rows = executor.query(&query, &params)?;
+            if let Some(row) = rows.first() {
+                let mut returned_vals = Vec::new();
+                for i in 0..gen_cols.len() {
+                    returned_vals.push(row.get(i)?);
+                }
+                self.set_generated_values(returned_vals)?;
+            }
         }
         Ok(())
     }
@@ -136,48 +149,65 @@ pub trait Model: FromRow + Sized + Send + Sync {
     /// Insert the model or update it if the primary key conflicts
     fn upsert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
         let all_cols = Self::columns();
-        let pk_col = Self::primary_key_column();
+        let pk_cols = Self::primary_key_columns();
+        let gen_cols = Self::generated_columns();
+
+        if pk_cols.is_empty() {
+            return Err(OrmError::ModelError("Cannot upsert without primary keys".to_string()));
+        }
 
         let mut cols = Vec::new();
         let values = self.get_values();
         let mut final_values = Vec::new();
         let mut set_clauses = Vec::new();
 
-        // Push the PK first because we must provide it to conflict.
-        let pk_idx = all_cols.iter().position(|c| *c == pk_col).ok_or_else(|| {
-            OrmError::ModelError("Primary key column missing from Model::columns()".to_string())
-        })?;
-        cols.push(pk_col);
-        final_values.push(values[pk_idx].clone());
-
         for (i, col) in all_cols.iter().enumerate() {
-            if *col != pk_col {
-                cols.push(*col);
-                final_values.push(values[i].clone());
-                // EXCLUDED is a postgres keyword referring to the row proposed for insertion
+            cols.push(*col);
+            final_values.push(values[i].clone());
+            if !pk_cols.contains(col) {
                 set_clauses.push(format!("{0} = EXCLUDED.{0}", col));
             }
         }
 
-        // Add PK separately for bindings if passing manual ID, else it uses serial default
         let bindings: Vec<String> = (1..=cols.len()).map(|i| format!("${}", i)).collect();
+        
+        // EXCLUDED is a postgres keyword referring to the row proposed for insertion
+        let on_conflict = if set_clauses.is_empty() {
+            "DO NOTHING".to_string()
+        } else {
+            format!("DO UPDATE SET {}", set_clauses.join(", "))
+        };
+
+        let returning = if gen_cols.is_empty() {
+             "".to_string()
+        } else {
+             format!(" RETURNING {}", gen_cols.join(", "))
+        };
+
         let query = format!(
-            "INSERT INTO {0} ({1}) VALUES ({2}) ON CONFLICT ({3}) DO UPDATE SET {4} RETURNING {3}",
+            "INSERT INTO {0} ({1}) VALUES ({2}) ON CONFLICT ({3}) {4}{5}",
             Self::table_name(),
             cols.join(", "),
             bindings.join(", "),
-            Self::primary_key_column(),
-            set_clauses.join(", ")
+            pk_cols.join(", "),
+            on_conflict,
+            returning
         );
 
         let params: Vec<&dyn chopin_pg::types::ToSql> =
             final_values.iter().map(|v| v as _).collect();
 
-        // We know we inserted/updated one row, get returning pk.
-        let rows = executor.query(&query, &params)?;
-        if let Some(row) = rows.first() {
-            let pk_val = row.get(0)?;
-            self.set_primary_key(pk_val)?;
+        if gen_cols.is_empty() {
+            executor.execute(&query, &params)?;
+        } else {
+            let rows = executor.query(&query, &params)?;
+            if let Some(row) = rows.first() {
+                let mut returned_vals = Vec::new();
+                for i in 0..gen_cols.len() {
+                    returned_vals.push(row.get(i)?);
+                }
+                self.set_generated_values(returned_vals)?;
+            }
         }
         Ok(())
     }
@@ -185,52 +215,73 @@ pub trait Model: FromRow + Sized + Send + Sync {
     /// Update the model in the database matching its primary key.
     fn update(&self, executor: &mut impl Executor) -> OrmResult<()> {
         let cols = Self::columns();
+        let pk_cols = Self::primary_key_columns();
+
+        if pk_cols.is_empty() {
+            return Err(OrmError::ModelError("Cannot update without primary keys".to_string()));
+        }
+
         let mut set_clauses = Vec::new();
         let mut param_idx = 1;
+        let values = self.get_values();
+        let mut query_values = Vec::new();
 
-        for col in cols {
-            if *col == Self::primary_key_column() {
-                continue; // don't update PK
+        for (i, col) in cols.iter().enumerate() {
+            if !pk_cols.contains(col) {
+                set_clauses.push(format!("{} = ${}", col, param_idx));
+                query_values.push(values[i].clone());
+                param_idx += 1;
             }
-            set_clauses.push(format!("{} = ${}", col, param_idx));
+        }
+
+        if set_clauses.is_empty() {
+            return Ok(()); // Nothing to update
+        }
+
+        let mut where_clauses = Vec::new();
+        let pk_values = self.primary_key_values();
+        for (i, pk_col) in pk_cols.iter().enumerate() {
+            where_clauses.push(format!("{} = ${}", pk_col, param_idx));
+            query_values.push(pk_values[i].clone());
             param_idx += 1;
         }
 
         let query = format!(
-            "UPDATE {} SET {} WHERE {} = ${}",
+            "UPDATE {} SET {} WHERE {}",
             Self::table_name(),
             set_clauses.join(", "),
-            Self::primary_key_column(),
-            param_idx
+            where_clauses.join(" AND ")
         );
 
-        let mut values = self.get_values();
-        // Remove the primary key from values to match the query bindings order
-        let pk_idx = cols
-            .iter()
-            .position(|c| *c == Self::primary_key_column())
-            .ok_or_else(|| {
-                OrmError::ModelError("Primary key column missing from Model::columns()".to_string())
-            })?;
-        let pk_val = values.remove(pk_idx);
-        values.push(pk_val); // Put PK at the end (for WHERE clause)
-
-        let params: Vec<&dyn chopin_pg::types::ToSql> = values.iter().map(|v| v as _).collect();
+        let params: Vec<&dyn chopin_pg::types::ToSql> = query_values.iter().map(|v| v as _).collect();
         executor.execute(&query, &params)?;
         Ok(())
     }
 
     /// Delete the model from the database.
     fn delete(&self, executor: &mut impl Executor) -> OrmResult<()> {
+        let pk_cols = Self::primary_key_columns();
+        if pk_cols.is_empty() {
+            return Err(OrmError::ModelError("Cannot delete without primary keys".to_string()));
+        }
+
+        let mut where_clauses = Vec::new();
+        let mut idx = 1;
+        for pk_col in pk_cols {
+            where_clauses.push(format!("{} = ${}", pk_col, idx));
+            idx += 1;
+        }
+
         let query = format!(
-            "DELETE FROM {} WHERE {} = $1",
+            "DELETE FROM {} WHERE {}",
             Self::table_name(),
-            Self::primary_key_column()
+            where_clauses.join(" AND ")
         );
 
-        let pk = self.primary_key_value();
+        let pk_values = self.primary_key_values();
+        let params: Vec<&dyn chopin_pg::types::ToSql> = pk_values.iter().map(|v| v as _).collect();
 
-        executor.execute(&query, &[&pk])?;
+        executor.execute(&query, &params)?;
         Ok(())
     }
 }

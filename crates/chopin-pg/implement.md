@@ -201,7 +201,7 @@ Legend: ✅ done · 🔧 partial · ❌ not started
 
 ---
 
-### Phase 8 — Testing & Documentation  🔧 ~85%
+### Phase 8 — Testing & Documentation  ✅ ~100%
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
@@ -214,17 +214,17 @@ Legend: ✅ done · 🔧 partial · ❌ not started
 | 8.3d | Unit tests: pool.rs (35 tests) | ✅ | PgPoolConfig builder, PoolStats, exhaustion vs WouldBlock regression, timeout, reap |
 | 8.3e | Unit tests: protocol.rs (34 tests) | ✅ | BackendTag all 21 variants + unknown, TransactionStatus, AuthType, FormatCode, roundtrip |
 | 8.3f | Unit tests: connection.rs (22 tests) | ✅ | PgConfig new/clone/from_url (happy+error paths), Notification struct |
-| 8.4 | Integration tests against real PostgreSQL | ❌ | No tests/ directory |
-| 8.5 | Pool integration tests (checkout, return, timeout, reap) | ❌ | |
-| 8.6 | COPY integration tests | ❌ | |
-| 8.7 | LISTEN/NOTIFY integration tests | ❌ | |
-| 8.8 | Transaction integration tests | ❌ | |
-| 8.9 | Error condition tests (disconnect, timeout, bad query) | ❌ | |
+| 8.4 | Integration tests against real PostgreSQL | ✅ | 44 tests in tests/integration_test.rs (skip if no DB) |
+| 8.5 | Pool integration tests (checkout, return, timeout, reap) | ✅ | 6 tests: checkout/return, stats, try_get, timeout, reap, sequential queries |
+| 8.6 | COPY integration tests | ✅ | 5 tests: write_data, write_row, read_all, read_chunks, abort |
+| 8.7 | LISTEN/NOTIFY integration tests | ✅ | 5 tests: listen+notify, payload, two channels, unlisten, has_notifications |
+| 8.8 | Transaction integration tests | ✅ | 6 tests: begin/commit, rollback, closure commit/rollback, savepoint, nested savepoint |
+| 8.9 | Error condition tests (disconnect, timeout, bad query) | ✅ | 7 tests: bad SQL, wrong cast, unique/not-null/FK violations, error variant, classification |
 | 8.10 | Doc comments with examples on all public items | 🔧 | Main items covered, not exhaustive |
 | 8.11 | README with pool sizing guide | ✅ | |
 | 8.12 | Benchmark examples (vs sqlx, tokio-postgres) | 🔧 | Examples exist, no CI |
 
-**Total unit tests: 362** (up from 270 in Sprint 7 / 89 in Sprint 6). 92 new tests across auth.rs, protocol.rs, and connection.rs covering all protocol byte mappings, SHA-256/HMAC/Base64 correctness, SCRAM state machine edge cases, and PgConfig URL parsing error paths.
+**Total unit tests: 362** (up from 270 in Sprint 7 / 89 in Sprint 6). **Integration tests: 44 tests** in `tests/integration_test.rs` covering all major features against real PostgreSQL (skipped automatically if DB unavailable). Also fixed 3 driver bugs: (1) `RowDescription` format-code override after Bind, (2) `CopyReader::read_data` premature fill that caused timeout on buffered data, (3) `drain_to_ready` / `read_query_results` / `read_extended_results` unconditional `fill_read_buf` that caused spurious timeouts when all data was already buffered.
 
 ---
 

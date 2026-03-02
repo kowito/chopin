@@ -10,7 +10,8 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
     let name = &input.ident;
 
     let mut table_name = name.to_string().to_lowercase() + "s"; // Default plural table name
-    let mut pk_field = None;
+    let mut pk_fields = Vec::new();
+    let mut generated_fields = Vec::new();
     let mut columns = Vec::new();
 
     // Parse struct attributes for table_name
@@ -40,18 +41,30 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
                     }
                 };
                 let field_name_str = field_name.to_string();
-                columns.push(field_name_str);
+                columns.push(field_name_str.clone());
 
+                let mut is_pk = false;
+                let mut is_gen = false;
                 // Check for primary_key attribute
                 for attr in &f.attrs {
                     if attr.path().is_ident("model") {
                         let _ = attr.parse_nested_meta(|meta| {
                             if meta.path.is_ident("primary_key") {
-                                pk_field = Some(field_name.clone());
+                                is_pk = true;
+                            }
+                            if meta.path.is_ident("generated") {
+                                is_gen = true;
                             }
                             Ok(())
                         });
                     }
+                }
+                
+                if is_pk {
+                    pk_fields.push(field_name.clone());
+                }
+                if is_gen {
+                    generated_fields.push(field_name.clone());
                 }
 
                 extracted.push(field_name.clone());
@@ -74,24 +87,20 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
         .into();
     };
 
-    if pk_field.is_none() {
+    if pk_fields.is_empty() {
         if columns.contains(&"id".to_string()) {
-            pk_field = Some(syn::Ident::new("id", proc_macro2::Span::call_site()));
+            pk_fields.push(syn::Ident::new("id", proc_macro2::Span::call_site()));
+            generated_fields.push(syn::Ident::new("id", proc_macro2::Span::call_site()));
         } else {
-            return syn::Error::new_spanned(name, "Model requires a primary key field (e.g., #[model(primary_key)] id) or a field named 'id'").to_compile_error().into();
+            return syn::Error::new_spanned(name, "Model requires at least one primary key field (e.g., #[model(primary_key)] id) or a field named 'id'").to_compile_error().into();
         }
     }
 
-    let pk_ident = match pk_field {
-        Some(ident) => ident,
-        None => {
-            return syn::Error::new_spanned(name, "Missing primary key")
-                .to_compile_error()
-                .into();
-        }
-    };
-    let pk_name = pk_ident.to_string();
-    let field_names_str: Vec<String> = columns;
+    let field_names_str: Vec<String> = columns.clone();
+    let pk_names_str: Vec<String> = pk_fields.iter().map(|i| i.to_string()).collect();
+    let gen_names_str: Vec<String> = generated_fields.iter().map(|i| i.to_string()).collect();
+
+    let gen_field_names = generated_fields.clone();
 
     let expanded = quote! {
         impl chopin_orm::Model for #name {
@@ -99,17 +108,23 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
                 #table_name
             }
 
-            fn primary_key_column() -> &'static str {
-                #pk_name
+            fn primary_key_columns() -> &'static [&'static str] {
+                &[#(#pk_names_str),*]
+            }
+            
+            fn generated_columns() -> &'static [&'static str] {
+                &[#(#gen_names_str),*]
             }
 
             fn columns() -> &'static [&'static str] {
                 &[#(#field_names_str),*]
             }
 
-            fn primary_key_value(&self) -> chopin_pg::PgValue {
+            fn primary_key_values(&self) -> Vec<chopin_pg::PgValue> {
                 use chopin_pg::types::ToSql;
-                self.#pk_ident.to_sql()
+                vec![
+                    #(self.#pk_fields.to_sql()),*
+                ]
             }
 
             fn get_values(&self) -> Vec<chopin_pg::PgValue> {
@@ -119,8 +134,16 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
                 ]
             }
 
-            fn set_primary_key(&mut self, value: chopin_pg::PgValue) -> chopin_orm::OrmResult<()> {
-                self.#pk_ident = chopin_orm::ExtractValue::from_pg_value(value)?;
+            fn set_generated_values(&mut self, mut values: Vec<chopin_pg::PgValue>) -> chopin_orm::OrmResult<()> {
+                if values.len() != #gen_names_str.len() {
+                    return Err(chopin_orm::OrmError::ModelError("Generated values length mismatch".to_string()));
+                }
+                let mut iter = values.into_iter();
+                #(
+                    if let Some(val) = iter.next() {
+                        self.#gen_field_names = chopin_orm::ExtractValue::from_pg_value(val)?;
+                    }
+                )*
                 Ok(())
             }
         }
