@@ -3,6 +3,7 @@ pub mod conn;
 pub mod error;
 pub mod extract;
 pub mod http;
+pub mod http_date;
 pub mod json;
 pub mod metrics;
 pub mod multipart;

@@ -4,6 +4,7 @@
 
 use crate::conn::ConnState;
 use crate::error::{ChopinError, ChopinResult};
+use crate::http_date::format_http_date;
 use crate::slab::ConnectionSlab;
 use crate::syscalls::{self, EPOLLIN, EPOLLOUT, Epoll, epoll_event};
 use crate::timer::TimerWheel;
@@ -70,152 +71,6 @@ fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
     out[i] = b'\n';
     i += 1;
     i
-}
-
-/// Days of week for HTTP-Date header formatting
-const DAYS_OF_WEEK: &[&[u8]] = &[b"Sun", b"Mon", b"Tue", b"Wed", b"Thu", b"Fri", b"Sat"];
-
-/// Months for HTTP-Date header formatting
-const MONTHS: &[&[u8]] = &[b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", 
-                            b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec"];
-
-/// Format an HTTP Date header into a fixed 37-byte buffer (e.g., "Date: Thu, 23 Nov 1986 08:49:37 GMT\r\n")
-/// Returns the slice length.
-#[inline]
-fn format_date(unix_secs: u32, out: &mut [u8; 37]) -> usize {
-    // Days since Unix epoch (1970-01-01)
-    const SECS_PER_DAY: u32 = 86400;
-    
-    let days_since_epoch = unix_secs / SECS_PER_DAY;
-    let secs_today = unix_secs % SECS_PER_DAY;
-    
-    // Calculate hour, minute, second
-    let hour = (secs_today / 3600) as u8;
-    let minute = ((secs_today % 3600) / 60) as u8;
-    let second = (secs_today % 60) as u8;
-    
-    // Calculate day of week (1970-01-01 was Thursday = 4)
-    let dow = ((days_since_epoch + 4) % 7) as usize;
-    
-    // Simplified year/month/day calculation
-    // This is approximate but works for most reasonable dates
-    let mut year = 1970u32;
-    let mut day_of_year = days_since_epoch as i32;
-    
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if day_of_year >= days_in_year {
-            day_of_year -= days_in_year;
-            year += 1;
-        } else {
-            break;
-        }
-    }
-    
-    // Month and day calculation
-    let days_in_months = if is_leap_year(year) {
-        &[31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        &[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-    
-    let mut month = 0usize;
-    let mut day = day_of_year as u32 + 1;
-    
-    for (i, &days) in days_in_months.iter().enumerate() {
-        if day > days as u32 {
-            day -= days as u32;
-            month = i + 1;
-        } else {
-            break;
-        }
-    }
-    
-    // Format: "Date: <day-name>, <day> <month> <year> <hour>:<minute>:<second> GMT\r\n"
-    let prefix = b"Date: ";
-    let mut i = 0;
-    out[i..i + prefix.len()].copy_from_slice(prefix);
-    i += prefix.len();
-    
-    // Day of week (3 chars)
-    out[i..i + 3].copy_from_slice(DAYS_OF_WEEK[dow]);
-    i += 3;
-    
-    out[i] = b',';
-    i += 1;
-    out[i] = b' ';
-    i += 1;
-    
-    // Day (1-2 chars, zero-padded)
-    if day < 10 {
-        out[i] = b'0';
-        i += 1;
-        out[i] = b'0' + day as u8;
-        i += 1;
-    } else {
-        out[i] = b'0' + (day / 10) as u8;
-        i += 1;
-        out[i] = b'0' + (day % 10) as u8;
-        i += 1;
-    }
-    
-    out[i] = b' ';
-    i += 1;
-    
-    // Month (3 chars)
-    out[i..i + 3].copy_from_slice(MONTHS[month]);
-    i += 3;
-    
-    out[i] = b' ';
-    i += 1;
-    
-    // Year (4 chars)
-    let year_str = year.to_string();
-    let year_bytes = year_str.as_bytes();
-    out[i..i + 4].copy_from_slice(&year_bytes[..4.min(year_bytes.len())]);
-    i += 4;
-    
-    out[i] = b' ';
-    i += 1;
-    
-    // Hour:Minute:Second (8 chars)
-    out[i] = b'0' + (hour / 10) as u8;
-    i += 1;
-    out[i] = b'0' + (hour % 10) as u8;
-    i += 1;
-    out[i] = b':';
-    i += 1;
-    out[i] = b'0' + (minute / 10) as u8;
-    i += 1;
-    out[i] = b'0' + (minute % 10) as u8;
-    i += 1;
-    out[i] = b':';
-    i += 1;
-    out[i] = b'0' + (second / 10) as u8;
-    i += 1;
-    out[i] = b'0' + (second % 10) as u8;
-    i += 1;
-    
-    out[i] = b' ';
-    i += 1;
-    out[i] = b'G';
-    i += 1;
-    out[i] = b'M';
-    i += 1;
-    out[i] = b'T';
-    i += 1;
-    out[i] = b'\r';
-    i += 1;
-    out[i] = b'\n';
-    i += 1;
-    
-    i
-}
-
-/// Check if a year is a leap year
-#[inline(always)]
-fn is_leap_year(year: u32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 pub struct Worker {
@@ -583,7 +438,7 @@ impl Worker {
 
                                             // Add real-time Date header
                                             let mut date_buf = [0u8; 37];
-                                            let date_len = format_date(now, &mut date_buf);
+                                            let date_len = format_http_date(now, &mut date_buf);
                                             w!(&date_buf[..date_len]);
 
                                             // Pre-baked content-type for common types
@@ -702,7 +557,7 @@ impl Worker {
                                                 pos_err += err_prefix.len();
                                                 
                                                 let mut date_buf = [0u8; 37];
-                                                let date_len = format_date(now, &mut date_buf);
+                                                let date_len = format_http_date(now, &mut date_buf);
                                                 wbuf[pos_err..pos_err + date_len].copy_from_slice(&date_buf[..date_len]);
                                                 pos_err += date_len;
                                                 
