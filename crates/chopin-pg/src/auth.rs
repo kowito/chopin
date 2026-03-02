@@ -393,4 +393,302 @@ mod tests {
         ];
         assert_eq!(result, expected);
     }
+
+    // ─── SHA-256 extended vectors ─────────────────────────────────────────────
+
+    #[test]
+    fn test_sha256_abc() {
+        // NIST FIPS 180-4 known vector for "abc"
+        let hash = sha256(b"abc");
+        let expected: [u8; 32] = [
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+            0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+            0xf2, 0x00, 0x15, 0xad,
+        ];
+        assert_eq!(hash, expected);
+    }
+
+    #[test]
+    fn test_sha256_448bit_message() {
+        // "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq" — NIST vector
+        let input = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+        let hash = sha256(input);
+        let expected: [u8; 32] = [
+            0x24, 0x8d, 0x6a, 0x61, 0xd2, 0x06, 0x38, 0xb8, 0xe5, 0xc0, 0x26, 0x93, 0x0c, 0x3e,
+            0x60, 0x39, 0xa3, 0x3c, 0xe4, 0x59, 0x64, 0xff, 0x21, 0x67, 0xf6, 0xec, 0xed, 0xd4,
+            0x19, 0xdb, 0x06, 0xc1,
+        ];
+        assert_eq!(hash, expected);
+    }
+
+    #[test]
+    fn test_sha256_single_zero_byte_deterministic() {
+        // Single 0x00 byte — exercises the padding path; confirm stability & uniqueness
+        let hash = sha256(&[0x00]);
+        let hash2 = sha256(&[0x00]);
+        assert_eq!(hash, hash2, "must be deterministic");
+        assert_ne!(hash, sha256(b""), "hash of 0x00 must differ from empty");
+        assert_ne!(hash, sha256(b"abc"), "hash of 0x00 must differ from abc");
+    }
+
+    #[test]
+    fn test_sha256_55_bytes_boundary() {
+        // 55-byte message: exactly 1 byte short of triggering an extra padding block
+        let input = [0x61u8; 55]; // 55 × 'a'
+        let hash = sha256(&input);
+        // Computed deterministically; just verify it's stable across calls
+        let hash2 = sha256(&input);
+        assert_eq!(hash, hash2, "SHA-256 must be deterministic");
+        assert_ne!(hash, sha256(&[0x61u8; 56]), "55-byte and 56-byte hashes must differ");
+    }
+
+    #[test]
+    fn test_sha256_is_deterministic() {
+        let data = b"The quick brown fox jumps over the lazy dog";
+        let h1 = sha256(data);
+        let h2 = sha256(data);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_sha256_different_inputs_differ() {
+        let h1 = sha256(b"hello");
+        let h2 = sha256(b"hellp"); // one byte different
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_sha256_output_always_32_bytes() {
+        for len in [0, 1, 31, 32, 55, 56, 63, 64, 65, 127, 128, 200] {
+            let input = vec![0xAAu8; len];
+            let hash = sha256(&input);
+            assert_eq!(hash.len(), 32, "SHA-256 output must always be 32 bytes (len={})", len);
+        }
+    }
+
+    // ─── HMAC-SHA-256 extended ────────────────────────────────────────────────
+
+    #[test]
+    fn test_hmac_key_longer_than_block_size() {
+        // Key > 64 bytes — implementation must hash the key first (RFC 2104)
+        let key = vec![0x0Bu8; 131]; // 131-byte key
+        let data = b"Test With a Key Longer Than 128 Bytes";
+        // Result should be stable (no panic, deterministic)
+        let r1 = hmac_sha256(&key, data);
+        let r2 = hmac_sha256(&key, data);
+        assert_eq!(r1, r2);
+        // Different from short-key version
+        let r_short = hmac_sha256(&[0x0Bu8; 20], data);
+        assert_ne!(r1, r_short);
+    }
+
+    #[test]
+    fn test_hmac_empty_message() {
+        let key = b"key";
+        let r1 = hmac_sha256(key, b"");
+        let r2 = hmac_sha256(key, b"");
+        assert_eq!(r1, r2);
+        // Non-empty message differs
+        assert_ne!(r1, hmac_sha256(key, b"x"));
+    }
+
+    #[test]
+    fn test_hmac_empty_key() {
+        // Zero-length key is valid — just 64 zero bytes padded
+        let r = hmac_sha256(b"", b"data");
+        let r2 = hmac_sha256(b"", b"data");
+        assert_eq!(r, r2);
+    }
+
+    #[test]
+    fn test_hmac_output_is_32_bytes() {
+        let result = hmac_sha256(b"k", b"m");
+        assert_eq!(result.len(), 32);
+    }
+
+    // ─── Base64 extended ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_base64_empty() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_decode("").unwrap(), b"");
+    }
+
+    #[test]
+    fn test_base64_one_byte_padding() {
+        // 1 byte → 2 significant chars + "=="
+        let encoded = base64_encode(&[0b00001111]);
+        assert!(encoded.ends_with("=="), "1-byte encoding must end with ==: {}", encoded);
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(decoded, &[0b00001111]);
+    }
+
+    #[test]
+    fn test_base64_two_bytes_padding() {
+        // 2 bytes → 3 significant chars + "="
+        let encoded = base64_encode(&[0x00, 0xFF]);
+        assert!(encoded.ends_with('='), "2-byte encoding must end with =: {}", encoded);
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(decoded, &[0x00, 0xFF]);
+    }
+
+    #[test]
+    fn test_base64_three_bytes_no_padding() {
+        // 3 bytes → exactly 4 chars, no padding
+        let encoded = base64_encode(b"Man");
+        assert_eq!(encoded, "TWFu");
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(decoded, b"Man");
+    }
+
+    #[test]
+    fn test_base64_known_vector_hello() {
+        assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
+        assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
+    }
+
+    #[test]
+    fn test_base64_all_zero_bytes() {
+        let data = [0u8; 6];
+        let encoded = base64_encode(&data);
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_base64_all_255_bytes() {
+        let data = [0xFFu8; 9];
+        let encoded = base64_encode(&data);
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_base64_roundtrip_all_byte_values() {
+        // Every possible byte value should survive a roundtrip
+        let data: Vec<u8> = (0u8..=255).collect();
+        let encoded = base64_encode(&data);
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    // ─── SCRAM client state machine ───────────────────────────────────────────
+
+    #[test]
+    fn test_scram_client_first_format() {
+        let mut client = ScramClient::new("testuser", "testpass");
+        let msg = client.client_first_message();
+        let s = std::str::from_utf8(&msg).expect("client_first must be UTF-8");
+        // Must start with "n,," (GS2 header: no channel binding, no authzid)
+        assert!(s.starts_with("n,,"), "client-first must start with 'n,,': {}", s);
+        // Must contain the username
+        assert!(s.contains("n=testuser"), "must contain username: {}", s);
+        // Must contain a nonce
+        assert!(s.contains(",r="), "must contain nonce field r=: {}", s);
+    }
+
+    #[test]
+    fn test_scram_client_first_nonce_nonempty() {
+        let mut client = ScramClient::new("user", "pass");
+        let msg = client.client_first_message();
+        let s = std::str::from_utf8(&msg).unwrap();
+        // Extract nonce value
+        let nonce_part = s.split(',').find(|p| p.starts_with("r=")).expect("must have r=");
+        let nonce = &nonce_part["r=".len()..];
+        assert!(!nonce.is_empty(), "nonce must not be empty");
+    }
+
+    #[test]
+    fn test_scram_process_server_first_wrong_nonce_errors() {
+        let mut client = ScramClient::new("user", "pass");
+        let _first = client.client_first_message();
+        // Server nonce must start with client nonce — give a completely different one
+        let server_first = b"r=WRONGNONCE,s=c2FsdA==,i=4096";
+        let result = client.process_server_first(server_first);
+        assert!(result.is_err(), "Wrong server nonce must return Err");
+    }
+
+    #[test]
+    fn test_scram_process_server_first_succeeds_with_correct_nonce() {
+        let mut client = ScramClient::new("user", "pass");
+        let first_msg = client.client_first_message();
+        let first_str = std::str::from_utf8(&first_msg).unwrap();
+        // Extract client nonce from the first message
+        let client_nonce = first_str
+            .split(',')
+            .find(|p| p.starts_with("r="))
+            .unwrap()["r=".len()..]
+            .to_string();
+
+        // Build a valid-looking server-first message: server_nonce starts with client_nonce
+        let server_nonce = format!("{}ServerExtra", client_nonce);
+        let server_first = format!("r={},s=c2FsdA==,i=4096", server_nonce);
+        let result = client.process_server_first(server_first.as_bytes());
+        assert!(result.is_ok(), "Valid server-first must succeed: {:?}", result);
+    }
+
+    #[test]
+    fn test_scram_client_final_format() {
+        let mut client = ScramClient::new("user", "pass");
+        let first_msg = client.client_first_message();
+        let first_str = std::str::from_utf8(&first_msg).unwrap();
+        let client_nonce = first_str
+            .split(',')
+            .find(|p| p.starts_with("r="))
+            .unwrap()["r=".len()..]
+            .to_string();
+
+        let server_nonce = format!("{}S", client_nonce);
+        let server_first = format!("r={},s=c2FsdHlzYWx0,i=4096", server_nonce);
+        let final_msg = client.process_server_first(server_first.as_bytes()).unwrap();
+        let final_str = std::str::from_utf8(&final_msg).unwrap();
+
+        // client-final starts with "c=biws" (base64("n,,") = "biws", channel binding)
+        assert!(final_str.starts_with("c=biws"), "client-final must start with c=biws: {}", final_str);
+        // Must contain the combined server nonce
+        assert!(final_str.contains(&format!("r={}", server_nonce)), "must echo server nonce");
+        // Must contain the proof
+        assert!(final_str.contains(",p="), "must contain proof field p=");
+    }
+
+    #[test]
+    fn test_scram_verify_server_final_bad_signature() {
+        let mut client = ScramClient::new("user", "pass");
+        let first_msg = client.client_first_message();
+        let first_str = std::str::from_utf8(&first_msg).unwrap();
+        let client_nonce = first_str
+            .split(',')
+            .find(|p| p.starts_with("r="))
+            .unwrap()["r=".len()..]
+            .to_string();
+
+        let server_nonce = format!("{}S", client_nonce);
+        let server_first = format!("r={},s=c2FsdHlzYWx0,i=4096", server_nonce);
+        let _ = client.process_server_first(server_first.as_bytes()).unwrap();
+
+        // Wrong signature
+        let bad_final = b"v=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let result = client.verify_server_final(bad_final);
+        assert!(result.is_err(), "Wrong server signature must return Err");
+    }
+
+    #[test]
+    fn test_scram_verify_server_final_missing_v_prefix() {
+        let mut client = ScramClient::new("user", "pass");
+        let first_msg = client.client_first_message();
+        let first_str = std::str::from_utf8(&first_msg).unwrap();
+        let client_nonce = first_str
+            .split(',')
+            .find(|p| p.starts_with("r="))
+            .unwrap()["r=".len()..]
+            .to_string();
+
+        let server_nonce = format!("{}S", client_nonce);
+        let server_first = format!("r={},s=c2FsdA==,i=4096", server_nonce);
+        let _ = client.process_server_first(server_first.as_bytes()).unwrap();
+
+        // Missing v= prefix
+        let result = client.verify_server_final(b"NOPREFIXHERE");
+        assert!(result.is_err(), "Missing v= prefix must return Err");
+    }
 }

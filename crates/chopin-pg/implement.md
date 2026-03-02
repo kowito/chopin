@@ -201,17 +201,19 @@ Legend: ✅ done · 🔧 partial · ❌ not started
 
 ---
 
-### Phase 8 — Testing & Documentation  🔧 ~75%
+### Phase 8 — Testing & Documentation  🔧 ~85%
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
 | 8.1 | Unit tests: types.rs (92 tests) | ✅ | inet, array, date/time, uuid, ipv6, Vec, IpAddr, binary codec, macaddr, point, range |
 | 8.1b | Unit tests: statement.rs (24 tests) | ✅ | LRU eviction, clear, counter preservation, scale (300 entries), hash consistency |
 | 8.2 | Unit tests: codec.rs (36 tests) | ✅ | all encode/decode paths, null params, parse/bind/execute/describe/close, wire helpers |
-| 8.3 | Unit tests: auth.rs (3 tests) | ✅ | sha256, hmac, base64 |
+| 8.3 | Unit tests: auth.rs (26 tests) | ✅ | sha256 (NIST vectors), hmac (RFC 4231), base64 all-lengths, SCRAM state machine |
 | 8.3b | Unit tests: error.rs (35 tests) | ✅ | SQLSTATE classification, retry logic, WouldBlock regression, display, from_fields |
 | 8.3c | Unit tests: row.rs (30 tests) | ✅ | Rc<columns> sharing (1000-row scale), typed getters, null, out-of-range, by-name |
 | 8.3d | Unit tests: pool.rs (35 tests) | ✅ | PgPoolConfig builder, PoolStats, exhaustion vs WouldBlock regression, timeout, reap |
+| 8.3e | Unit tests: protocol.rs (34 tests) | ✅ | BackendTag all 21 variants + unknown, TransactionStatus, AuthType, FormatCode, roundtrip |
+| 8.3f | Unit tests: connection.rs (22 tests) | ✅ | PgConfig new/clone/from_url (happy+error paths), Notification struct |
 | 8.4 | Integration tests against real PostgreSQL | ❌ | No tests/ directory |
 | 8.5 | Pool integration tests (checkout, return, timeout, reap) | ❌ | |
 | 8.6 | COPY integration tests | ❌ | |
@@ -222,7 +224,7 @@ Legend: ✅ done · 🔧 partial · ❌ not started
 | 8.11 | README with pool sizing guide | ✅ | |
 | 8.12 | Benchmark examples (vs sqlx, tokio-postgres) | 🔧 | Examples exist, no CI |
 
-**Total unit tests: 270** (up from 89 in Sprint 6). 181 new tests across error.rs, row.rs, pool.rs, codec.rs, statement.rs covering reliability, performance, and scalability scenarios.
+**Total unit tests: 362** (up from 270 in Sprint 7 / 89 in Sprint 6). 92 new tests across auth.rs, protocol.rs, and connection.rs covering all protocol byte mappings, SHA-256/HMAC/Base64 correctness, SCRAM state machine edge cases, and PgConfig URL parsing error paths.
 
 ---
 

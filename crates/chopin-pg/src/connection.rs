@@ -1707,3 +1707,189 @@ impl<'a> CopyReader<'a> {
         self.done
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── PgConfig::new ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pgconfig_new_fields() {
+        let cfg = PgConfig::new("db.example.com", 5432, "alice", "s3cret", "mydb");
+        assert_eq!(cfg.host, "db.example.com");
+        assert_eq!(cfg.port, 5432);
+        assert_eq!(cfg.user, "alice");
+        assert_eq!(cfg.password, "s3cret");
+        assert_eq!(cfg.database, "mydb");
+        assert!(cfg.socket_dir.is_none());
+    }
+
+    #[test]
+    fn test_pgconfig_new_custom_port() {
+        let cfg = PgConfig::new("host", 9999, "u", "p", "d");
+        assert_eq!(cfg.port, 9999);
+    }
+
+    #[test]
+    fn test_pgconfig_with_socket_dir_sets_field() {
+        let cfg = PgConfig::new("localhost", 5432, "u", "p", "d")
+            .with_socket_dir("/var/run/postgresql");
+        assert_eq!(cfg.socket_dir.as_deref(), Some("/var/run/postgresql"));
+    }
+
+    #[test]
+    fn test_pgconfig_clone_preserves_all_fields() {
+        let cfg = PgConfig::new("h", 1234, "u", "p", "db")
+            .with_socket_dir("/tmp");
+        let cloned = cfg.clone();
+        assert_eq!(cloned.host, "h");
+        assert_eq!(cloned.port, 1234);
+        assert_eq!(cloned.user, "u");
+        assert_eq!(cloned.password, "p");
+        assert_eq!(cloned.database, "db");
+        assert_eq!(cloned.socket_dir, Some("/tmp".to_string()));
+    }
+
+    #[test]
+    fn test_pgconfig_debug_contains_host() {
+        let cfg = PgConfig::new("myhost", 5432, "u", "p", "d");
+        let s = format!("{:?}", cfg);
+        assert!(s.contains("myhost"), "Debug must include host: {}", s);
+    }
+
+    // ─── PgConfig::from_url — happy paths ────────────────────────────────────
+
+    #[test]
+    fn test_from_url_basic_postgres_scheme() {
+        let cfg = PgConfig::from_url("postgres://bob:hunter2@dbhost:5432/appdb").unwrap();
+        assert_eq!(cfg.host, "dbhost");
+        assert_eq!(cfg.port, 5432);
+        assert_eq!(cfg.user, "bob");
+        assert_eq!(cfg.password, "hunter2");
+        assert_eq!(cfg.database, "appdb");
+        assert!(cfg.socket_dir.is_none());
+    }
+
+    #[test]
+    fn test_from_url_postgresql_scheme() {
+        let cfg = PgConfig::from_url("postgresql://u:p@host:5432/db").unwrap();
+        assert_eq!(cfg.host, "host");
+        assert_eq!(cfg.user, "u");
+    }
+
+    #[test]
+    fn test_from_url_default_port() {
+        // When no port is given, should default to 5432
+        let cfg = PgConfig::from_url("postgres://u:p@myhost/mydb").unwrap();
+        assert_eq!(cfg.port, 5432);
+        assert_eq!(cfg.host, "myhost");
+    }
+
+    #[test]
+    fn test_from_url_no_password() {
+        // user only, no colon → password is empty string
+        let cfg = PgConfig::from_url("postgres://alice@host:5432/db").unwrap();
+        assert_eq!(cfg.user, "alice");
+        assert_eq!(cfg.password, "");
+    }
+
+    #[test]
+    fn test_from_url_custom_port() {
+        let cfg = PgConfig::from_url("postgres://u:p@host:9000/db").unwrap();
+        assert_eq!(cfg.port, 9000);
+    }
+
+    #[test]
+    fn test_from_url_unix_socket_query_param() {
+        let cfg = PgConfig::from_url("postgres://u:p@/db?host=/var/run/postgresql").unwrap();
+        assert_eq!(cfg.socket_dir.as_deref(), Some("/var/run/postgresql"));
+        assert_eq!(cfg.database, "db");
+    }
+
+    #[test]
+    fn test_from_url_unix_socket_percent_encoded() {
+        let cfg = PgConfig::from_url("postgres://u:p@%2Fvar%2Frun%2Fpostgresql/db").unwrap();
+        assert_eq!(cfg.socket_dir.as_deref(), Some("/var/run/postgresql"));
+        assert_eq!(cfg.database, "db");
+    }
+
+    // ─── PgConfig::from_url — error paths ────────────────────────────────────
+
+    #[test]
+    fn test_from_url_invalid_scheme_errors() {
+        let result = PgConfig::from_url("mysql://u:p@host/db");
+        assert!(result.is_err(), "Non-postgres scheme must fail");
+    }
+
+    #[test]
+    fn test_from_url_missing_at_symbol_errors() {
+        let result = PgConfig::from_url("postgres://no-at-sign/db");
+        assert!(result.is_err(), "URL without @ must fail");
+    }
+
+    #[test]
+    fn test_from_url_missing_database_errors() {
+        // No "/" after host — no database segment
+        let result = PgConfig::from_url("postgres://u:p@host");
+        assert!(result.is_err(), "URL without database must fail");
+    }
+
+    #[test]
+    fn test_from_url_invalid_port_errors() {
+        let result = PgConfig::from_url("postgres://u:p@host:notaport/db");
+        assert!(result.is_err(), "Non-numeric port must fail");
+    }
+
+    #[test]
+    fn test_from_url_empty_string_errors() {
+        let result = PgConfig::from_url("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_url_special_chars_in_password() {
+        // Passwords with @ in them need proper URL encoding, but basic case works
+        let cfg = PgConfig::from_url("postgres://user:p%40ss@host:5432/db");
+        // Parser finds last @ — this might fail or partially parse; just verify no panic
+        let _ = cfg; // result can be Ok or Err, but must not panic
+    }
+
+    // ─── Notification struct ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_notification_fields() {
+        let n = Notification {
+            process_id: 12345,
+            channel: "my_channel".to_string(),
+            payload: "hello world".to_string(),
+        };
+        assert_eq!(n.process_id, 12345);
+        assert_eq!(n.channel, "my_channel");
+        assert_eq!(n.payload, "hello world");
+    }
+
+    #[test]
+    fn test_notification_clone() {
+        let n = Notification {
+            process_id: 42,
+            channel: "ch".to_string(),
+            payload: "pay".to_string(),
+        };
+        let n2 = n.clone();
+        assert_eq!(n2.process_id, n.process_id);
+        assert_eq!(n2.channel, n.channel);
+        assert_eq!(n2.payload, n.payload);
+    }
+
+    #[test]
+    fn test_notification_debug() {
+        let n = Notification {
+            process_id: 1,
+            channel: "c".to_string(),
+            payload: "p".to_string(),
+        };
+        let s = format!("{:?}", n);
+        assert!(s.contains("process_id"), "Debug must include process_id: {}", s);
+    }
+}
