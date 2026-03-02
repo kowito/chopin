@@ -293,6 +293,21 @@ pub fn encode_copy_done(buf: &mut [u8]) -> usize {
     5
 }
 
+/// Encode a CopyFail message ('f').
+///
+/// Sent by the frontend to abort a COPY FROM STDIN operation.
+/// The `reason` string is included in the server's error response.
+pub fn encode_copy_fail(buf: &mut [u8], reason: &str) -> usize {
+    let mut pos = 0;
+    buf[pos] = b'f';
+    pos += 1;
+    let len = 4 + reason.len() + 1;
+    put_i32(buf, pos, len as i32);
+    pos += 4;
+    pos += put_cstring(buf, pos, reason);
+    pos
+}
+
 // ─── Decoding (Server → Frontend) ─────────────────────────────
 
 /// A decoded backend message header.
@@ -314,11 +329,16 @@ pub fn decode_header(buf: &[u8]) -> Option<MessageHeader> {
 }
 
 /// Check if a complete message is available in `buf`.
+/// Returns `None` if not enough data, or if the message exceeds MAX_MESSAGE_SIZE.
 pub fn message_complete(buf: &[u8]) -> Option<usize> {
     if buf.len() < 5 {
         return None;
     }
     let length = read_u32(buf, 1) as usize;
+    // Reject messages that exceed our safety limit
+    if length > MAX_MESSAGE_SIZE {
+        return None;
+    }
     let total = 1 + length; // tag + length-included body
     if buf.len() >= total {
         Some(total)
@@ -473,6 +493,7 @@ fn put_cstring(buf: &mut [u8], offset: usize, s: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{BackendTag, CloseTarget, DescribeTarget, FormatCode};
 
     #[test]
     fn test_startup_encoding() {
@@ -505,5 +526,383 @@ mod tests {
         let msg = [b'Z', 0, 0, 0, 5, b'I'];
         assert_eq!(message_complete(&msg), Some(6));
         assert_eq!(message_complete(&msg[..4]), None); // incomplete
+    }
+
+    #[test]
+    fn test_message_complete_rejects_oversized() {
+        // Length field = MAX_MESSAGE_SIZE + 1 → should return None
+        let huge_len = (MAX_MESSAGE_SIZE + 1) as u32;
+        let mut msg = [0u8; 6];
+        msg[0] = b'D';
+        msg[1..5].copy_from_slice(&huge_len.to_be_bytes());
+        assert_eq!(message_complete(&msg), None);
+    }
+
+    #[test]
+    fn test_copy_fail_encoding() {
+        let mut buf = [0u8; 256];
+        let n = encode_copy_fail(&mut buf, "abort test");
+        assert_eq!(buf[0], b'f');
+        // length = 4 + len("abort test") + 1 = 15
+        assert_eq!(read_i32(&buf, 1), 15);
+        assert_eq!(n, 1 + 15); // tag + length-included body
+    }
+
+    // ─── Extended Query Protocol Encoding ────────────────────────────────────
+
+    #[test]
+    fn test_parse_encoding_tag_and_name() {
+        let mut buf = [0u8; 256];
+        let n = encode_parse(&mut buf, "s0", "SELECT $1", &[23]); // 23 = INT4 OID
+        assert!(n > 0);
+        assert_eq!(buf[0], b'P');
+        // cstring "s0\0SELECT $1\0" + i16(1) + i32(23)
+        // length = 4 + 3 + 10 + 2 + 4 = 23
+        let length = read_i32(&buf, 1);
+        assert_eq!(length as usize, n - 1); // length field excludes the tag byte
+        assert!(n < 256, "shouldn't exceed buffer");
+    }
+
+    #[test]
+    fn test_parse_encoding_anonymous_no_oids() {
+        let mut buf = [0u8; 128];
+        let n = encode_parse(&mut buf, "", "SELECT 1", &[]);
+        assert_eq!(buf[0], b'P');
+        assert!(n > 5);
+    }
+
+    #[test]
+    fn test_bind_encoding_no_params() {
+        let mut buf = [0u8; 256];
+        let n = encode_bind(&mut buf, "", "s0", &[], &[], &[1]); // binary results
+        assert_eq!(buf[0], b'B');
+        let length = read_i32(&buf, 1) as usize;
+        assert_eq!(length, n - 1);
+        // result format count should be 1
+        // find it: after portal(""\0) + stmt("s0\0") + param_format_count(i16) + param_count(i16)
+        // = 1 + 3 + 2 + 2 = 8 bytes after tag+length
+        let result_format_count = read_i16(&buf, 1 + 4 + 1 + 3 + 2 + 2);
+        assert_eq!(result_format_count, 1);
+    }
+
+    #[test]
+    fn test_bind_encoding_null_param() {
+        let mut buf = [0u8; 256];
+        let n = encode_bind(&mut buf, "", "s0", &[0], &[None], &[]);
+        assert_eq!(buf[0], b'B');
+        assert!(n > 5);
+        // The NULL param should encode -1 as i32
+        // Layout: tag(1) + len(4) + portal(""\0=1) + stmt("s0\0"=3)
+        //       + param_fmt_cnt(2) + 1 fmt_code(2) + param_val_cnt(2) = 15
+        let null_marker = read_i32(&buf, 15);
+        assert_eq!(null_marker, -1, "NULL param must encode as -1");
+    }
+
+    #[test]
+    fn test_bind_encoding_with_text_param() {
+        let mut buf = [0u8; 256];
+        let value = b"hello";
+        let n = encode_bind(&mut buf, "", "s0", &[0], &[Some(value)], &[]);
+        assert_eq!(buf[0], b'B');
+        assert!(n > 5);
+    }
+
+    #[test]
+    fn test_execute_encoding() {
+        let mut buf = [0u8; 64];
+        let n = encode_execute(&mut buf, "", 0); // unlimited rows
+        assert_eq!(buf[0], b'E');
+        let length = read_i32(&buf, 1) as usize;
+        assert_eq!(length, n - 1);
+        // max_rows = 0 is at the end
+        let max_rows = read_i32(&buf, n - 4);
+        assert_eq!(max_rows, 0);
+    }
+
+    #[test]
+    fn test_execute_encoding_with_max_rows() {
+        let mut buf = [0u8; 64];
+        let n = encode_execute(&mut buf, "", 100);
+        assert_eq!(buf[0], b'E');
+        let max_rows = read_i32(&buf, n - 4);
+        assert_eq!(max_rows, 100);
+    }
+
+    #[test]
+    fn test_describe_statement_encoding() {
+        let mut buf = [0u8; 64];
+        let n = encode_describe(&mut buf, DescribeTarget::Statement, "s0");
+        assert_eq!(buf[0], b'D');
+        let length = read_i32(&buf, 1) as usize;
+        assert_eq!(length, n - 1);
+        // Target byte: 'S' for Statement
+        assert_eq!(buf[5], b'S');
+        // Statement name 's0\0' starts at offset 6
+        assert_eq!(&buf[6..9], b"s0\0");
+    }
+
+    #[test]
+    fn test_describe_portal_encoding() {
+        let mut buf = [0u8; 64];
+        let n = encode_describe(&mut buf, DescribeTarget::Portal, "myportal");
+        assert_eq!(buf[0], b'D');
+        assert_eq!(buf[5], b'P');
+        assert!(n > 5);
+    }
+
+    #[test]
+    fn test_close_statement_encoding() {
+        let mut buf = [0u8; 64];
+        let n = encode_close(&mut buf, CloseTarget::Statement, "s7");
+        assert_eq!(buf[0], b'C');
+        let length = read_i32(&buf, 1) as usize;
+        assert_eq!(length, n - 1);
+        assert_eq!(buf[5], b'S');
+        assert_eq!(&buf[6..9], b"s7\0");
+    }
+
+    #[test]
+    fn test_close_portal_encoding() {
+        let mut buf = [0u8; 64];
+        let n = encode_close(&mut buf, CloseTarget::Portal, "");
+        assert_eq!(buf[0], b'C');
+        assert_eq!(buf[5], b'P');
+        assert!(n > 0);
+    }
+
+    #[test]
+    fn test_terminate_encoding() {
+        let mut buf = [0u8; 8];
+        let n = encode_terminate(&mut buf);
+        assert_eq!(n, 5);
+        assert_eq!(buf[0], b'X');
+        assert_eq!(read_i32(&buf, 1), 4);
+    }
+
+    #[test]
+    fn test_flush_encoding() {
+        let mut buf = [0u8; 8];
+        let n = encode_flush(&mut buf);
+        assert_eq!(n, 5);
+        assert_eq!(buf[0], b'H');
+        assert_eq!(read_i32(&buf, 1), 4);
+    }
+
+    #[test]
+    fn test_copy_data_encoding() {
+        let mut buf = [0u8; 64];
+        let data = b"col1\tcol2\n";
+        let n = encode_copy_data(&mut buf, data);
+        assert_eq!(buf[0], b'd');
+        let length = read_i32(&buf, 1) as usize;
+        assert_eq!(length, 4 + data.len());
+        assert_eq!(n, 1 + length);
+        assert_eq!(&buf[5..5 + data.len()], data);
+    }
+
+    #[test]
+    fn test_copy_done_encoding() {
+        let mut buf = [0u8; 8];
+        let n = encode_copy_done(&mut buf);
+        assert_eq!(n, 5);
+        assert_eq!(buf[0], b'c');
+        assert_eq!(read_i32(&buf, 1), 4);
+    }
+
+    // ─── Decoding ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_decode_header_basic() {
+        let msg = [b'Z', 0, 0, 0, 5, b'I']; // ReadyForQuery
+        let hdr = decode_header(&msg).unwrap();
+        assert_eq!(hdr.tag, BackendTag::ReadyForQuery);
+        assert_eq!(hdr.length, 5);
+    }
+
+    #[test]
+    fn test_decode_header_too_short() {
+        let msg = [b'Z', 0, 0]; // only 3 bytes
+        assert!(decode_header(&msg).is_none());
+    }
+
+    #[test]
+    fn test_message_complete_exact_size() {
+        // tag(1) + len(4) = 5-byte header, body = 1 byte → total = 6
+        let msg = [b'Z', 0, 0, 0, 5, b'I'];
+        assert_eq!(message_complete(&msg), Some(6));
+    }
+
+    #[test]
+    fn test_message_complete_one_byte_short() {
+        let msg = [b'Z', 0, 0, 0, 5]; // header says 5 bytes body, but we only have 4 (no body)
+        assert_eq!(message_complete(&msg), None);
+    }
+
+    #[test]
+    fn test_message_complete_needs_exactly_5_bytes() {
+        // 4 bytes → None
+        assert_eq!(message_complete(&[b'Z', 0, 0, 0]), None);
+        // 5 bytes with length=4 (empty body) → Some(5)
+        let msg = [b'C', 0, 0, 0, 4]; // CommandComplete with no text
+        assert_eq!(message_complete(&msg), Some(5));
+    }
+
+    #[test]
+    fn test_message_complete_large_but_valid_payload() {
+        // Build a 10-byte payload message
+        let payload = [0u8; 10];
+        let mut msg = vec![b'D', 0, 0, 0, 14]; // length = 4 + 10 = 14
+        msg.extend_from_slice(&payload);
+        assert_eq!(message_complete(&msg), Some(15)); // 1 + 14
+    }
+
+    #[test]
+    fn test_parse_data_row_all_non_null() {
+        // DataRow with 2 columns: "hello" and "42"
+        // Format: i16(num_cols) | i32(len1) bytes1 | i32(len2) bytes2
+        let mut body = vec![];
+        body.extend_from_slice(&2i16.to_be_bytes()); // 2 columns
+        body.extend_from_slice(&5i32.to_be_bytes()); // col0 len = 5
+        body.extend_from_slice(b"hello");
+        body.extend_from_slice(&2i32.to_be_bytes()); // col1 len = 2
+        body.extend_from_slice(b"42");
+        let cols = parse_data_row(&body);
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0], Some(b"hello" as &[u8]));
+        assert_eq!(cols[1], Some(b"42" as &[u8]));
+    }
+
+    #[test]
+    fn test_parse_data_row_with_null() {
+        // DataRow with 2 columns: NULL and "value"
+        let mut body = vec![];
+        body.extend_from_slice(&2i16.to_be_bytes());
+        body.extend_from_slice(&(-1i32).to_be_bytes()); // NULL
+        body.extend_from_slice(&5i32.to_be_bytes());
+        body.extend_from_slice(b"value");
+        let cols = parse_data_row(&body);
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0], None);
+        assert_eq!(cols[1], Some(b"value" as &[u8]));
+    }
+
+    #[test]
+    fn test_parse_data_row_empty_row() {
+        let mut body = vec![];
+        body.extend_from_slice(&0i16.to_be_bytes()); // 0 columns
+        let cols = parse_data_row(&body);
+        assert_eq!(cols.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_row_description_single_column() {
+        // Build a RowDescription body for 1 column "id" INT4 (OID=23, size=4)
+        let mut body = vec![];
+        body.extend_from_slice(&1i16.to_be_bytes()); // num_fields = 1
+        body.extend_from_slice(b"id\0"); // name + null terminator
+        body.extend_from_slice(&0i32.to_be_bytes()); // table_oid = 0
+        body.extend_from_slice(&0i16.to_be_bytes()); // col_attr = 0
+        body.extend_from_slice(&23i32.to_be_bytes()); // type_oid = INT4
+        body.extend_from_slice(&4i16.to_be_bytes()); // type_size = 4
+        body.extend_from_slice(&(-1i32).to_be_bytes()); // type_modifier = -1
+        body.extend_from_slice(&0i16.to_be_bytes()); // format_code = text
+        let cols = parse_row_description(&body);
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].name, "id");
+        assert_eq!(cols[0].type_oid, 23);
+        assert_eq!(cols[0].type_size, 4);
+        assert!(matches!(cols[0].format_code, FormatCode::Text));
+    }
+
+    #[test]
+    fn test_parse_row_description_binary_format() {
+        let mut body = vec![];
+        body.extend_from_slice(&1i16.to_be_bytes());
+        body.extend_from_slice(b"score\0");
+        body.extend_from_slice(&0i32.to_be_bytes());
+        body.extend_from_slice(&0i16.to_be_bytes());
+        body.extend_from_slice(&701i32.to_be_bytes()); // FLOAT8 OID
+        body.extend_from_slice(&8i16.to_be_bytes());
+        body.extend_from_slice(&(-1i32).to_be_bytes());
+        body.extend_from_slice(&1i16.to_be_bytes()); // format = binary
+        let cols = parse_row_description(&body);
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].name, "score");
+        assert!(matches!(cols[0].format_code, FormatCode::Binary));
+    }
+
+    #[test]
+    fn test_parse_error_fields_basic() {
+        // Severity='S', Code='C', Message='M', terminator='\0'
+        let mut body = vec![];
+        body.push(b'S');
+        body.extend_from_slice(b"ERROR\0");
+        body.push(b'C');
+        body.extend_from_slice(b"42601\0");
+        body.push(b'M');
+        body.extend_from_slice(b"syntax error\0");
+        body.push(0); // terminator
+        let fields = parse_error_fields(&body);
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0], (b'S', "ERROR".to_string()));
+        assert_eq!(fields[1], (b'C', "42601".to_string()));
+        assert_eq!(fields[2], (b'M', "syntax error".to_string()));
+    }
+
+    #[test]
+    fn test_parse_error_fields_empty() {
+        let body = [0u8]; // just the terminator
+        let fields = parse_error_fields(&body);
+        assert!(fields.is_empty());
+    }
+
+    // ─── Helper read functions ────────────────────────────────────────────────
+
+    #[test]
+    fn test_read_i32_big_endian() {
+        let buf = [0x00, 0x01, 0x86, 0xA0u8]; // 100000
+        assert_eq!(read_i32(&buf, 0), 100_000);
+    }
+
+    #[test]
+    fn test_read_i32_negative() {
+        let buf = (-1i32).to_be_bytes();
+        assert_eq!(read_i32(&buf, 0), -1);
+    }
+
+    #[test]
+    fn test_read_i16() {
+        let buf = [0x01, 0x00u8]; // 256
+        assert_eq!(read_i16(&buf, 0), 256);
+    }
+
+    #[test]
+    fn test_read_u32() {
+        let buf = 0xFF_FF_FF_FFu32.to_be_bytes();
+        assert_eq!(read_u32(&buf, 0), 0xFF_FF_FF_FF);
+    }
+
+    #[test]
+    fn test_read_cstring_normal() {
+        let buf = b"hello\0world";
+        let (s, consumed) = read_cstring(buf, 0);
+        assert_eq!(s, "hello");
+        assert_eq!(consumed, 6); // 5 chars + null
+    }
+
+    #[test]
+    fn test_read_cstring_empty() {
+        let buf = b"\0rest";
+        let (s, consumed) = read_cstring(buf, 0);
+        assert_eq!(s, "");
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn test_read_cstring_with_offset() {
+        let buf = b"skip\0name\0";
+        let (s, consumed) = read_cstring(buf, 5);
+        assert_eq!(s, "name");
+        assert_eq!(consumed, 5); // 4 chars + null
     }
 }

@@ -18,7 +18,7 @@ fn test_orm_crud() {
     let mut pool = PgPool::connect(config, 1).unwrap();
 
     {
-        let conn = pool.get().unwrap();
+        let mut conn = pool.get().unwrap();
         // Setup table
         conn.execute(
             "CREATE TABLE IF NOT EXISTS orm_users (
@@ -105,7 +105,7 @@ fn test_exhaustive_types() {
     let mut pool = PgPool::connect(config, 1).unwrap();
 
     {
-        let conn = pool.get().unwrap();
+        let mut conn = pool.get().unwrap();
         conn.execute(
             "CREATE TABLE IF NOT EXISTS orm_all_types (
                 id BIGSERIAL PRIMARY KEY,
@@ -180,7 +180,7 @@ fn test_transactions() {
     let mut pool = PgPool::connect(config, 1).unwrap();
 
     {
-        let conn = pool.get().unwrap();
+        let mut conn = pool.get().unwrap();
         conn.execute(
             "CREATE TABLE IF NOT EXISTS orm_tx (
                 id SERIAL PRIMARY KEY,
@@ -195,8 +195,8 @@ fn test_transactions() {
 
     // 1. Commit Test
     {
-        let pg_conn = pool.get().unwrap();
-        let mut tx = chopin_orm::Transaction::begin(pg_conn).unwrap();
+        let mut pg_conn = pool.get().unwrap();
+        let mut tx = chopin_orm::Transaction::begin(&mut pg_conn).unwrap();
         let mut model1 = TxModel {
             id: 0,
             name: "Commit Me".to_string(),
@@ -210,8 +210,8 @@ fn test_transactions() {
 
     // 2. Rollback Test
     {
-        let pg_conn2 = pool.get().unwrap();
-        let mut tx2 = chopin_orm::Transaction::begin(pg_conn2).unwrap();
+        let mut pg_conn2 = pool.get().unwrap();
+        let mut tx2 = chopin_orm::Transaction::begin(&mut pg_conn2).unwrap();
         let mut model2 = TxModel {
             id: 0,
             name: "Rollback Me".to_string(),
@@ -246,7 +246,7 @@ fn test_advanced_queries() {
     let mut pool = PgPool::connect(config, 1).unwrap();
 
     {
-        let conn = pool.get().unwrap();
+        let mut conn = pool.get().unwrap();
         conn.execute(
             "CREATE TABLE IF NOT EXISTS orm_adv (
                 id SERIAL PRIMARY KEY,

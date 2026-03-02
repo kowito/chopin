@@ -6,6 +6,7 @@
 pub use chopin_orm_macro::Model;
 pub use chopin_pg::{
     PgResult, Row, connection::PgConnection, error::PgError, pool::PgPool, types::PgValue,
+    types::ToSql,
 };
 
 pub mod builder;
@@ -14,12 +15,12 @@ pub mod error;
 pub use error::{OrmError, OrmResult};
 
 pub trait Executor {
-    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToParam])
+    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToSql])
     -> OrmResult<u64>;
     fn query(
         &mut self,
         query: &str,
-        params: &[&dyn chopin_pg::types::ToParam],
+        params: &[&dyn chopin_pg::types::ToSql],
     ) -> OrmResult<Vec<Row>>;
 }
 
@@ -27,7 +28,7 @@ impl Executor for PgPool {
     fn execute(
         &mut self,
         query: &str,
-        params: &[&dyn chopin_pg::types::ToParam],
+        params: &[&dyn chopin_pg::types::ToSql],
     ) -> OrmResult<u64> {
         self.get()
             .map_err(OrmError::from)?
@@ -38,7 +39,7 @@ impl Executor for PgPool {
     fn query(
         &mut self,
         query: &str,
-        params: &[&dyn chopin_pg::types::ToParam],
+        params: &[&dyn chopin_pg::types::ToSql],
     ) -> OrmResult<Vec<Row>> {
         self.get()
             .map_err(OrmError::from)?
@@ -72,7 +73,7 @@ impl<'a> Executor for Transaction<'a> {
     fn execute(
         &mut self,
         query: &str,
-        params: &[&dyn chopin_pg::types::ToParam],
+        params: &[&dyn chopin_pg::types::ToSql],
     ) -> OrmResult<u64> {
         self.conn.execute(query, params).map_err(OrmError::from)
     }
@@ -80,7 +81,7 @@ impl<'a> Executor for Transaction<'a> {
     fn query(
         &mut self,
         query: &str,
-        params: &[&dyn chopin_pg::types::ToParam],
+        params: &[&dyn chopin_pg::types::ToSql],
     ) -> OrmResult<Vec<Row>> {
         self.conn.query(query, params).map_err(OrmError::from)
     }
@@ -120,7 +121,7 @@ pub trait Model: FromRow + Sized + Send + Sync {
             Self::primary_key_column()
         );
 
-        let params: Vec<&dyn chopin_pg::types::ToParam> =
+        let params: Vec<&dyn chopin_pg::types::ToSql> =
             final_values.iter().map(|v| v as _).collect();
 
         // We know we inserted one row, get returning pk.
@@ -169,7 +170,7 @@ pub trait Model: FromRow + Sized + Send + Sync {
             set_clauses.join(", ")
         );
 
-        let params: Vec<&dyn chopin_pg::types::ToParam> =
+        let params: Vec<&dyn chopin_pg::types::ToSql> =
             final_values.iter().map(|v| v as _).collect();
 
         // We know we inserted/updated one row, get returning pk.
@@ -214,7 +215,7 @@ pub trait Model: FromRow + Sized + Send + Sync {
         let pk_val = values.remove(pk_idx);
         values.push(pk_val); // Put PK at the end (for WHERE clause)
 
-        let params: Vec<&dyn chopin_pg::types::ToParam> = values.iter().map(|v| v as _).collect();
+        let params: Vec<&dyn chopin_pg::types::ToSql> = values.iter().map(|v| v as _).collect();
         executor.execute(&query, &params)?;
         Ok(())
     }

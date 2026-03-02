@@ -30,6 +30,16 @@
 			"command": "cargo fmt",
 			"group": "build",
 			"label": "rust: cargo format"
+		},
+		{
+			"label": "test chopin-pg only",
+			"type": "shell",
+			"command": "cargo test -p chopin-pg --lib"
+		},
+		{
+			"label": "test chopin-pg sprint3",
+			"type": "shell",
+			"command": "cargo test -p chopin-pg --lib 2>&1; echo EXIT_CODE=$?"
 		}
 	]
 }

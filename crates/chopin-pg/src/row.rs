@@ -1,20 +1,25 @@
 //! Zero-copy row abstraction for query results.
 
+use std::rc::Rc;
+
 use crate::codec::ColumnDesc;
 use crate::error::{PgError, PgResult};
 use crate::protocol::FormatCode;
-use crate::types::PgValue;
+use crate::types::{FromSql, PgValue};
 
 /// A row returned from a query. Contains column descriptions and raw data.
+///
+/// Column descriptors are shared via `Rc` across all rows in a result set,
+/// avoiding expensive deep clones on every `DataRow` message.
 #[derive(Debug)]
 pub struct Row {
-    columns: Vec<ColumnDesc>,
+    columns: Rc<Vec<ColumnDesc>>,
     values: Vec<Option<Vec<u8>>>,
 }
 
 impl Row {
-    /// Create a new row from column descriptions and raw column data.
-    pub fn new(columns: Vec<ColumnDesc>, raw_values: Vec<Option<&[u8]>>) -> Self {
+    /// Create a new row from shared column descriptions and raw column data.
+    pub fn new(columns: Rc<Vec<ColumnDesc>>, raw_values: Vec<Option<&[u8]>>) -> Self {
         let values = raw_values
             .into_iter()
             .map(|v| v.map(|d| d.to_vec()))
@@ -59,6 +64,24 @@ impl Row {
             .position(|c| c.name == name)
             .ok_or_else(|| PgError::TypeConversion(format!("Column '{}' not found", name)))?;
         self.get(index)
+    }
+
+    /// Get a typed value by column index using the `FromSql` trait.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let name: String = row.get_typed(0)?;
+    /// let age: Option<i32> = row.get_typed(1)?;
+    /// ```
+    pub fn get_typed<T: FromSql>(&self, index: usize) -> PgResult<T> {
+        let value = self.get(index)?;
+        T::from_sql(&value)
+    }
+
+    /// Get a typed value by column name using the `FromSql` trait.
+    pub fn get_typed_by_name<T: FromSql>(&self, name: &str) -> PgResult<T> {
+        let value = self.get_by_name(name)?;
+        T::from_sql(&value)
     }
 
     /// Get a column as a string (text representation).
@@ -132,8 +155,370 @@ impl Row {
         }
     }
 
+    /// Get a column as a UUID string (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
+    pub fn get_uuid(&self, index: usize) -> PgResult<Option<[u8; 16]>> {
+        match self.get(index)? {
+            PgValue::Null => Ok(None),
+            PgValue::Uuid(bytes) => Ok(Some(bytes)),
+            _ => Err(PgError::TypeConversion(
+                "Cannot convert to UUID".to_string(),
+            )),
+        }
+    }
+
     /// Get column descriptions.
     pub fn columns(&self) -> &[ColumnDesc] {
         &self.columns
+    }
+
+    /// Get a column name by index.
+    pub fn column_name(&self, index: usize) -> Option<&str> {
+        self.columns.get(index).map(|c| c.name.as_str())
+    }
+
+    /// Find a column index by name.
+    pub fn column_index(&self, name: &str) -> Option<usize> {
+        self.columns.iter().position(|c| c.name == name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::rc::Rc;
+    use crate::codec::ColumnDesc;
+    use crate::error::{PgError, PgResult};
+    use crate::protocol::FormatCode;
+    use crate::types::PgValue;
+
+    // OID constants (text format values are parsed the same as DB text protocol)
+    const OID_TEXT: u32 = 25;
+    const OID_INT4: u32 = 23;
+    const OID_INT8: u32 = 20;
+    const OID_BOOL: u32 = 16;
+    const OID_FLOAT8: u32 = 701;
+
+    fn col(name: &str, type_oid: u32) -> ColumnDesc {
+        ColumnDesc {
+            name: name.to_string(),
+            table_oid: 0,
+            col_attr: 0,
+            type_oid,
+            type_size: -1,
+            type_modifier: -1,
+            format_code: FormatCode::Text,
+        }
+    }
+
+    fn make_row(cols: &[(&str, u32)], vals: &[Option<&[u8]>]) -> Row {
+        let descs = Rc::new(cols.iter().map(|(n, o)| col(n, *o)).collect::<Vec<_>>());
+        Row::new(descs, vals.to_vec())
+    }
+
+    // ─── Structural ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_row_len_two_columns() {
+        let row = make_row(&[("name", OID_TEXT), ("age", OID_INT4)], &[Some(b"alice"), Some(b"30")]);
+        assert_eq!(row.len(), 2);
+        assert!(!row.is_empty());
+    }
+
+    #[test]
+    fn test_row_empty_columns() {
+        let row = Row::new(Rc::new(vec![]), vec![]);
+        assert_eq!(row.len(), 0);
+        assert!(row.is_empty());
+    }
+
+    #[test]
+    fn test_row_len_matches_column_count() {
+        let row = make_row(
+            &[("a", OID_TEXT), ("b", OID_INT4), ("c", OID_BOOL)],
+            &[Some(b"x"), Some(b"1"), Some(b"t")],
+        );
+        assert_eq!(row.len(), row.columns().len());
+    }
+
+    // ─── get() by index ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_text_value() {
+        let row = make_row(&[("name", OID_TEXT)], &[Some(b"hello")]);
+        match row.get(0).unwrap() {
+            PgValue::Text(s) => assert_eq!(s, "hello"),
+            other => panic!("Expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_get_int4_value() {
+        let row = make_row(&[("n", OID_INT4)], &[Some(b"42")]);
+        match row.get(0).unwrap() {
+            PgValue::Int4(v) => assert_eq!(v, 42),
+            other => panic!("Expected Int4, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_get_bool_true() {
+        let row = make_row(&[("flag", OID_BOOL)], &[Some(b"t")]);
+        match row.get(0).unwrap() {
+            PgValue::Bool(v) => assert!(v),
+            other => panic!("Expected Bool, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_get_bool_false() {
+        let row = make_row(&[("flag", OID_BOOL)], &[Some(b"f")]);
+        match row.get(0).unwrap() {
+            PgValue::Bool(v) => assert!(!v),
+            other => panic!("Expected Bool, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_get_null_returns_pgvalue_null() {
+        let row = make_row(&[("name", OID_TEXT)], &[None]);
+        assert!(matches!(row.get(0).unwrap(), PgValue::Null));
+    }
+
+    #[test]
+    fn test_get_index_out_of_range_returns_error() {
+        let row = make_row(&[("name", OID_TEXT)], &[Some(b"alice")]);
+        let err = row.get(99);
+        assert!(err.is_err());
+        if let Err(PgError::TypeConversion(msg)) = err {
+            assert!(msg.contains("out of range") || msg.contains("index"),
+                "Error should mention out-of-range: {}", msg);
+        } else {
+            panic!("Expected TypeConversion error");
+        }
+    }
+
+    // ─── get_by_name() ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_by_name_found() {
+        let row = make_row(
+            &[("id", OID_INT4), ("name", OID_TEXT)],
+            &[Some(b"1"), Some(b"charlie")],
+        );
+        match row.get_by_name("name").unwrap() {
+            PgValue::Text(s) => assert_eq!(s, "charlie"),
+            other => panic!("Expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_get_by_name_not_found_returns_error() {
+        let row = make_row(&[("id", OID_INT4)], &[Some(b"5")]);
+        let err = row.get_by_name("nonexistent");
+        assert!(err.is_err());
+        if let Err(PgError::TypeConversion(msg)) = err {
+            assert!(msg.contains("not found") || msg.contains("nonexistent"),
+                "Error should mention missing column: {}", msg);
+        } else {
+            panic!("Expected TypeConversion error");
+        }
+    }
+
+    #[test]
+    fn test_get_by_name_null_column() {
+        let row = make_row(&[("data", OID_TEXT)], &[None]);
+        assert!(matches!(row.get_by_name("data").unwrap(), PgValue::Null));
+    }
+
+    // ─── Convenience accessors ────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_str_valid_utf8() {
+        let row = make_row(&[("msg", OID_TEXT)], &[Some(b"hello world")]);
+        assert_eq!(row.get_str(0).unwrap(), Some("hello world"));
+    }
+
+    #[test]
+    fn test_get_str_null() {
+        let row = make_row(&[("msg", OID_TEXT)], &[None]);
+        assert_eq!(row.get_str(0).unwrap(), None);
+    }
+
+    #[test]
+    fn test_get_i32_value() {
+        let row = make_row(&[("n", OID_INT4)], &[Some(b"777")]);
+        assert_eq!(row.get_i32(0).unwrap(), Some(777));
+    }
+
+    #[test]
+    fn test_get_i32_null() {
+        let row = make_row(&[("n", OID_INT4)], &[None]);
+        assert_eq!(row.get_i32(0).unwrap(), None);
+    }
+
+    #[test]
+    fn test_get_i64_large_value() {
+        let row = make_row(&[("n", OID_INT8)], &[Some(b"9876543210")]);
+        assert_eq!(row.get_i64(0).unwrap(), Some(9_876_543_210_i64));
+    }
+
+    #[test]
+    fn test_get_i64_null() {
+        let row = make_row(&[("n", OID_INT8)], &[None]);
+        assert_eq!(row.get_i64(0).unwrap(), None);
+    }
+
+    #[test]
+    fn test_get_bool_null() {
+        let row = make_row(&[("flag", OID_BOOL)], &[None]);
+        assert_eq!(row.get_bool(0).unwrap(), None);
+    }
+
+    #[test]
+    fn test_get_f64_value() {
+        let row = make_row(&[("score", OID_FLOAT8)], &[Some(b"3.14")]);
+        let v = row.get_f64(0).unwrap().unwrap();
+        assert!((v - 3.14).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_get_f64_null() {
+        let row = make_row(&[("score", OID_FLOAT8)], &[None]);
+        assert_eq!(row.get_f64(0).unwrap(), None);
+    }
+
+    // ─── column_name / column_index ───────────────────────────────────────────
+
+    #[test]
+    fn test_column_name_by_index() {
+        let row = make_row(
+            &[("user_id", OID_INT4), ("email", OID_TEXT)],
+            &[Some(b"1"), Some(b"a@b.com")],
+        );
+        assert_eq!(row.column_name(0), Some("user_id"));
+        assert_eq!(row.column_name(1), Some("email"));
+        assert_eq!(row.column_name(99), None);
+    }
+
+    #[test]
+    fn test_column_index_by_name() {
+        let row = make_row(
+            &[("id", OID_INT4), ("name", OID_TEXT)],
+            &[Some(b"1"), Some(b"bob")],
+        );
+        assert_eq!(row.column_index("id"), Some(0));
+        assert_eq!(row.column_index("name"), Some(1));
+        assert_eq!(row.column_index("missing"), None);
+    }
+
+    #[test]
+    fn test_columns_slice() {
+        let row = make_row(&[("a", OID_TEXT), ("b", OID_INT4)], &[Some(b"x"), Some(b"1")]);
+        let cols = row.columns();
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0].name, "a");
+        assert_eq!(cols[1].name, "b");
+    }
+
+    // ─── get_typed / get_typed_by_name ────────────────────────────────────────
+
+    #[test]
+    fn test_get_typed_i32() {
+        let row = make_row(&[("n", OID_INT4)], &[Some(b"77")]);
+        let v: i32 = row.get_typed(0).unwrap();
+        assert_eq!(v, 77);
+    }
+
+    #[test]
+    fn test_get_typed_option_null_is_none() {
+        let row = make_row(&[("n", OID_INT4)], &[None]);
+        let v: Option<i32> = row.get_typed(0).unwrap();
+        assert_eq!(v, None);
+    }
+
+    #[test]
+    fn test_get_typed_option_value_is_some() {
+        let row = make_row(&[("n", OID_INT4)], &[Some(b"55")]);
+        let v: Option<i32> = row.get_typed(0).unwrap();
+        assert_eq!(v, Some(55));
+    }
+
+    #[test]
+    fn test_get_typed_by_name_string() {
+        let row = make_row(&[("label", OID_TEXT)], &[Some(b"production")]);
+        let v: String = row.get_typed_by_name("label").unwrap();
+        assert_eq!(v, "production");
+    }
+
+    #[test]
+    fn test_get_typed_by_name_not_found() {
+        let row = make_row(&[("n", OID_INT4)], &[Some(b"1")]);
+        let r: PgResult<i32> = row.get_typed_by_name("missing");
+        assert!(r.is_err());
+    }
+
+    // ─── Rc sharing — performance characteristic ─────────────────────────────
+    // Verifies that column descriptors are NOT copied per row (O(1) sharing).
+
+    #[test]
+    fn test_rc_columns_shared_across_rows() {
+        let cols = Rc::new(vec![col("v", OID_INT4)]);
+        let initial_count = Rc::strong_count(&cols);
+
+        let row1 = Row::new(Rc::clone(&cols), vec![Some(b"1")]);
+        let row2 = Row::new(Rc::clone(&cols), vec![Some(b"2")]);
+        let row3 = Row::new(Rc::clone(&cols), vec![Some(b"3")]);
+
+        // cols + row1 + row2 + row3
+        assert_eq!(Rc::strong_count(&cols), initial_count + 3);
+
+        drop(row1);
+        assert_eq!(Rc::strong_count(&cols), initial_count + 2);
+
+        drop(row2);
+        drop(row3);
+        assert_eq!(Rc::strong_count(&cols), initial_count);
+    }
+
+    #[test]
+    fn test_rc_1000_rows_share_same_column_descriptor() {
+        // Scalability: 1000 rows share one column vec — no deep copies
+        let cols = Rc::new(vec![col("id", OID_INT4), col("name", OID_TEXT)]);
+        let rows: Vec<Row> = (0..1000)
+            .map(|i| {
+                let val = i.to_string();
+                // NOTE: raw bytes live in their own allocation per row, which is expected
+                Row::new(Rc::clone(&cols), vec![Some(val.as_bytes()), Some(b"x")])
+            })
+            .collect();
+
+        // Only 1 + 1000 strong refs, NOT 1001 deep copies of the column vec
+        assert_eq!(Rc::strong_count(&cols), 1001);
+
+        drop(rows);
+        assert_eq!(Rc::strong_count(&cols), 1);
+    }
+
+    // ─── Multiple columns edge cases ─────────────────────────────────────────
+
+    #[test]
+    fn test_get_mixed_null_and_non_null() {
+        let row = make_row(
+            &[("a", OID_TEXT), ("b", OID_INT4), ("c", OID_TEXT)],
+            &[Some(b"hello"), None, Some(b"world")],
+        );
+        assert!(matches!(row.get(0).unwrap(), PgValue::Text(_)));
+        assert!(matches!(row.get(1).unwrap(), PgValue::Null));
+        assert!(matches!(row.get(2).unwrap(), PgValue::Text(_)));
+    }
+
+    #[test]
+    fn test_get_first_and_last_column() {
+        let row = make_row(
+            &[("first", OID_INT4), ("middle", OID_TEXT), ("last", OID_BOOL)],
+            &[Some(b"1"), Some(b"mid"), Some(b"t")],
+        );
+        assert!(matches!(row.get(0).unwrap(), PgValue::Int4(1)));
+        assert!(matches!(row.get(2).unwrap(), PgValue::Bool(true)));
     }
 }

@@ -1,11 +1,30 @@
-//! Blocking PgConnection — connects, authenticates, and queries PostgreSQL.
+//! PostgreSQL connection with poll-based non-blocking I/O.
 //!
-//! This is a synchronous (blocking) implementation suitable for use within
-//! worker threads that have their own event loops. It uses standard TCP sockets
-//! and can be made non-blocking by integrating with the worker's kqueue/epoll.
+//! Designed for integration with a thread-per-core event loop. The socket is set
+//! to **non-blocking mode** at connect time; all reads and writes go through
+//! `try_fill_read_buf` / `try_flush_write_buf` which return `WouldBlock` when
+//! the socket is not ready. Higher-level methods use `poll_read` / `poll_write`
+//! with a configurable timeout so the caller can integrate with epoll/kqueue.
+//!
+//! Features:
+//! - **Non-blocking I/O** with application-level timeouts
+//! - SCRAM-SHA-256 and cleartext authentication
+//! - Extended Query Protocol with implicit statement caching
+//! - Transaction support with safe closure-based API
+//! - COPY IN (writer) and COPY OUT (reader)
+//! - LISTEN/NOTIFY with notification buffering
+//! - Proper affected row count from CommandComplete
+//! - Raw socket fd accessor for event-loop registration
 
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use crate::auth::ScramClient;
 use crate::codec;
@@ -13,6 +32,73 @@ use crate::error::{PgError, PgResult};
 use crate::protocol::*;
 use crate::row::Row;
 use crate::statement::StatementCache;
+use crate::types::{PgValue, ToSql};
+
+/// Default I/O timeout for poll operations (5 seconds).
+const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(5);
+
+// ─── Stream Abstraction ──────────────────────────────────────
+
+/// Unified stream type supporting both TCP and Unix domain sockets.
+enum PgStream {
+    Tcp(TcpStream),
+    #[cfg(unix)]
+    Unix(UnixStream),
+}
+
+impl Read for PgStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            PgStream::Tcp(s) => s.read(buf),
+            #[cfg(unix)]
+            PgStream::Unix(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for PgStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            PgStream::Tcp(s) => s.write(buf),
+            #[cfg(unix)]
+            PgStream::Unix(s) => s.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            PgStream::Tcp(s) => s.flush(),
+            #[cfg(unix)]
+            PgStream::Unix(s) => s.flush(),
+        }
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        match self {
+            PgStream::Tcp(s) => s.write_all(buf),
+            #[cfg(unix)]
+            PgStream::Unix(s) => s.write_all(buf),
+        }
+    }
+}
+
+impl PgStream {
+    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
+        match self {
+            PgStream::Tcp(s) => s.set_nonblocking(nonblocking),
+            #[cfg(unix)]
+            PgStream::Unix(s) => s.set_nonblocking(nonblocking),
+        }
+    }
+
+    #[cfg(unix)]
+    fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
+        match self {
+            PgStream::Tcp(s) => s.as_raw_fd(),
+            PgStream::Unix(s) => s.as_raw_fd(),
+        }
+    }
+}
 
 /// Connection configuration.
 #[derive(Debug, Clone)]
@@ -22,6 +108,9 @@ pub struct PgConfig {
     pub user: String,
     pub password: String,
     pub database: String,
+    /// Optional Unix domain socket directory.
+    /// When set, connect via `<socket_dir>/.s.PGSQL.<port>` instead of TCP.
+    pub socket_dir: Option<String>,
 }
 
 impl PgConfig {
@@ -32,10 +121,22 @@ impl PgConfig {
             user: user.to_string(),
             password: password.to_string(),
             database: database.to_string(),
+            socket_dir: None,
         }
     }
 
+    /// Set a Unix domain socket directory for the connection.
+    /// The actual socket path will be `<dir>/.s.PGSQL.<port>`.
+    pub fn with_socket_dir(mut self, dir: &str) -> Self {
+        self.socket_dir = Some(dir.to_string());
+        self
+    }
+
     /// Parse from a connection string: `postgres://user:pass@host:port/db`
+    ///
+    /// For Unix domain sockets, use a path as the host:
+    /// `postgres://user:pass@%2Fvar%2Frun%2Fpostgresql/db`  (URL-encoded slashes)
+    /// or `postgres://user:pass@/db?host=/var/run/postgresql`
     pub fn from_url(url: &str) -> PgResult<Self> {
         let url = url
             .strip_prefix("postgres://")
@@ -47,27 +148,112 @@ impl PgConfig {
             .split_once('@')
             .ok_or_else(|| PgError::Protocol("Missing @ in URL".to_string()))?;
         let (user, password) = userpass.split_once(':').unwrap_or((userpass, ""));
-        let (hostport, database) = hostdb
+
+        // Check for ?host= query parameter (Unix socket)
+        let (hostdb_part, query_part) = hostdb.split_once('?').unwrap_or((hostdb, ""));
+
+        let (hostport, database) = hostdb_part
             .split_once('/')
             .ok_or_else(|| PgError::Protocol("Missing database in URL".to_string()))?;
-        let (host, port_str) = hostport.split_once(':').unwrap_or((hostport, "5432"));
-        let port: u16 = port_str
-            .parse()
-            .map_err(|_| PgError::Protocol("Invalid port".to_string()))?;
+
+        // Parse query params for socket dir
+        let mut socket_dir: Option<String> = None;
+        if !query_part.is_empty() {
+            for param in query_part.split('&') {
+                if let Some(value) = param.strip_prefix("host=") {
+                    if value.starts_with('/') {
+                        socket_dir = Some(value.to_string());
+                    }
+                }
+            }
+        }
+
+        // Decode percent-encoded host (e.g., %2Fvar%2Frun -> /var/run)
+        let decoded_host = percent_decode(hostport);
+        let is_unix_path = decoded_host.starts_with('/');
+        if is_unix_path {
+            socket_dir = Some(decoded_host);
+        }
+
+        let (host, port) = if socket_dir.is_some() {
+            // Unix socket — host is irrelevant, use default port
+            let port_str = if hostport.is_empty() || is_unix_path {
+                "5432"
+            } else {
+                hostport.rsplit_once(':').map(|(_, p)| p).unwrap_or("5432")
+            };
+            let port: u16 = port_str
+                .parse()
+                .map_err(|_| PgError::Protocol("Invalid port".to_string()))?;
+            ("localhost".to_string(), port)
+        } else {
+            let (h, port_str) = hostport.split_once(':').unwrap_or((hostport, "5432"));
+            let port: u16 = port_str
+                .parse()
+                .map_err(|_| PgError::Protocol("Invalid port".to_string()))?;
+            (h.to_string(), port)
+        };
 
         Ok(Self {
-            host: host.to_string(),
+            host,
             port,
             user: user.to_string(),
             password: password.to_string(),
             database: database.to_string(),
+            socket_dir,
         })
     }
 }
 
-/// A synchronous PostgreSQL connection with implicit statement caching.
+/// Minimal percent-decoding for URL host component.
+fn percent_decode(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (
+                hex_digit(bytes[i + 1]),
+                hex_digit(bytes[i + 2]),
+            ) {
+                result.push((hi << 4 | lo) as char);
+                i += 3;
+                continue;
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// A notification received via LISTEN/NOTIFY.
+#[derive(Debug, Clone)]
+pub struct Notification {
+    /// Process ID of the notifying backend.
+    pub process_id: i32,
+    /// Channel name.
+    pub channel: String,
+    /// Payload string.
+    pub payload: String,
+}
+
+/// A synchronous PostgreSQL connection with poll-based non-blocking I/O.
+///
+/// The socket is set to non-blocking mode at connect time.  I/O methods
+/// internally poll with a configurable timeout so they can be adapted to
+/// an event-loop's readiness notifications.
 pub struct PgConnection {
-    stream: TcpStream,
+    stream: PgStream,
     read_buf: Vec<u8>,
     write_buf: Vec<u8>,
     read_pos: usize,
@@ -76,13 +262,49 @@ pub struct PgConnection {
     process_id: i32,
     secret_key: i32,
     server_params: Vec<(String, String)>,
+    /// Buffered notifications received during query processing.
+    notifications: VecDeque<Notification>,
+    /// Number of rows affected by the last command (from CommandComplete).
+    last_affected_rows: u64,
+    /// The last CommandComplete tag string.
+    last_command_tag: String,
+    /// Whether the socket is in non-blocking mode.
+    nonblocking: bool,
+    /// Application-level I/O timeout for poll operations.
+    io_timeout: Duration,
+    /// Optional callback invoked when the server sends a NoticeResponse.
+    notice_handler: Option<Box<dyn Fn(&str, &str, &str) + Send + Sync>>,
+    /// Flag set on fatal I/O errors. A broken connection must not be
+    /// returned to the pool; it will be discarded on drop.
+    broken: bool,
 }
 
 impl PgConnection {
-    /// Connect to PostgreSQL and complete authentication.
+    /// Connect to PostgreSQL (blocking during handshake, then switches to
+    /// non-blocking mode once authentication completes).
     pub fn connect(config: &PgConfig) -> PgResult<Self> {
-        let addr = format!("{}:{}", config.host, config.port);
-        let stream = TcpStream::connect(&addr).map_err(PgError::Io)?;
+        let stream = if let Some(ref socket_dir) = config.socket_dir {
+            // Unix domain socket connection
+            #[cfg(unix)]
+            {
+                let socket_path = format!("{}/.s.PGSQL.{}", socket_dir, config.port);
+                let unix_stream = UnixStream::connect(&socket_path).map_err(PgError::Io)?;
+                PgStream::Unix(unix_stream)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = socket_dir;
+                return Err(PgError::Protocol(
+                    "Unix domain sockets are not supported on this platform".to_string(),
+                ));
+            }
+        } else {
+            let addr = format!("{}:{}", config.host, config.port);
+            let tcp = TcpStream::connect(&addr).map_err(PgError::Io)?;
+            // Disable Nagle's algorithm for lower latency
+            let _ = tcp.set_nodelay(true);
+            PgStream::Tcp(tcp)
+        };
 
         let mut conn = Self {
             stream,
@@ -94,10 +316,86 @@ impl PgConnection {
             process_id: 0,
             secret_key: 0,
             server_params: Vec::new(),
+            notifications: VecDeque::new(),
+            last_affected_rows: 0,
+            last_command_tag: String::new(),
+            nonblocking: false,
+            io_timeout: DEFAULT_IO_TIMEOUT,
+            notice_handler: None,
+            broken: false,
         };
 
         conn.startup(config)?;
+
+        // Switch to non-blocking after successful authentication
+        conn.stream.set_nonblocking(true).map_err(PgError::Io)?;
+        conn.nonblocking = true;
+
         Ok(conn)
+    }
+
+    /// Connect with a custom I/O timeout.
+    pub fn connect_with_timeout(config: &PgConfig, timeout: Duration) -> PgResult<Self> {
+        let mut conn = Self::connect(config)?;
+        conn.io_timeout = timeout;
+        Ok(conn)
+    }
+
+    /// Set the application-level I/O timeout.
+    pub fn set_io_timeout(&mut self, timeout: Duration) {
+        self.io_timeout = timeout;
+    }
+
+    /// Get the current I/O timeout.
+    pub fn io_timeout(&self) -> Duration {
+        self.io_timeout
+    }
+
+    /// Set a callback that is invoked when the server sends a NoticeResponse.
+    ///
+    /// The callback receives `(severity, code, message)`. This is useful for
+    /// logging warnings, deprecation notices, etc.
+    ///
+    /// # Example
+    /// ```ignore
+    /// conn.set_notice_handler(|severity, code, message| {
+    ///     eprintln!("PG {}: {} ({})", severity, message, code);
+    /// });
+    /// ```
+    pub fn set_notice_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(&str, &str, &str) + Send + Sync + 'static,
+    {
+        self.notice_handler = Some(Box::new(handler));
+    }
+
+    /// Remove the notice handler.
+    pub fn clear_notice_handler(&mut self) {
+        self.notice_handler = None;
+    }
+
+    /// Set the maximum number of statements to cache before LRU eviction.
+    pub fn set_statement_cache_capacity(&mut self, capacity: usize) {
+        self.stmt_cache.set_max_capacity(capacity);
+    }
+
+    /// Return the raw file descriptor for event-loop registration
+    /// (epoll / kqueue).
+    #[cfg(unix)]
+    pub fn raw_fd(&self) -> std::os::unix::io::RawFd {
+        self.stream.as_raw_fd()
+    }
+
+    /// Check if the socket is in non-blocking mode.
+    pub fn is_nonblocking(&self) -> bool {
+        self.nonblocking
+    }
+
+    /// Set non-blocking mode on the socket.
+    pub fn set_nonblocking(&mut self, nonblocking: bool) -> PgResult<()> {
+        self.stream.set_nonblocking(nonblocking).map_err(PgError::Io)?;
+        self.nonblocking = nonblocking;
+        Ok(())
     }
 
     /// Perform the startup and authentication handshake.
@@ -180,22 +478,7 @@ impl PgConnection {
                     }
                     BackendTag::ErrorResponse => {
                         let fields = codec::parse_error_fields(body);
-                        let mut severity = String::new();
-                        let mut code = String::new();
-                        let mut message = String::new();
-                        for (field_type, value) in &fields {
-                            match field_type {
-                                b'S' => severity = value.clone(),
-                                b'C' => code = value.clone(),
-                                b'M' => message = value.clone(),
-                                _ => {}
-                            }
-                        }
-                        return Err(PgError::Server {
-                            severity,
-                            code,
-                            message,
-                        });
+                        return Err(PgError::from_fields(&fields));
                     }
                     _ => {
                         // Skip unknown messages
@@ -268,9 +551,7 @@ impl PgConnection {
     pub fn query_simple(&mut self, sql: &str) -> PgResult<Vec<Row>> {
         self.ensure_write_capacity(5 + sql.len());
         let n = codec::encode_query(&mut self.write_buf, sql);
-        self.stream
-            .write_all(&self.write_buf[..n])
-            .map_err(PgError::Io)?;
+        self.flush_write_buf(n)?;
         self.read_query_results()
     }
 
@@ -279,7 +560,7 @@ impl PgConnection {
     pub fn query(
         &mut self,
         sql: &str,
-        params: &[&dyn crate::types::ToParam],
+        params: &[&dyn ToSql],
     ) -> PgResult<Vec<Row>> {
         let stmt = self.stmt_cache.get_or_create(sql);
 
@@ -303,19 +584,31 @@ impl PgConnection {
             pos += n;
         }
 
-        // Bind
-        let param_values: Vec<Option<Vec<u8>>> = params
+        // Bind — encode parameters with per-parameter format codes
+        let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
+        let param_formats: Vec<i16> = pg_values
             .iter()
-            .map(|p| p.to_param().to_text_bytes())
+            .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
+            .collect();
+        let param_values: Vec<Option<Vec<u8>>> = pg_values
+            .iter()
+            .zip(param_formats.iter())
+            .map(|(v, &fmt)| {
+                if fmt == 1 {
+                    v.to_binary_bytes()
+                } else {
+                    v.to_text_bytes()
+                }
+            })
             .collect();
         let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
         let n = codec::encode_bind(
             &mut self.write_buf[pos..],
             "", // unnamed portal
             &stmt.name,
-            &[], // all text format
+            &param_formats,
             &param_refs,
-            &[], // all text format results
+            &[1], // request all results in binary format
         );
         pos += n;
 
@@ -327,9 +620,7 @@ impl PgConnection {
         let n = codec::encode_sync(&mut self.write_buf[pos..]);
         pos += n;
 
-        self.stream
-            .write_all(&self.write_buf[..pos])
-            .map_err(PgError::Io)?;
+        self.flush_write_buf(pos)?;
 
         // Read results
         let rows = self.read_extended_results(sql, &stmt.name, stmt.is_new, stmt.columns)?;
@@ -337,18 +628,16 @@ impl PgConnection {
     }
 
     /// Execute a query expecting exactly one row.
-    pub fn query_one(&mut self, sql: &str, params: &[&dyn crate::types::ToParam]) -> PgResult<Row> {
+    pub fn query_one(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Row> {
         let rows = self.query(sql, params)?;
         rows.into_iter().next().ok_or(PgError::NoRows)
     }
 
     /// Execute a statement that returns no rows (INSERT, UPDATE, DELETE).
-    pub fn execute(&mut self, sql: &str, params: &[&dyn crate::types::ToParam]) -> PgResult<u64> {
-        let rows = self.query(sql, params)?;
-        // The number of affected rows is typically in CommandComplete, but
-        // for simplicity we return the vec length. The real implementation
-        // would parse the CommandComplete tag.
-        Ok(rows.len() as u64)
+    /// Returns the number of affected rows as reported by the server.
+    pub fn execute(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<u64> {
+        let _rows = self.query(sql, params)?;
+        Ok(self.last_affected_rows)
     }
 
     // ─── Transaction Support ──────────────────────────────────
@@ -389,14 +678,50 @@ impl PgConnection {
         Ok(())
     }
 
+    /// Execute a closure within a transaction.
+    ///
+    /// Automatically BEGINs before calling `f`, COMMITs on success,
+    /// and ROLLBACKs on error. This ensures the transaction is always
+    /// finalized, even if the closure panics (via Drop).
+    ///
+    /// # Example
+    /// ```ignore
+    /// conn.transaction(|tx| {
+    ///     tx.execute("INSERT INTO users (name) VALUES ($1)", &[&"Alice"])?;
+    ///     tx.execute("INSERT INTO logs (msg) VALUES ($1)", &[&"User created"])?;
+    ///     Ok(())
+    /// })?;
+    /// ```
+    pub fn transaction<F, T>(&mut self, f: F) -> PgResult<T>
+    where
+        F: FnOnce(&mut Transaction<'_>) -> PgResult<T>,
+    {
+        self.begin()?;
+        let mut tx = Transaction {
+            conn: self,
+            finished: false,
+            savepoint_name: None,
+            savepoint_counter: 0,
+        };
+        match f(&mut tx) {
+            Ok(val) => {
+                tx.commit()?;
+                Ok(val)
+            }
+            Err(e) => {
+                // Attempt rollback, but propagate original error
+                let _ = tx.rollback();
+                Err(e)
+            }
+        }
+    }
+
     // ─── COPY Protocol ────────────────────────────────────────
 
     /// Start a COPY FROM STDIN operation.
     pub fn copy_in(&mut self, sql: &str) -> PgResult<CopyWriter<'_>> {
         let n = codec::encode_query(&mut self.write_buf, sql);
-        self.stream
-            .write_all(&self.write_buf[..n])
-            .map_err(PgError::Io)?;
+        self.write_all(&self.write_buf[..n].to_vec())?;
 
         // Read until CopyInResponse
         loop {
@@ -410,6 +735,39 @@ impl PgConnection {
                 BackendTag::CopyInResponse => {
                     self.consume_read(msg_len);
                     return Ok(CopyWriter { conn: self });
+                }
+                BackendTag::ErrorResponse => {
+                    let body = &self.read_buf[5..msg_len];
+                    return Err(self.parse_error(body));
+                }
+                _ => {
+                    self.consume_read(msg_len);
+                }
+            }
+        }
+    }
+
+    /// Start a COPY TO STDOUT operation.
+    /// Returns a CopyReader that yields data chunks.
+    pub fn copy_out(&mut self, sql: &str) -> PgResult<CopyReader<'_>> {
+        let n = codec::encode_query(&mut self.write_buf, sql);
+        self.write_all(&self.write_buf[..n].to_vec())?;
+
+        // Read until CopyOutResponse
+        loop {
+            self.fill_read_buf(None)?;
+            let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) else {
+                continue;
+            };
+            let header = codec::decode_header(&self.read_buf)
+                .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
+            match header.tag {
+                BackendTag::CopyOutResponse => {
+                    self.consume_read(msg_len);
+                    return Ok(CopyReader {
+                        conn: self,
+                        done: false,
+                    });
                 }
                 BackendTag::ErrorResponse => {
                     let body = &self.read_buf[5..msg_len];
@@ -436,6 +794,74 @@ impl PgConnection {
         Ok(())
     }
 
+    /// Unsubscribe from a notification channel.
+    pub fn unlisten(&mut self, channel: &str) -> PgResult<()> {
+        self.query_simple(&format!("UNLISTEN {}", channel))?;
+        Ok(())
+    }
+
+    /// Unsubscribe from all notification channels.
+    pub fn unlisten_all(&mut self) -> PgResult<()> {
+        self.query_simple("UNLISTEN *")?;
+        Ok(())
+    }
+
+    /// Drain and return all buffered notifications.
+    pub fn drain_notifications(&mut self) -> Vec<Notification> {
+        self.notifications.drain(..).collect()
+    }
+
+    /// Check if there are buffered notifications.
+    pub fn has_notifications(&self) -> bool {
+        !self.notifications.is_empty()
+    }
+
+    /// Get the number of buffered notifications.
+    pub fn notification_count(&self) -> usize {
+        self.notifications.len()
+    }
+
+    /// Poll for a notification (always non-blocking).
+    /// Reads from the socket and returns the first notification found,
+    /// or None if no notification is immediately available.
+    pub fn poll_notification(&mut self) -> PgResult<Option<Notification>> {
+        // First check buffer
+        if let Some(n) = self.notifications.pop_front() {
+            return Ok(Some(n));
+        }
+
+        // Try a non-blocking read (socket is already non-blocking)
+        self.ensure_read_space();
+        match self.stream.read(&mut self.read_buf[self.read_pos..]) {
+            Ok(0) => return Err(PgError::ConnectionClosed),
+            Ok(n) => {
+                self.read_pos += n;
+                // Process any complete messages
+                while let Some(msg_len) =
+                    codec::message_complete(&self.read_buf[..self.read_pos])
+                {
+                    let header = codec::decode_header(&self.read_buf).ok_or_else(|| {
+                        PgError::Protocol("Incomplete message header".to_string())
+                    })?;
+                    if header.tag == BackendTag::NotificationResponse {
+                        let body = &self.read_buf[5..msg_len];
+                        let notification = Self::parse_notification(body);
+                        self.notifications.push_back(notification);
+                    }
+                    self.consume_read(msg_len);
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // No data available
+            }
+            Err(e) => return Err(PgError::Io(e)),
+        }
+
+        Ok(self.notifications.pop_front())
+    }
+
+    // ─── Accessors ────────────────────────────────────────────
+
     /// Get the current transaction status.
     pub fn transaction_status(&self) -> TransactionStatus {
         self.tx_status
@@ -446,36 +872,264 @@ impl PgConnection {
         self.stmt_cache.len()
     }
 
+    /// Get the number of rows affected by the last command.
+    pub fn last_affected_rows(&self) -> u64 {
+        self.last_affected_rows
+    }
+
+    /// Get the last CommandComplete tag string.
+    pub fn last_command_tag(&self) -> &str {
+        &self.last_command_tag
+    }
+
+    /// Get the backend process ID.
+    pub fn process_id(&self) -> i32 {
+        self.process_id
+    }
+
+    /// Get the backend secret key (used for cancel requests).
+    pub fn secret_key(&self) -> i32 {
+        self.secret_key
+    }
+
+    /// Get server parameters received during startup.
+    pub fn server_params(&self) -> &[(String, String)] {
+        &self.server_params
+    }
+
+    /// Get a specific server parameter by name.
+    pub fn server_param(&self, name: &str) -> Option<&str> {
+        self.server_params
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// Check if the connection is in a transaction.
+    pub fn in_transaction(&self) -> bool {
+        matches!(
+            self.tx_status,
+            TransactionStatus::InTransaction | TransactionStatus::Failed
+        )
+    }
+
+    /// Clear the statement cache and deallocate all server-side prepared statements.
+    ///
+    /// Sends `DEALLOCATE ALL` to the server before clearing the client-side
+    /// cache.  The statement name counter is preserved to prevent name
+    /// collisions with any stale server-side references.
+    pub fn clear_statement_cache(&mut self) {
+        let _ = self.query_simple("DEALLOCATE ALL");
+        self.stmt_cache.clear();
+    }
+
+    /// Returns `true` if the connection has been marked as broken due to a
+    /// fatal I/O error.  A broken connection should be discarded (not
+    /// returned to the pool).
+    pub fn is_broken(&self) -> bool {
+        self.broken
+    }
+
+    /// Reset the connection to a clean state for pool reuse.
+    ///
+    /// Sends `DISCARD ALL` which resets session state, deallocates prepared
+    /// statements, closes cursors, drops temps, releases advisory locks.
+    /// Then clears the client-side statement cache.
+    pub fn reset(&mut self) -> PgResult<()> {
+        self.query_simple("DISCARD ALL")?;
+        self.stmt_cache.clear();
+        Ok(())
+    }
+
+    /// Execute one or more SQL statements separated by semicolons, using
+    /// the Simple Query Protocol.  Returns the number of affected rows from
+    /// the **last** command.
+    ///
+    /// This is useful for running DDL migrations, multi-statement scripts,
+    /// or any sequence of commands that don't require parameters.
+    ///
+    /// # Example
+    /// ```ignore
+    /// conn.execute_batch("CREATE TABLE t(id INT); INSERT INTO t VALUES (1); INSERT INTO t VALUES (2);")?;
+    /// ```
+    pub fn execute_batch(&mut self, sql: &str) -> PgResult<u64> {
+        self.query_simple(sql)?;
+        Ok(self.last_affected_rows)
+    }
+
+    /// Check if the connection is alive by sending a simple query.
+    pub fn is_alive(&mut self) -> bool {
+        self.query_simple("SELECT 1").is_ok()
+    }
+
     // ─── Internal Methods ─────────────────────────────────────
 
+    // ─── Non-blocking read/write primitives ───────────────────
+
+    /// Try to read data into the read buffer without blocking.
+    /// Returns `Ok(n)` with bytes read, or `Err(PgError::WouldBlock)` if no
+    /// data is available, or another error on failure.
+    pub fn try_fill_read_buf(&mut self) -> PgResult<usize> {
+        self.ensure_read_space();
+
+        match self.stream.read(&mut self.read_buf[self.read_pos..]) {
+            Ok(0) => {
+                self.broken = true;
+                Err(PgError::ConnectionClosed)
+            }
+            Ok(n) => {
+                self.read_pos += n;
+                Ok(n)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(PgError::WouldBlock),
+            Err(e) => {
+                self.broken = true;
+                Err(PgError::Io(e))
+            }
+        }
+    }
+
+    /// Try to write a buffer to the socket without blocking.
+    /// Returns `Ok(n)` with bytes written, or `Err(PgError::WouldBlock)` if the
+    /// socket is not writable.
+    pub fn try_write(&mut self, data: &[u8]) -> PgResult<usize> {
+        match self.stream.write(data) {
+            Ok(n) => Ok(n),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(PgError::WouldBlock),
+            Err(e) => {
+                self.broken = true;
+                Err(PgError::Io(e))
+            }
+        }
+    }
+
+    /// Poll the socket for readability with a timeout.
+    ///
+    /// Calls `try_fill_read_buf` in a loop, using a short sleep between
+    /// attempts. For production use, replace the inner spin with an
+    /// event-loop registration (epoll_wait / kevent) for true zero-waste
+    /// waiting.
+    pub fn poll_read(&mut self, timeout: Duration) -> PgResult<usize> {
+        let start = Instant::now();
+        loop {
+            match self.try_fill_read_buf() {
+                Ok(n) => return Ok(n),
+                Err(PgError::WouldBlock) => {
+                    if start.elapsed() >= timeout {
+                        return Err(PgError::Timeout);
+                    }
+                    // Yield to the OS for a short interval. In a real
+                    // event-loop integration this would be replaced by
+                    // registering the fd and returning Pending.
+                    std::thread::sleep(Duration::from_micros(50));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Poll the socket for writability with a timeout.
+    /// Writes all of `data` or times out.
+    pub fn poll_write(&mut self, data: &[u8], timeout: Duration) -> PgResult<()> {
+        let start = Instant::now();
+        let mut written = 0;
+        while written < data.len() {
+            match self.try_write(&data[written..]) {
+                Ok(n) => written += n,
+                Err(PgError::WouldBlock) => {
+                    if start.elapsed() >= timeout {
+                        return Err(PgError::Timeout);
+                    }
+                    std::thread::sleep(Duration::from_micros(50));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    /// Internal: fill the read buffer, blocking with the connection's
+    /// configured timeout. This is the workhorse used by query methods.
     fn fill_read_buf(&mut self, min_size: Option<usize>) -> PgResult<()> {
         if let Some(min) = min_size {
             self.ensure_read_capacity(min);
         }
 
-        if self.read_pos == self.read_buf.len() {
-            // Already full, but we need more for a message.
-            // codec::message_complete probably returned None.
-            // Check if we have enough to know EXACTLY how much we need.
-            if self.read_pos >= 5 {
-                let header = codec::decode_header(&self.read_buf)
-                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
-                let total = 1 + header.length as usize;
-                self.ensure_read_capacity(total - self.read_pos);
-            } else {
-                self.ensure_read_capacity(8192); // generic grow
-            }
-        }
+        self.ensure_read_space();
 
-        let n = self
-            .stream
-            .read(&mut self.read_buf[self.read_pos..])
-            .map_err(PgError::Io)?;
-        if n == 0 {
-            return Err(PgError::ConnectionClosed);
+        if self.nonblocking {
+            // Use poll_read with timeout
+            self.poll_read(self.io_timeout)?;
+        } else {
+            // Blocking path (used during startup before we switch to NB)
+            let n = self
+                .stream
+                .read(&mut self.read_buf[self.read_pos..])
+                .map_err(PgError::Io)?;
+            if n == 0 {
+                return Err(PgError::ConnectionClosed);
+            }
+            self.read_pos += n;
         }
-        self.read_pos += n;
         Ok(())
+    }
+
+    /// Internal: write all bytes to the socket, respecting non-blocking mode.
+    fn write_all(&mut self, data: &[u8]) -> PgResult<()> {
+        if self.nonblocking {
+            self.poll_write(data, self.io_timeout)
+        } else {
+            self.stream.write_all(data).map_err(PgError::Io)
+        }
+    }
+
+    /// Internal: flush the first `n` bytes of `self.write_buf` to the stream.
+    ///
+    /// This avoids the `.to_vec()` copy that was previously needed to work
+    /// around borrow-checker limitations when `self.write_buf` is the source
+    /// and `self.write_all()` takes `&mut self`.  By inlining the write loop
+    /// here, the compiler can see that `stream` and `write_buf` are disjoint
+    /// fields (split borrow).
+    fn flush_write_buf(&mut self, n: usize) -> PgResult<()> {
+        if self.nonblocking {
+            let timeout = self.io_timeout;
+            let start = Instant::now();
+            let mut written = 0;
+            while written < n {
+                match self.stream.write(&self.write_buf[written..n]) {
+                    Ok(w) => written += w,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if start.elapsed() >= timeout {
+                            return Err(PgError::Timeout);
+                        }
+                        std::thread::sleep(Duration::from_micros(50));
+                    }
+                    Err(e) => {
+                        self.broken = true;
+                        return Err(PgError::Io(e));
+                    }
+                }
+            }
+            Ok(())
+        } else {
+            self.stream
+                .write_all(&self.write_buf[..n])
+                .map_err(PgError::Io)
+        }
+    }
+
+    /// Ensure there is room in read_buf for at least one read call.
+    fn ensure_read_space(&mut self) {
+        if self.read_pos == self.read_buf.len() {
+            if self.read_pos >= 5 {
+                if let Some(header) = codec::decode_header(&self.read_buf) {
+                    let total = 1 + header.length as usize;
+                    self.ensure_read_capacity(total - self.read_pos);
+                    return;
+                }
+            }
+            self.ensure_read_capacity(8192);
+        }
     }
 
     fn consume_read(&mut self, n: usize) {
@@ -499,7 +1153,7 @@ impl PgConnection {
 
     fn read_query_results(&mut self) -> PgResult<Vec<Row>> {
         let mut rows = Vec::new();
-        let mut columns: Vec<codec::ColumnDesc> = Vec::new();
+        let mut columns_rc: Rc<Vec<codec::ColumnDesc>> = Rc::new(Vec::new());
 
         loop {
             self.fill_read_buf(None)?;
@@ -511,14 +1165,16 @@ impl PgConnection {
 
                 match header.tag {
                     BackendTag::RowDescription => {
-                        columns = codec::parse_row_description(body);
+                        columns_rc = Rc::new(codec::parse_row_description(body));
                     }
                     BackendTag::DataRow => {
                         let raw_values = codec::parse_data_row(body);
-                        rows.push(Row::new(columns.clone(), raw_values));
+                        rows.push(Row::new(Rc::clone(&columns_rc), raw_values));
                     }
                     BackendTag::CommandComplete => {
-                        // Query finished
+                        let (tag, rows_affected) = extract_command_complete(body);
+                        self.last_command_tag = tag;
+                        self.last_affected_rows = rows_affected;
                     }
                     BackendTag::ReadyForQuery => {
                         self.tx_status = TransactionStatus::from(body[0]);
@@ -532,8 +1188,13 @@ impl PgConnection {
                         self.drain_to_ready()?;
                         return Err(err);
                     }
-                    BackendTag::EmptyQueryResponse | BackendTag::NoticeResponse => {
-                        // Skip
+                    BackendTag::NotificationResponse => {
+                        let notification = Self::parse_notification(body);
+                        self.notifications.push_back(notification);
+                    }
+                    BackendTag::EmptyQueryResponse => {}
+                    BackendTag::NoticeResponse => {
+                        self.dispatch_notice(body);
                     }
                     _ => {}
                 }
@@ -550,7 +1211,10 @@ impl PgConnection {
         cached_columns: Option<Vec<codec::ColumnDesc>>,
     ) -> PgResult<Vec<Row>> {
         let mut rows = Vec::new();
-        let mut columns = cached_columns.unwrap_or_default();
+        let mut columns_rc: Rc<Vec<codec::ColumnDesc>> = match cached_columns {
+            Some(c) => Rc::new(c),
+            None => Rc::new(Vec::new()),
+        };
 
         loop {
             self.fill_read_buf(None)?;
@@ -564,36 +1228,54 @@ impl PgConnection {
                     BackendTag::ParseComplete => {}
                     BackendTag::ParameterDescription => {}
                     BackendTag::RowDescription => {
-                        columns = codec::parse_row_description(body);
+                        let columns = codec::parse_row_description(body);
                         if is_new {
-                            self.stmt_cache.insert(
+                            if let Some(evicted) = self.stmt_cache.insert(
                                 sql,
                                 stmt_name.to_string(),
                                 0,
                                 Some(columns.clone()),
-                            );
+                            ) {
+                                self.close_statement_on_server(&evicted.name);
+                            }
                         }
+                        columns_rc = Rc::new(columns);
                     }
                     BackendTag::NoData if is_new => {
-                        self.stmt_cache.insert(sql, stmt_name.to_string(), 0, None);
+                        if let Some(evicted) =
+                            self.stmt_cache.insert(sql, stmt_name.to_string(), 0, None)
+                        {
+                            self.close_statement_on_server(&evicted.name);
+                        }
                     }
                     BackendTag::NoData => {}
                     BackendTag::BindComplete => {}
                     BackendTag::DataRow => {
                         let raw_values = codec::parse_data_row(body);
-                        rows.push(Row::new(columns.clone(), raw_values));
+                        rows.push(Row::new(Rc::clone(&columns_rc), raw_values));
                     }
-                    BackendTag::CommandComplete => {}
+                    BackendTag::CommandComplete => {
+                        let (tag, rows_affected) = extract_command_complete(body);
+                        self.last_command_tag = tag;
+                        self.last_affected_rows = rows_affected;
+                    }
                     BackendTag::ReadyForQuery => {
                         self.tx_status = TransactionStatus::from(body[0]);
                         self.consume_read(msg_len);
                         return Ok(rows);
                     }
                     BackendTag::ErrorResponse => {
-                        let err = self.parse_error(body);
+                        let err = self.parse_error_with_context(body, sql);
                         self.consume_read(msg_len);
                         self.drain_to_ready()?;
                         return Err(err);
+                    }
+                    BackendTag::NotificationResponse => {
+                        let notification = Self::parse_notification(body);
+                        self.notifications.push_back(notification);
+                    }
+                    BackendTag::NoticeResponse => {
+                        self.dispatch_notice(body);
                     }
                     _ => {}
                 }
@@ -621,34 +1303,241 @@ impl PgConnection {
 
     fn parse_error(&self, body: &[u8]) -> PgError {
         let fields = codec::parse_error_fields(body);
-        let mut severity = String::new();
-        let mut code = String::new();
-        let mut message = String::new();
-        for (field_type, value) in &fields {
-            match field_type {
-                b'S' => severity = value.clone(),
-                b'C' => code = value.clone(),
-                b'M' => message = value.clone(),
-                _ => {}
+        PgError::from_fields(&fields)
+    }
+
+    /// Parse an error and attach query context for better debugging.
+    fn parse_error_with_context(&self, body: &[u8], query: &str) -> PgError {
+        let fields = codec::parse_error_fields(body);
+        let mut err = PgError::from_fields(&fields);
+        if let PgError::Server { ref mut internal_query, .. } = err {
+            if internal_query.is_none() {
+                *internal_query = Some(query.to_string());
             }
         }
-        PgError::Server {
-            severity,
-            code,
-            message,
+        err
+    }
+
+    /// Dispatch a NoticeResponse to the registered handler.
+    fn dispatch_notice(&self, body: &[u8]) {
+        if let Some(ref handler) = self.notice_handler {
+            let fields = codec::parse_error_fields(body);
+            let mut severity = "";
+            let mut code = "";
+            let mut message = "";
+            for (field_type, value) in &fields {
+                match field_type {
+                    b'S' => severity = value,
+                    b'C' => code = value,
+                    b'M' => message = value,
+                    _ => {}
+                }
+            }
+            handler(severity, code, message);
+        }
+    }
+
+    /// Send a Close('S') message to deallocate a server-side prepared statement.
+    /// This is fire-and-forget — we don't wait for CloseComplete.
+    fn close_statement_on_server(&mut self, name: &str) {
+        self.ensure_write_capacity(7 + name.len());
+        let n = codec::encode_close(
+            &mut self.write_buf,
+            CloseTarget::Statement,
+            name,
+        );
+        let _ = self.flush_write_buf(n);
+    }
+
+    /// Parse a CommandComplete tag to extract affected row count.
+    /// Tags look like: "INSERT 0 5", "UPDATE 3", "DELETE 1", "SELECT 10", etc.
+    // parse_command_complete is now a free function: extract_command_complete()
+
+    /// Parse a NotificationResponse message body.
+    fn parse_notification(body: &[u8]) -> Notification {
+        let process_id = codec::read_i32(body, 0);
+        let (channel, consumed) = codec::read_cstring(body, 4);
+        let (payload, _) = codec::read_cstring(body, 4 + consumed);
+        Notification {
+            process_id,
+            channel: channel.to_string(),
+            payload: payload.to_string(),
         }
     }
 }
 
+/// Extract the command tag and affected row count from a CommandComplete body.
+/// This is a free function (not a method) to avoid borrow conflicts when
+/// `body` is a slice of the connection's read buffer.
+fn extract_command_complete(body: &[u8]) -> (String, u64) {
+    let (tag, _) = codec::read_cstring(body, 0);
+    let tag_str = tag.to_string();
+    let affected_rows = tag
+        .rsplit(' ')
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    (tag_str, affected_rows)
+}
+
 impl Drop for PgConnection {
     fn drop(&mut self) {
-        // Send Terminate message
+        // Switch to blocking mode so the Terminate message is reliably sent.
+        // On a non-blocking socket write_all may fail with WouldBlock,
+        // silently leaving the server-side session open.
+        if self.nonblocking {
+            let _ = self.stream.set_nonblocking(false);
+        }
         let n = codec::encode_terminate(&mut self.write_buf);
         let _ = self.stream.write_all(&self.write_buf[..n]);
     }
 }
 
-/// COPY writer for streaming data into PostgreSQL.
+// ─── Transaction ──────────────────────────────────────────────
+
+/// A transaction guard. Ensures the transaction is committed or rolled back.
+///
+/// Created via `PgConnection::transaction()`. Provides the same query
+/// methods as `PgConnection`. On drop, if neither `commit` nor `rollback`
+/// was called, automatically rolls back.
+pub struct Transaction<'a> {
+    conn: &'a mut PgConnection,
+    finished: bool,
+    /// If Some, this is a nested transaction backed by a SAVEPOINT.
+    savepoint_name: Option<String>,
+    /// Counter for generating unique savepoint names in nested calls.
+    savepoint_counter: u32,
+}
+
+impl<'a> Transaction<'a> {
+    /// Commit this transaction (or release savepoint if nested).
+    pub fn commit(&mut self) -> PgResult<()> {
+        if !self.finished {
+            self.finished = true;
+            if let Some(ref name) = self.savepoint_name {
+                self.conn.release_savepoint(name)
+            } else {
+                self.conn.commit()
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Rollback this transaction (or rollback to savepoint if nested).
+    pub fn rollback(&mut self) -> PgResult<()> {
+        if !self.finished {
+            self.finished = true;
+            if let Some(ref name) = self.savepoint_name {
+                self.conn.rollback_to(name)
+            } else {
+                self.conn.rollback()
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Execute a nested transaction using a SAVEPOINT.
+    ///
+    /// Creates a savepoint, calls the closure, and either releases
+    /// (on success) or rolls back to the savepoint (on error/drop).
+    ///
+    /// Nesting is unlimited — each level creates a new savepoint.
+    ///
+    /// # Example
+    /// ```ignore
+    /// conn.transaction(|tx| {
+    ///     tx.execute("INSERT INTO users (name) VALUES ($1)", &[&"Alice"])?;
+    ///     tx.transaction(|nested| {
+    ///         nested.execute("INSERT INTO logs (msg) VALUES ($1)", &[&"nested"])?;
+    ///         Ok(())
+    ///     })?;
+    ///     Ok(())
+    /// })?;
+    /// ```
+    pub fn transaction<F, T>(&mut self, f: F) -> PgResult<T>
+    where
+        F: FnOnce(&mut Transaction<'_>) -> PgResult<T>,
+    {
+        self.savepoint_counter += 1;
+        let sp_name = format!("chopin_sp_{}", self.savepoint_counter);
+        self.conn.savepoint(&sp_name)?;
+        let mut nested = Transaction {
+            conn: self.conn,
+            finished: false,
+            savepoint_name: Some(sp_name),
+            savepoint_counter: 0,
+        };
+        match f(&mut nested) {
+            Ok(val) => {
+                nested.commit()?;
+                Ok(val)
+            }
+            Err(e) => {
+                let _ = nested.rollback();
+                Err(e)
+            }
+        }
+    }
+
+    /// Execute a simple query (no parameters).
+    pub fn query_simple(&mut self, sql: &str) -> PgResult<Vec<Row>> {
+        self.conn.query_simple(sql)
+    }
+
+    /// Execute a parameterized query.
+    pub fn query(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Vec<Row>> {
+        self.conn.query(sql, params)
+    }
+
+    /// Execute a query expecting exactly one row.
+    pub fn query_one(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Row> {
+        self.conn.query_one(sql, params)
+    }
+
+    /// Execute a statement that returns no rows.
+    pub fn execute(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<u64> {
+        self.conn.execute(sql, params)
+    }
+
+    /// Create a savepoint within this transaction.
+    pub fn savepoint(&mut self, name: &str) -> PgResult<()> {
+        self.conn.savepoint(name)
+    }
+
+    /// Rollback to a savepoint.
+    pub fn rollback_to(&mut self, name: &str) -> PgResult<()> {
+        self.conn.rollback_to(name)
+    }
+
+    /// Release a savepoint.
+    pub fn release_savepoint(&mut self, name: &str) -> PgResult<()> {
+        self.conn.release_savepoint(name)
+    }
+
+    /// Get the transaction status.
+    pub fn status(&self) -> TransactionStatus {
+        self.conn.transaction_status()
+    }
+}
+
+impl<'a> Drop for Transaction<'a> {
+    fn drop(&mut self) {
+        if !self.finished {
+            // Auto-rollback on drop (savepoint if nested, full rollback otherwise)
+            if let Some(ref name) = self.savepoint_name {
+                let _ = self.conn.rollback_to(name);
+            } else {
+                let _ = self.conn.rollback();
+            }
+        }
+    }
+}
+
+// ─── COPY Writer ──────────────────────────────────────────────
+
+/// COPY writer for streaming data into PostgreSQL via COPY FROM STDIN.
 pub struct CopyWriter<'a> {
     conn: &'a mut PgConnection,
 }
@@ -656,20 +1545,58 @@ pub struct CopyWriter<'a> {
 impl<'a> CopyWriter<'a> {
     /// Write a chunk of COPY data.
     pub fn write_data(&mut self, data: &[u8]) -> PgResult<()> {
+        self.conn.ensure_write_capacity(5 + data.len());
         let n = codec::encode_copy_data(&mut self.conn.write_buf, data);
-        self.conn
-            .stream
-            .write_all(&self.conn.write_buf[..n])
-            .map_err(PgError::Io)
+        self.conn.flush_write_buf(n)
     }
 
-    /// Finish the COPY operation.
-    pub fn finish(self) -> PgResult<()> {
+    /// Abort the COPY operation with an error message.
+    ///
+    /// Sends a CopyFail message to the server. The server will respond
+    /// with an ErrorResponse and then ReadyForQuery. The connection
+    /// remains usable after this call.
+    pub fn fail(self, reason: &str) -> PgResult<()> {
+        self.conn.ensure_write_capacity(6 + reason.len());
+        let n = codec::encode_copy_fail(&mut self.conn.write_buf, reason);
+        self.conn.flush_write_buf(n)?;
+
+        // Drain to ReadyForQuery (server sends ErrorResponse first)
+        loop {
+            self.conn.fill_read_buf(None)?;
+            while let Some(msg_len) =
+                codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])
+            {
+                let header = codec::decode_header(&self.conn.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
+                match header.tag {
+                    BackendTag::ErrorResponse => {
+                        // Expected — server acknowledges the CopyFail
+                        self.conn.consume_read(msg_len);
+                    }
+                    BackendTag::ReadyForQuery => {
+                        let body = &self.conn.read_buf[5..msg_len];
+                        self.conn.tx_status = TransactionStatus::from(body[0]);
+                        self.conn.consume_read(msg_len);
+                        return Ok(());
+                    }
+                    _ => {
+                        self.conn.consume_read(msg_len);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Write a text row (tab-separated values with newline).
+    pub fn write_row(&mut self, columns: &[&str]) -> PgResult<()> {
+        let line = columns.join("\t") + "\n";
+        self.write_data(line.as_bytes())
+    }
+
+    /// Finish the COPY operation successfully.
+    pub fn finish(self) -> PgResult<u64> {
         let n = codec::encode_copy_done(&mut self.conn.write_buf);
-        self.conn
-            .stream
-            .write_all(&self.conn.write_buf[..n])
-            .map_err(PgError::Io)?;
+        self.conn.flush_write_buf(n)?;
 
         // Drain to ReadyForQuery
         loop {
@@ -679,20 +1606,104 @@ impl<'a> CopyWriter<'a> {
             {
                 let header = codec::decode_header(&self.conn.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
-                if header.tag == BackendTag::ReadyForQuery {
-                    let body = &self.conn.read_buf[5..msg_len];
-                    self.conn.tx_status = TransactionStatus::from(body[0]);
-                    self.conn.consume_read(msg_len);
-                    return Ok(());
-                }
-                if header.tag == BackendTag::ErrorResponse {
-                    let body = &self.conn.read_buf[5..msg_len];
-                    let err = self.conn.parse_error(body);
-                    self.conn.consume_read(msg_len);
-                    return Err(err);
+                let body = &self.conn.read_buf[5..msg_len];
+                match header.tag {
+                    BackendTag::CommandComplete => {
+                        let (tag, rows_affected) = extract_command_complete(body);
+                        self.conn.last_command_tag = tag;
+                        self.conn.last_affected_rows = rows_affected;
+                    }
+                    BackendTag::ReadyForQuery => {
+                        self.conn.tx_status = TransactionStatus::from(body[0]);
+                        self.conn.consume_read(msg_len);
+                        return Ok(self.conn.last_affected_rows);
+                    }
+                    BackendTag::ErrorResponse => {
+                        let err = self.conn.parse_error(body);
+                        self.conn.consume_read(msg_len);
+                        return Err(err);
+                    }
+                    _ => {}
                 }
                 self.conn.consume_read(msg_len);
             }
         }
+    }
+}
+
+// ─── COPY Reader ──────────────────────────────────────────────
+
+/// COPY reader for receiving data from PostgreSQL via COPY TO STDOUT.
+pub struct CopyReader<'a> {
+    conn: &'a mut PgConnection,
+    done: bool,
+}
+
+impl<'a> CopyReader<'a> {
+    /// Read the next chunk of COPY data.
+    /// Returns None when the COPY operation is complete.
+    pub fn read_data(&mut self) -> PgResult<Option<Vec<u8>>> {
+        if self.done {
+            return Ok(None);
+        }
+
+        loop {
+            self.conn.fill_read_buf(None)?;
+
+            while let Some(msg_len) =
+                codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])
+            {
+                let header = codec::decode_header(&self.conn.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
+                let body = &self.conn.read_buf[5..msg_len];
+
+                match header.tag {
+                    BackendTag::CopyData => {
+                        let data = body.to_vec();
+                        self.conn.consume_read(msg_len);
+                        return Ok(Some(data));
+                    }
+                    BackendTag::CopyDone => {
+                        self.conn.consume_read(msg_len);
+                        // Continue to receive CommandComplete + ReadyForQuery
+                    }
+                    BackendTag::CommandComplete => {
+                        let (tag, rows_affected) = extract_command_complete(body);
+                        self.conn.last_command_tag = tag;
+                        self.conn.last_affected_rows = rows_affected;
+                        self.conn.consume_read(msg_len);
+                    }
+                    BackendTag::ReadyForQuery => {
+                        self.conn.tx_status = TransactionStatus::from(body[0]);
+                        self.conn.consume_read(msg_len);
+                        self.done = true;
+                        return Ok(None);
+                    }
+                    BackendTag::ErrorResponse => {
+                        let err = self.conn.parse_error(body);
+                        self.conn.consume_read(msg_len);
+                        self.done = true;
+                        return Err(err);
+                    }
+                    _ => {
+                        self.conn.consume_read(msg_len);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Read all remaining COPY data into a single Vec.
+    pub fn read_all(&mut self) -> PgResult<Vec<u8>> {
+        let mut result = Vec::new();
+        while let Some(chunk) = self.read_data()? {
+            result.extend_from_slice(&chunk);
+        }
+        Ok(result)
+    }
+
+    /// Check if the COPY operation is complete.
+    pub fn is_done(&self) -> bool {
+        self.done
     }
 }

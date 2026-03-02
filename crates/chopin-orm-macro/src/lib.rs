@@ -108,14 +108,14 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
             }
 
             fn primary_key_value(&self) -> chopin_pg::PgValue {
-                use chopin_pg::types::ToParam;
-                self.#pk_ident.to_param()
+                use chopin_pg::types::ToSql;
+                self.#pk_ident.to_sql()
             }
 
             fn get_values(&self) -> Vec<chopin_pg::PgValue> {
-                use chopin_pg::types::ToParam;
+                use chopin_pg::types::ToSql;
                 vec![
-                    #(self.#fields.to_param()),*
+                    #(self.#fields.to_sql()),*
                 ]
             }
 

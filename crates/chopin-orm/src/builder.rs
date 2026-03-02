@@ -84,7 +84,7 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
     pub fn all(self, executor: &mut impl crate::Executor) -> OrmResult<Vec<M>> {
         let query = self.build_query();
 
-        let params_ref: Vec<&dyn chopin_pg::types::ToParam> =
+        let params_ref: Vec<&dyn chopin_pg::types::ToSql> =
             self.params.iter().map(|p| p as _).collect();
 
         let rows = executor.query(&query, &params_ref)?;
@@ -110,7 +110,7 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
             query.push_str(&self.filters.join(" AND "));
         }
 
-        let params_ref: Vec<&dyn chopin_pg::types::ToParam> =
+        let params_ref: Vec<&dyn chopin_pg::types::ToSql> =
             self.params.iter().map(|p| p as _).collect();
 
         let rows = executor.query(&query, &params_ref)?;
