@@ -1,4 +1,5 @@
 // src/http.rs
+use crate::headers::{Headers, IntoHeaderValue};
 use crate::syscalls;
 use std::io;
 
@@ -200,7 +201,9 @@ pub struct Response {
     pub status: u16,
     pub body: Body,
     pub content_type: &'static str,
-    pub headers: Vec<(&'static str, String)>,
+    /// Custom response headers — stored inline (stack) for ≤8 headers,
+    /// falling back to heap for more. No allocation for common cases.
+    pub headers: Headers,
 }
 
 impl Response {
@@ -210,13 +213,17 @@ impl Response {
             status,
             body: Body::Empty,
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 
     /// Builder-style method to append an HTTP response header.
-    pub fn with_header(mut self, key: &'static str, value: impl Into<String>) -> Self {
-        self.headers.push((key, value.into()));
+    ///
+    /// The value may be a `&'static str`, `String`, or any integer type.
+    /// Short values (≤ 64 bytes) are stored inline on the stack; longer
+    /// values fall back to heap allocation.
+    pub fn with_header(mut self, name: &'static str, value: impl IntoHeaderValue) -> Self {
+        self.headers.add(name, value);
         self
     }
 
@@ -226,7 +233,7 @@ impl Response {
             status: 200,
             body: Body::Bytes(body.into()),
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 
@@ -237,7 +244,7 @@ impl Response {
             status: 200,
             body: Body::Static(body),
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 
@@ -248,7 +255,7 @@ impl Response {
             status: 200,
             body: Body::Bytes(body.into()),
             content_type: "application/json",
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 
@@ -266,7 +273,7 @@ impl Response {
             status: 404,
             body: Body::Static(b"Not Found"),
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 
@@ -276,7 +283,7 @@ impl Response {
             status: 500,
             body: Body::Static(b"Internal Server Error"),
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 
@@ -286,7 +293,7 @@ impl Response {
             status: 400,
             body: Body::Static(b"Bad Request"),
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 
@@ -296,7 +303,7 @@ impl Response {
             status: 401,
             body: Body::Static(b"Unauthorized"),
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 
@@ -306,7 +313,7 @@ impl Response {
             status: 403,
             body: Body::Static(b"Forbidden"),
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 
@@ -316,7 +323,7 @@ impl Response {
             status: 200,
             body: Body::Stream(Box::new(iter)),
             content_type: "application/octet-stream",
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 
@@ -351,7 +358,7 @@ impl Response {
                 len: size,
             },
             content_type,
-            headers: Vec::new(),
+            headers: Headers::new(),
         })
     }
 
@@ -367,7 +374,7 @@ impl Response {
                 len,
             },
             content_type,
-            headers: Vec::new(),
+            headers: Headers::new(),
         }
     }
 }

@@ -495,10 +495,10 @@ impl Worker {
                                                 w!(b"Connection: close\r\n");
                                             }
 
-                                            for (k, v) in &response.headers {
-                                                w!(k.as_bytes());
+                                            for header in response.headers.iter() {
+                                                w!(header.name.as_bytes());
                                                 w!(b": ");
-                                                w!(v.as_bytes());
+                                                w!(header.value.as_str().as_bytes());
                                                 w!(b"\r\n");
                                             }
 

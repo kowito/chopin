@@ -11,6 +11,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 pub mod conn;
 pub mod error;
 pub mod extract;
+pub mod headers;
 pub mod http;
 pub mod http_date;
 pub mod json;
@@ -27,6 +28,7 @@ pub mod worker;
 // Re-exports for users
 pub use error::{ChopinError, ChopinResult};
 pub use extract::{FromRequest, Json, Query};
+pub use headers::{Header, HeaderValue, Headers, IntoHeaderValue};
 pub use http::{Body, Context, Method, OwnedFd, Request, Response};
 pub use json::KJson;
 pub use router::{RouteDef, Router};

@@ -617,7 +617,7 @@ mod tests {
 
     fn dummy_middleware(ctx: Context, next: BoxedHandler) -> Response {
         let mut r = next(ctx);
-        r.headers.push(("X-Middleware", String::from("1")));
+        r.headers.add("X-Middleware", "1");
         r
     }
 

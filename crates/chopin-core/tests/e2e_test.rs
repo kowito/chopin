@@ -26,6 +26,7 @@
 //!   - 20 concurrent connections racing the same endpoint
 //!   - Wildcard route matching
 
+use chopin_core::headers::Headers;
 use chopin_core::{Context, Json, Method, Response, Router, Server};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -64,7 +65,7 @@ fn ensure_server() {
             status: 201,
             body: chopin_core::http::Body::Static(b"Created"),
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         });
 
         // DELETE /resource → 204 No Content
@@ -72,7 +73,7 @@ fn ensure_server() {
             status: 204,
             body: chopin_core::http::Body::Empty,
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         });
 
         // PATCH /resource → 200, echo body
@@ -85,7 +86,7 @@ fn ensure_server() {
             status: 200,
             body: chopin_core::http::Body::Empty,
             content_type: "text/plain",
-            headers: Vec::new(),
+            headers: Headers::new(),
         });
 
         // GET /json → application/json

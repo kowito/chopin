@@ -29,6 +29,10 @@ where
 {
     type Error = Response;
 
+    // `Response` is intentionally the error type here (HTTP 401 / 500 short-circuits).
+    // The size increase comes from the inline header slab in `Headers`; the allocation
+    // pattern is unchanged at the call site.
+    #[allow(clippy::result_large_err)]
     fn from_request(ctx: &'a Context<'a>) -> Result<Self, Self::Error> {
         let auth_header = {
             let mut found = None;

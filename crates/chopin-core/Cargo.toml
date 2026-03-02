@@ -13,6 +13,7 @@ default = ["catch-panic"]
 catch-panic = []
 
 [dependencies]
+arrayvec = "0.7"
 core_affinity = "0.8.3"
 ctrlc = "3.4.5"
 kowito-json = { workspace = true }
