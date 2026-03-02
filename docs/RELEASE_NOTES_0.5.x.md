@@ -1,4 +1,4 @@
-# Chopin Release Notes: v0.5.0 – v0.5.7 (Codename: Nocturne)
+# Chopin Release Notes: v0.5.0 – v0.5.8 (Codename: Nocturne)
 
 The 0.5.x series, codenamed **Nocturne**, marks the most significant evolution of Chopin to date. We've transitioned from a proof-of-concept networking engine to a production-hardened web framework with industry-leading performance and modern ergonomics.
 
@@ -26,6 +26,30 @@ The release of `chopin-orm` brings type-safe database interactions to the ecosys
 - **Type-Safe Query Builder**: Compile-time checked queries without the performance penalty of traditional ORMs.
 - **Linear Scaling**: The ORM matches the raw driver performance across 1k, 100k, and 1M row benchmarks.
 
+## v0.5.8 — Zero-Copy I/O & Hot-Path Optimization
+
+### ⚡ Zero-Copy Response Body (`writev`)
+Response headers and body are now delivered in a single `writev` syscall. Static and allocated byte bodies are no longer copied into the write buffer; instead, Chopin retains a raw pointer and passes both `iovec` slices directly to the kernel. This eliminates the largest memcpy on the hot path.
+
+### ⚡ Zero-Copy File Serving (`sendfile`)
+`Response::file(path)` opens a file and streams its contents via the platform `sendfile` syscall (Linux and macOS). The file bytes never enter user space. Content-Type is inferred automatically from the file extension across ~30 MIME types.
+
+### 🎼 Pre-Composed Middleware Chains
+Middleware chains are now resolved once when the router is finalized (`Router::finalize()`). Each route stores a single pre-built `Arc<dyn Fn(Context) -> Response>`. On the hot path, Chopin invokes one pre-built closure — no `Arc::new`, no chain construction, zero per-request allocations for middleware.
+
+### 📅 Real-Time Date Header
+Every HTTP response now carries a compliant RFC 7231 `Date` header computed fresh per request using a fast hand-rolled formatter. No stale cached timestamps.
+
+### 🚀 mimalloc Global Allocator
+`mimalloc` is now the global allocator for all workers. Under high-concurrency workloads this significantly reduces allocation latency compared to the system allocator by using per-thread free lists.
+
+### 🧹 Dependency Cleanup
+- `kowito-json` bumped to `0.2.11`.
+- Removed duplicate dev-dependencies from `chopin-core`.
+- Aligned `chopin-cli` to workspace-level `serde` / `serde_json`.
+
+---
+
 ## 📝 Version Summary
 - **v0.5.0**: Groundwork for `SO_REUSEPORT` and performance hardening.
 - **v0.5.1 - v0.5.2**: Launch of `chopin-orm` and `chopin-pg`.
@@ -33,6 +57,7 @@ The release of `chopin-orm` brings type-safe database interactions to the ecosys
 - **v0.5.4**: CI/CD optimization and benchmark synchronization with Actix/Axum.
 - **v0.5.5 - v0.5.6**: Documentation update and ORM performance tuning.
 - **v0.5.7**: Major Naming Convention Overhaul (`Response::text`, `ctx.param`, `router.layer`).
+- **v0.5.8**: Zero-copy I/O (writev + sendfile), pre-composed middleware chains, mimalloc integration.
 
 ---
 "Simple as a melody, fast as a nocturne."

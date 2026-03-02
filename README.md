@@ -7,7 +7,7 @@
 [![Crates.io](https://img.shields.io/crates/v/chopin-core)](https://crates.io/crates/chopin-core)
 [![Downloads](https://img.shields.io/crates/d/chopin-core.svg)](https://crates.io/crates/chopin-core)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kowito/chopin/blob/main/LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.75+-blue.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-nightly-blue.svg)](https://www.rust-lang.org)
 
 > **High-fidelity engineering for the modern virtuoso.**
 
@@ -26,6 +26,9 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 - **Stack-Allocated Hot-Paths**: HTTP headers and route parameters are stored in fixed-size stack arrays.
 - **Radix Tree Routing**: Efficient $O(K)$ path matching (where $K$ is path length) with zero-cost parameter extraction.
 - **Raw Byte Serialization**: Responses are built using raw byte copies and inline `itoa` formatting, removing the overhead of `std::fmt`.
+- **Pre-Composed Middleware**: Middleware chains are resolved once at router `finalize()`. The hot path calls a single pre-built `Arc<dyn Fn>` with no per-request `Arc::new` or chain construction.
+- **writev Zero-Copy Flush**: Response headers and body are written in one `writev` syscall. Static/byte bodies bypass the write buffer entirely — no memcpy.
+- **sendfile File Serving**: `Response::file()` transfers file data directly in kernel space via `sendfile` (Linux) / `sendfile` (macOS), eliminating user-space copies.
 
 ### 3. Native Asynchronous Core
 - **Platform Native**: Direct interaction with `kqueue` (macOS) and `epoll` (Linux) via low-level `libc` syscalls.
@@ -36,6 +39,9 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 
 - **Radix Router**: Supports static paths, labeled parameters (`:id`), and wildcards (`*path`).
 - **Declarative Extractors**: Ergonomic `FromRequest` trait for automatic `Json<T>` or `Query<X>` extraction.
+- **Zero-Copy File Serving**: `Response::file(path)` uses platform `sendfile` (Linux/macOS) with automatic MIME detection (~30 types).
+- **writev Body Flush**: Headers and response body are flushed in a single `writev` syscall, eliminating the memcpy into the write buffer.
+- **Pre-Composed Middleware**: Middleware chains are composed once at startup; zero `Arc::new` allocations on the hot request path.
 - **Database (PostgreSQL)**: `chopin-pg` (low-level driver) and `chopin-orm` (zero-allocation ORM) with per-worker connection pooling.
 - **Authentication**: `chopin-auth` provides JWT, password hashing, and role-based access control.
 - **Panic Resilience**: `catch_unwind` protection ensures a handler panic doesn't crash the worker thread.
@@ -46,13 +52,13 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 Chopin uses attribute-based route discovery for a clean, declarative experience.
 
 ```rust
-use chopin_core::Chopin;
+use chopin_core::{Chopin, Context, Response};
 use chopin_macros::get;
 
 #[get("/user")]
 fn user_handler(ctx: Context) -> Response {
     let user = User { id: 1, username: "kowito".into() };
-    ctx.respond_json(&user)
+    ctx.json(&user)
 }
 
 fn main() {

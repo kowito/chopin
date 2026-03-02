@@ -50,13 +50,13 @@ Chopin eliminates the kernel locking overhead typically found in multi-threaded 
 ### 📋 Connection Slab (`crates/chopin-core/src/slab.rs`)
 Chopin manages memory through a pre-allocated **Connection Slab** per worker.
 - **O(1) Allocation**: Getting a handle for a new connection is a simple array index lookup.
-- **Fixed Size**: Memory usage is deterministic (100k slots by default per core).
+- **Fixed Size**: Memory usage is deterministic (10,000 slots per worker by default).
 - **Zero Memset**: Buffers are reused without clearing; state tracking ensures no data leaches between requests.
 
 ### ⚡ Zero-Allocation Request Pipeline
 1.  **Parser (`crates/chopin-core/src/parser.rs`)**: Slices the raw TCP buffer into standard HTTP fields. Uses `&str` slices instead of `String` allocations.
-2.  **Router (`crates/chopin-core/src/router.rs`)**: A Radix Tree (Prefix Tree) for O(path-length) routing. Route parameters are stored on a fixed-size stack array during matching.
-3.  **Serializer (`crates/chopin-core/src/worker.rs`)**: Responses are written directly into the `write_buf` using raw byte copies (`copy_from_slice`). It avoids the overhead of `std::fmt` and vtable dispatches.
+2.  **Router (`crates/chopin-core/src/router.rs`)**: A Radix Tree (Prefix Tree) for O(path-length) routing. Route parameters are stored on a fixed-size stack array during matching. At startup, `finalize()` pre-composes all middleware chains — the hot path calls one pre-built `Arc<dyn Fn>` with zero per-request allocation.
+3.  **Serializer (`crates/chopin-core/src/worker.rs`)**: Response headers are written into `write_buf` using raw byte copies. Static and byte bodies are **not** copied into the write buffer; instead, a pointer is retained and flushed via `writev` (headers + body in one syscall). File bodies are transferred in kernel space via `sendfile`.
 
 ## 🚀 Performance Optimizations
 
@@ -66,6 +66,8 @@ Chopin manages memory through a pre-allocated **Connection Slab** per worker.
 
 ### 2. Syscall Efficiency & Zero-Allocation Hot-Paths
 Chopin minimizes syscall overhead and memory pressure:
+- **writev Header+Body Flush**: Response headers and body are delivered in a single `writev` syscall. Static (`&'static [u8]`) and allocated byte bodies bypass the write buffer — no memcpy.
+- **sendfile File Serving**: `Response::file()` uses `sendfile` (Linux) / `sendfile` (macOS) to transfer file contents directly in kernel space. The user-space process never touches the file bytes.
 - **Zero-Alloc kqueue/epoll**: Registers events using stack-allocated arrays, eliminating heap fragmentation in the event loop.
 - **TCP_NODELAY Inheritance**: `TCP_NODELAY` is set on the **listener** and inherited by all accepted sockets, saving one `setsockopt` syscall per connection.
 - **Platform Optimizations**:
@@ -81,8 +83,8 @@ Metrics are partitioned per worker. An aggregator thread periodically sums these
 1.  **Accept**: Worker is notified of a new connection on its private listen FD; takes a slot from the `ConnectionSlab`.
 2.  **Read**: Bytes flow into `read_buf`.
 3.  **Parse**: `parse_request` tokenizes the buffer (zero allocation).
-4.  **Route**: `Router` matches the method/path and pulls parameters into a stack array.
-5.  **Handle**: User-defined `Handler` executes.
-6.  **Serialize**: Response bytes are copied directly to `write_buf`.
-7.  **Flush**: `libc::write` flushes bytes to the socket.
+4.  **Route**: `Router` matches the method/path and pulls parameters into a stack array. Returns the pre-composed `BoxedHandler` if middleware is present.
+5.  **Handle**: User-defined `Handler` executes (invoked directly, or via the pre-composed middleware chain).
+6.  **Serialize**: Response headers are encoded into `write_buf`. Body pointer is retained for zero-copy delivery.
+7.  **Flush**: `libc::writev` delivers headers + body in one syscall. For `Body::File`, Phase 2 uses `sendfile` for kernel-space transfer.
 8.  **Repeat**: If `Keep-Alive`, reset `parse_pos` and wait for more data. Otherwise, close.

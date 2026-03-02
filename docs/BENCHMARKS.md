@@ -1,6 +1,6 @@
 # Chopin Benchmark Report (2026-03-01)
 
-This report details the performance comparison between Chopin v0.5.2 and Hyper v1.4.1 conducted on a 10-core Apple Silicon machine.
+This report details the performance comparison between Chopin v0.5.8 and Hyper v1.4.1 conducted on a 10-core Apple Silicon machine.
 
 ## Performance Comparison
 

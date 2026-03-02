@@ -82,6 +82,21 @@ fn get_user(ctx: Context) -> Response {
 }
 ```
 
+### Zero-Copy Static File Serving
+`Response::file(path)` opens a file and serves it via the platform `sendfile` syscall, so the file contents are transferred entirely in kernel space — Chopin's user-space process never touches the bytes.
+
+```rust
+#[get("/assets/:name")]
+fn serve_asset(ctx: Context) -> Response {
+    let name = ctx.param("name").unwrap_or("");
+    Response::file(&format!("public/{}", name))
+    // Automatically sets Content-Type from extension (~30 MIME types)
+    // Returns 404 if the file doesn't exist
+}
+```
+
+For custom byte ranges or pre-opened file descriptors, use `Response::sendfile(fd, offset, len, content_type)`.
+
 ---
 
 ## 3. The Middleware Pipeline
@@ -211,6 +226,17 @@ Chopin operates efficiently on a single core but shines when scaling across phys
 
 ### Thread-Per-Core Strategy & Affinity
 In its initialization sequence, Chopin discovers the logical core count. Workers are explicitly pinned using `core_affinity`. Memory stays hot in L1/L2 caches.
+
+### Zero-Copy I/O
+Two techniques eliminate unnecessary data copies on every response:
+- **`writev` flush**: Response headers and body are delivered in a single `writev` syscall. Static (`&'static [u8]`) and allocated byte bodies are never copied into the write buffer.
+- **`sendfile` files**: `Response::file()` transfers file contents entirely in kernel space, bypassing user-space buffers entirely.
+
+### Pre-Composed Middleware
+At startup, `Router::finalize()` walks the entire route tree and composes all middleware chains into a single `Arc<dyn Fn(Context) -> Response>` per route. On the hot path, Chopin calls one pre-built closure — no `Arc::new`, no chain construction, no allocations.
+
+### Global Allocator: mimalloc
+Chopin uses `mimalloc` as the global allocator. Under heavy concurrency, mimalloc delivers dramatically lower allocation latency than the system allocator by using per-thread free lists and avoiding global lock contention.
 
 ### Kernel-Level Socket Handoff
 Chopin exploits the deep optimizations in Linux (`TCP_DEFER_ACCEPT`, `TCP_FASTOPEN`) and macOS (`SO_NOSIGPIPE`, `TCP_FASTOPEN`). `TCP_NODELAY` is attached immediately to the initial listener so all accepted connections natively inherit the flag, preventing an O(N) penalty dynamically modifying individual sockets.
