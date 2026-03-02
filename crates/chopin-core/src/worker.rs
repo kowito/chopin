@@ -596,6 +596,17 @@ impl Worker {
                                 }
                             }
 
+                            // If we serialised responses but the inner loop exited in
+                            // Reading state (single keep-alive request — not pipelined,
+                            // not Connection: close), we still need to flush the write buffer.
+                            if next_state == ConnState::Reading {
+                                if let Some(conn) = slab.get(idx) {
+                                    if conn.write_len > 0 {
+                                        next_state = ConnState::Writing;
+                                    }
+                                }
+                            }
+
                             // ── Write ──
                             if (next_state == ConnState::Writing || is_write)
                                 && let Some(conn) = slab.get_mut(idx)
