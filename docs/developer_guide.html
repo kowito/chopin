@@ -49,14 +49,15 @@
                 <li><a href="index.html"><i class='bx bx-arrow-back'></i> Back to Home</a></li>
 
                 <li class="nav-label">Developer Guide</li>
-                <li><a href="#setup" class="active"><i class='bx bx-cog'></i> 1. Foundation & Setup</a></li>
+                <li><a href="#setup" class="active"><i class='bx bx-cog'></i> 1. Foundation &amp; Setup</a></li>
                 <li><a href="#routing"><i class='bx bx-directions'></i> 2. Core Routing</a></li>
-                <li><a href="#middleware"><i class='bx bx-shield-quarter'></i> 3. Middleware</a></li>
-                <li><a href="#persistence"><i class='bx bx-data'></i> 4. Data & Persistence</a></li>
-                <li><a href="#advanced"><i class='bx bx-bolt-circle'></i> 5. Advanced Logic</a></li>
-                <li><a href="#performance"><i class='bx bx-stats'></i> 6. Performance</a></li>
-                <li><a href="#testing"><i class='bx bx-check-shield'></i> 7. Testing & Quality</a></li>
-                <li><a href="#deployment"><i class='bx bx-cloud-upload'></i> 8. Deployment</a></li>
+                <li><a href="#extractors"><i class='bx bx-layer'></i> 3. Extractors</a></li>
+                <li><a href="#middleware"><i class='bx bx-shield-quarter'></i> 4. Middleware</a></li>
+                <li><a href="#persistence"><i class='bx bx-data'></i> 5. Data &amp; Persistence</a></li>
+                <li><a href="#advanced"><i class='bx bx-bolt-circle'></i> 6. Advanced Logic</a></li>
+                <li><a href="#performance"><i class='bx bx-stats'></i> 7. Performance</a></li>
+                <li><a href="#testing"><i class='bx bx-check-shield'></i> 8. Testing &amp; Quality</a></li>
+                <li><a href="#deployment"><i class='bx bx-cloud-upload'></i> 9. Deployment</a></li>
             </ul>
         </nav>
 
@@ -74,7 +75,7 @@
             <section id="setup">
                 <h2>1. Foundation & Setup</h2>
                 <p>Welcome to the official developer guide for the <strong>Chopin HTTP Framework</strong>. Chopin
-                    requires a modern Rust toolchain (1.75+). It's optimized for UNIX-like environments (Linux
+                    requires a <strong>Rust nightly toolchain</strong>. It's optimized for UNIX-like environments (Linux
                     <code>epoll</code> and macOS <code>kqueue</code>).</p>
 
                 <h3>Environment Configuration</h3>
@@ -112,7 +113,7 @@ chopin dev</code></pre>
 
             <!-- Section 2 -->
             <section id="routing">
-                <h2>2. Core Routing & Handlers</h2>
+                <h2>2. Core Routing &amp; Handlers</h2>
                 <p>Chopin uses declarative attribute macros for request mapping. Handlers take a <code>Context</code>
                     and return a <code>Response</code>.</p>
 
@@ -122,35 +123,63 @@ chopin dev</code></pre>
 use chopin_macros::get;
 
 #[get("/ping")]
-fn ping(ctx: Context) -> Response {
+fn ping(_ctx: Context) -> Response {
     Response::text("pong")
 }</code></pre>
                 </div>
 
-                <h3>Path Parameters & Headers</h3>
+                <h3>All HTTP Methods</h3>
                 <div class="code-block glass-panel">
-                    <pre><code class="language-rust">#[post("/users/:id")]
-fn update_user(ctx: Context) -> Response {
-    let user_id = ctx.param("id").unwrap_or("0");
-    let auth_header = ctx.header("Authorization");
-    
-    Response::text(format!("Updating {}", user_id))
+                    <pre><code class="language-rust">use chopin_macros::{get, post, put, delete};
+
+#[get("/users")]           fn list_users(ctx: Context) -> Response { ... }
+#[post("/users")]          fn create_user(ctx: Context) -> Response { ... }
+#[put("/users/:id")]       fn update_user(ctx: Context) -> Response { ... }
+#[delete("/users/:id")]    fn delete_user(ctx: Context) -> Response { ... }</code></pre>
+                </div>
+
+                <h3>Path Parameters, Headers &amp; Query</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[get("/users/:id")]
+fn get_user(ctx: Context) -> Response {
+    let user_id = ctx.param("id").unwrap_or("0");   // :id segment
+    let auth    = ctx.header("authorization");       // case-insensitive
+    let qs      = ctx.req.query;                     // raw query string &amp;str
+    Response::text(format!("User: {}", user_id))
 }</code></pre>
                 </div>
 
-                <h3>Type-Safe JSON Payloads</h3>
+                <h3>Wildcard Paths</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[get("/assets/*path")]
+fn serve_static(ctx: Context) -> Response {
+    let rel = ctx.param("path").unwrap_or("");
+    Response::file(&format!("public/{}", rel))
+}</code></pre>
+                </div>
+
+                <h3>Manual Router Registration</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_core::router::Router;
+
+let mut router = Router::new();
+router.get("/ping",   ping_handler);
+router.post("/users", create_user_handler);
+router.finalize(); // Must call before serving</code></pre>
+                </div>
+
+                <h3>Type-Safe JSON Responses</h3>
                 <p>Chopin uses the Schema-JIT engine (<code>kowito-json</code>) for ultra-fast serialization.</p>
                 <div class="code-block glass-panel">
-                    <pre><code class="language-rust">#[derive(Serialize)]
-struct UserResponse {
-    id: i32,
-    username: String,
-}
+                    <pre><code class="language-rust">use kowito_json::serialize::Serialize;
+
+#[derive(Serialize)]
+struct UserResponse { id: i32, username: String }
 
 #[get("/user")]
 fn get_user(ctx: Context) -> Response {
     let payload = UserResponse { id: 1, username: "virtuoso".into() };
-    ctx.json(&payload)
+    ctx.json(&payload)    // shorthand for Response::json(&payload)
 }</code></pre>
                 </div>
             </section>
@@ -158,38 +187,139 @@ fn get_user(ctx: Context) -> Response {
             <hr class="section-divider">
 
             <!-- Section 3 -->
-            <section id="middleware">
-                <h2>3. The Middleware Pipeline</h2>
-                <p>Middlewares are pure functions that intercept the request/response lifecycle.</p>
+            <section id="extractors">
+                <h2>3. Extractors</h2>
+                <p>Chopin provides type-safe extractors for request bodies and query strings via
+                    <code>ctx.extract::&lt;T&gt;()</code>. On failure they return a pre-built
+                    <code>400 Bad Request</code> you can return directly.</p>
 
-                <h3>Timing Interceptor</h3>
+                <h3>JSON Body — <code>Json&lt;T&gt;</code></h3>
                 <div class="code-block glass-panel">
-                    <pre><code class="language-rust">fn timing_middleware(ctx: Context, next: BoxedHandler) -> Response {
-    let start = std::time::Instant::now();
-    let mut response = next(ctx);
-    let duration = start.elapsed();
-    
-    response.headers.push(("X-Runtime-Ms", duration.as_millis().to_string()));
-    response
-}
+                    <pre><code class="language-rust">use serde::Deserialize;
+use chopin_core::extract::Json;
 
-// Global registration
-router.layer(timing_middleware);</code></pre>
+#[derive(Deserialize)]
+struct NewItem { name: String, price: i32 }
+
+#[post("/items")]
+fn create_item(ctx: Context) -> Response {
+    let Json(body) = match ctx.extract::&lt;Json&lt;NewItem&gt;&gt;() {
+        Ok(j)  => j,
+        Err(e) => return e,  // 400 for malformed JSON
+    };
+    // body.name and body.price are now available
+    Response::new(201)
+}</code></pre>
                 </div>
 
-                <h3>Role-Based Auth (JWT)</h3>
+                <h3>Query String — <code>Query&lt;T&gt;</code></h3>
                 <div class="code-block glass-panel">
-                    <pre><code class="language-rust">require_role_middleware!(admin_only, MyClaims, UserRole::Admin, MyClaims::has_role);
+                    <pre><code class="language-rust">use serde::Deserialize;
+use chopin_core::extract::Query;
 
-router.get("/admin/dashboard", admin_only(dashboard_handler));</code></pre>
+#[derive(Deserialize)]
+struct Pagination { page: u32, limit: Option&lt;u32&gt; }
+
+#[get("/users")]
+fn list_users(ctx: Context) -> Response {
+    let Query(paging) = match ctx.extract::&lt;Query&lt;Pagination&gt;&gt;() {
+        Ok(q)  => q,
+        Err(e) => return e,
+    };
+    Response::text(format!("Page {}", paging.page))
+}</code></pre>
+                </div>
+
+                <h3>Raw Body Bytes</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[post("/raw")]
+fn raw_handler(ctx: Context) -> Response {
+    let body: &[u8] = ctx.req.body; // zero-copy slice into the read buffer
+    Response::text(format!("{} bytes received", body.len()))
+}</code></pre>
                 </div>
             </section>
 
             <hr class="section-divider">
 
             <!-- Section 4 -->
+            <section id="middleware">
+                <h2>4. The Middleware Pipeline</h2>
+                <p>Middlewares are pure functions with signature
+                    <code>fn(Context, BoxedHandler) -&gt; Response</code>. They intercept the
+                    request, call <code>next(ctx)</code> when ready, and can modify the response.</p>
+
+                <p>Chains are <strong>pre-composed at startup</strong> via <code>Router::finalize()</code>. The hot
+                    path calls one pre-built <code>Arc&lt;dyn Fn&gt;</code> — zero allocations per request.</p>
+
+                <h3>Timing Interceptor</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_core::router::BoxedHandler;
+
+fn timing_middleware(ctx: Context, next: BoxedHandler) -> Response {
+    let start = std::time::Instant::now();
+    let response = next(ctx);
+    response.with_header("X-Runtime-Us", start.elapsed().as_micros())
+}
+
+// Global: applies to all routes
+router.layer(timing_middleware);
+
+// Scoped: applies to /api/* only
+router.layer_path("/api", timing_middleware);</code></pre>
+                </div>
+
+                <h3>CORS Middleware</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">fn cors_middleware(ctx: Context, next: BoxedHandler) -> Response {
+    next(ctx)
+        .with_header("Access-Control-Allow-Origin", "*")
+        .with_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
+        .with_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+}</code></pre>
+                </div>
+
+                <h3>Role-Based Auth (JWT)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::{require_role_middleware, Role};
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, PartialEq)]
+enum UserRole { Admin, User }
+
+#[derive(Serialize, Deserialize)]
+struct MyClaims {
+    sub: String,
+    role: UserRole,
+}
+
+impl MyClaims {
+    fn has_role(&self, required: &UserRole) -> bool { &self.role == required }
+}
+
+// Generates a static zero-allocation admin_only() wrapper function
+require_role_middleware!(admin_only, MyClaims, UserRole::Admin, MyClaims::has_role);
+
+router.get("/admin/dashboard", admin_only(dashboard_handler));</code></pre>
+                </div>
+
+                <h3>JWT Token Management</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::JwtManager;
+
+// Sign a new token
+let token = JwtManager::sign(&claims, "my_secret", 3600).unwrap();
+
+// Verify &amp; decode a token
+let claims: MyClaims = JwtManager::verify(&token, "my_secret").unwrap();</code></pre>
+                </div>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Section 5 -->
             <section id="persistence">
-                <h2>4. Data & Persistence</h2>
+                <h2>5. Data &amp; Persistence</h2>
                 <p>Shared-Nothing persistence means avoid global mutexes on pools.</p>
 
                 <h3>Worker-Local Pooling</h3>
@@ -223,20 +353,47 @@ fn list_products(ctx: Context) -> Response {
 
             <hr class="section-divider">
 
-            <!-- Section 5 -->
+            <!-- Section 6 -->
             <section id="advanced">
-                <h2>5. Advanced Logic</h2>
+                <h2>6. Advanced Logic</h2>
 
-                <h3>Streaming Multipart</h3>
-                <p>Chopin's <code>Multipart</code> parser iterates through body bytes without massive buffering.</p>
+                <h3>Zero-Copy File Serving</h3>
+                <p>Serve files directly from disk using the platform <code>sendfile</code> syscall — bytes never pass
+                    through user space. Content-Type is auto-detected from the file extension.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[get("/downloads/*path")]
+fn serve_file(ctx: Context) -> Response {
+    let rel = ctx.param("path").unwrap_or("");
+    Response::file(&format!("public/{}", rel))
+    // Returns 404 automatically if file doesn't exist
+}</code></pre>
+                </div>
+                <p>For custom byte ranges:</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_core::http::OwnedFd;
+use chopin_core::syscalls::{open_file_readonly, file_size};
+
+fn serve_range(ctx: Context) -> Response {
+    let fd   = open_file_readonly("/data/video.mp4").unwrap();
+    let size = file_size(fd).unwrap();
+    Response::sendfile(OwnedFd::new(fd), 0, size, "video/mp4")
+}</code></pre>
+                </div>
+
+                <h3>Streaming Multipart Uploads</h3>
+                <p>Chopin's <code>Multipart</code> parser iterates through body bytes without massive buffering.
+                    <code>ctx.multipart()</code> automatically extracts the boundary from the
+                    <code>Content-Type</code> header.</p>
                 <div class="code-block glass-panel">
                     <pre><code class="language-rust">#[post("/upload")]
 fn upload(ctx: Context) -> Response {
-    if let Some(multipart) = ctx.multipart() {
-        for part in multipart {
-            let p = part.unwrap();
-            println!("File: {:?}", p.filename);
-        }
+    let Some(multipart) = ctx.multipart() else {
+        return Response::bad_request();
+    };
+    for part in multipart {
+        let p = part.unwrap();
+        println!("Field: {}, File: {:?}", p.name.unwrap_or("?"), p.filename);
+        // p.body: &[u8] — zero-copy slice into the connection read buffer
     }
     Response::text("Upload Done")
 }</code></pre>
@@ -244,31 +401,79 @@ fn upload(ctx: Context) -> Response {
 
                 <h3>Panic Recovery</h3>
                 <p>Faulty routes are isolated via <code>catch_unwind</code>. A panic returns a
-                    <code>500 Server Error</code> but keeps the worker alive.</p>
-            </section>
+                    <code>500 Server Error</code> but keeps the worker alive and ready for the next request.</p>
 
-            <hr class="section-divider">
-
-            <!-- Section 6 -->
-            <section id="performance">
-                <h2>6. Performance & Scaling</h2>
-                <ul class="feature-grid">
-                    <li class="feature-card glass-panel">
-                        <h3>Core Affinity</h3>
-                        <p>Workers are pinned to physical cores to maximize cache locality.</p>
-                    </li>
-                    <li class="feature-card glass-panel">
-                        <h3>Kernel Handoff</h3>
-                        <p>Uses <code>TCP_DEFER_ACCEPT</code> and <code>TCP_FASTOPEN</code> to minimize round trips.</p>
-                    </li>
-                </ul>
+                <h3>Custom HTTP Headers on Responses</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">// Builder pattern — chainable, returns Response
+Response::json(&data)
+    .with_header("X-Request-Id", "abc-123")
+    .with_header("Cache-Control", "max-age=3600")
+    .with_header("Content-Disposition", "attachment; filename=\"data.json\"")</code></pre>
+                </div>
             </section>
 
             <hr class="section-divider">
 
             <!-- Section 7 -->
+            <section id="performance">
+                <h2>7. Performance &amp; Scaling</h2>
+
+                <div class="feature-grid">
+                    <div class="feature-card glass-panel">
+                        <h3><i class='bx bx-crosshair'></i> Core Affinity</h3>
+                        <p>Workers are pinned to physical cores via <code>core_affinity</code> to maximize L1/L2
+                            cache hits and eliminate context switching overhead.</p>
+                    </div>
+                    <div class="feature-card glass-panel">
+                        <h3><i class='bx bx-transfer'></i> writev Zero-Copy Flush</h3>
+                        <p>Headers and body are delivered in one <code>writev</code> syscall. Static
+                            (<code>&amp;'static [u8]</code>) and byte bodies bypass the write buffer &mdash; no
+                            <code>memcpy</code> on the hot path.</p>
+                    </div>
+                    <div class="feature-card glass-panel">
+                        <h3><i class='bx bx-file-blank'></i> sendfile File Serving</h3>
+                        <p><code>Response::file()</code> transfers file bytes entirely in kernel space (Linux
+                            <code>sendfile</code> / macOS <code>sendfile</code>). The user-space process never
+                            touches the file data.</p>
+                    </div>
+                    <div class="feature-card glass-panel">
+                        <h3><i class='bx bx-sort'></i> Pre-Composed Middleware</h3>
+                        <p>At startup, <code>Router::finalize()</code> walks the route tree and composes all
+                            middleware chains into one <code>Arc&lt;dyn Fn&gt;</code> per route. Zero
+                            <code>Arc::new</code> per request — just one pointer call.</p>
+                    </div>
+                    <div class="feature-card glass-panel">
+                        <h3><i class='bx bx-memory-card'></i> mimalloc Allocator</h3>
+                        <p>Per-thread free lists and low lock-contention allocation via <code>mimalloc</code>.
+                            Significantly lower allocation latency than the system allocator under concurrency.</p>
+                    </div>
+                    <div class="feature-card glass-panel">
+                        <h3><i class='bx bx-network-chart'></i> Kernel Socket Handoff</h3>
+                        <p>Uses <code>TCP_DEFER_ACCEPT</code> and <code>TCP_FASTOPEN</code> (Linux) and
+                            <code>SO_NOSIGPIPE</code> (macOS) to minimize round trips. <code>TCP_NODELAY</code>
+                            is inherited by all accepted sockets from the listener.</p>
+                    </div>
+                </div>
+
+                <h3 style="margin-top: 2rem;">mimalloc Global Allocator Setup</h3>
+                <p>Chopin applies this automatically. For your own crates that depend on chopin-core, <code>mimalloc</code>
+                    is already active as the workspace global allocator.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">// In your Cargo.toml:
+// mimalloc = { version = "0.1", default-features = false }
+
+// In main.rs (Chopin does this for you):
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;</code></pre>
+                </div>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Section 8 -->
             <section id="testing">
-                <h2>7. Testing & Quality</h2>
+                <h2>8. Testing &amp; Quality</h2>
                 <h3>Architectural Linter</h3>
                 <div class="code-block glass-panel">
                     <pre><code class="language-bash">chopin check</code></pre>
@@ -282,9 +487,9 @@ wrk -t10 -c200 -d10s http://localhost:8080/ping</code></pre>
 
             <hr class="section-divider">
 
-            <!-- Section 8 -->
+            <!-- Section 9 -->
             <section id="deployment">
-                <h2>8. Deployment & Observability</h2>
+                <h2>9. Deployment &amp; Observability</h2>
                 <h3>Dockerization</h3>
                 <div class="code-block glass-panel">
                     <pre><code class="language-bash">chopin deploy docker</code></pre>

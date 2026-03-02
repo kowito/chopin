@@ -58,10 +58,12 @@
 
                 <li class="nav-label">User Manual</li>
                 <li><a href="#cli"><i class='bx bx-terminal'></i> CLI Reference</a></li>
-                <li><a href="#routing"><i class='bx bx-directions'></i> Routing & Macros</a></li>
-                <li><a href="#extractors"><i class='bx bx-layer'></i> Extractors & JSON</a></li>
-                <li><a href="#multipart"><i class='bx bx-file'></i> Multipart & Uploads</a></li>
-                <li><a href="#middleware"><i class='bx bx-shield-quarter'></i> Middleware & Auth</a></li>
+                <li><a href="#routing"><i class='bx bx-directions'></i> Routing &amp; Macros</a></li>
+                <li><a href="#extractors"><i class='bx bx-layer'></i> Extractors &amp; JSON</a></li>
+                <li><a href="#file-serving"><i class='bx bx-file-blank'></i> File Serving</a></li>
+                <li><a href="#response-api"><i class='bx bx-code-curly'></i> Response API</a></li>
+                <li><a href="#multipart"><i class='bx bx-file'></i> Multipart &amp; Uploads</a></li>
+                <li><a href="#middleware"><i class='bx bx-shield-quarter'></i> Middleware &amp; Auth</a></li>
                 <li><a href="#persistence"><i class='bx bx-data'></i> Persistence Deep-Dive</a></li>
                 <li><a href="#orm-manual"><i class='bx bx-book-content'></i> ORM Reference</a></li>
 
@@ -154,7 +156,7 @@
                             </li>
                             <li><i class='bx bx-check-double'></i> <strong>Connection Slab:</strong> Custom O(1)
                                 connection
-                                state management.</li>
+                                state management (10,000 slots/worker).</li>
                             <li><i class='bx bx-check-double'></i> <strong>TCP_NODELAY:</strong> Inherited from listener
                                 to save syscalls.</li>
                         </ul>
@@ -162,7 +164,7 @@
                 </div>
 
                 <div class="glass-panel" style="margin-top: 2rem; padding: 2rem;">
-                    <h3>Advanced Performance Features</h3>
+                    <h3>v0.5.8 Performance Features</h3>
                     <div
                         style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 2rem; margin-top: 1.5rem;">
                         <div>
@@ -179,6 +181,26 @@
                             <h4><i class='bx bx-shield-alt-2'></i> Catch-Unwind</h4>
                             <p>Global panic hooks ensure that a single failing handler doesn't crash the entire worker
                                 thread, maintaining 99.999% availability.</p>
+                        </div>
+                        <div>
+                            <h4><i class='bx bx-transfer'></i> writev Zero-Copy Flush</h4>
+                            <p>Response headers and body are delivered in a single <code>writev</code> syscall. Static
+                                bodies bypass the write buffer entirely &mdash; no <code>memcpy</code>.</p>
+                        </div>
+                        <div>
+                            <h4><i class='bx bx-file-blank'></i> sendfile File Serving</h4>
+                            <p><code>Response::file()</code> uses the platform <code>sendfile</code> to transfer file
+                                bytes entirely in kernel space, eliminating user-space copies.</p>
+                        </div>
+                        <div>
+                            <h4><i class='bx bx-sort'></i> Pre-Composed Middleware</h4>
+                            <p>Middleware chains are resolved once at startup. The hot path calls one pre-built
+                                <code>Arc&lt;dyn Fn&gt;</code> &mdash; zero <code>Arc::new</code> per request.</p>
+                        </div>
+                        <div>
+                            <h4><i class='bx bx-memory-card'></i> mimalloc Global Allocator</h4>
+                            <p>Per-thread free lists and low lock-contention allocation via <code>mimalloc</code>
+                                dramatically reduces allocation latency under concurrency.</p>
                         </div>
                     </div>
                 </div>
@@ -204,7 +226,12 @@
                             <tr>
                                 <td><strong>HTTP/1.1</strong></td>
                                 <td>Production Ready</td>
-                                <td>Zero-copy request parsing with <code>kowito-json</code> engine integration.</td>
+                                <td>Zero-copy parsing; <code>writev</code> header+body flush; HTTP pipelining.</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Static Files</strong></td>
+                                <td>Zero-Copy (<code>sendfile</code>)</td>
+                                <td>Kernel-space file transfer; auto MIME detection (~30 types).</td>
                             </tr>
                             <tr>
                                 <td><strong>PostgreSQL</strong></td>
@@ -316,11 +343,11 @@ Hyper      [██████████████████████  
                 <p>Or add individual crates to your <code>Cargo.toml</code>:</p>
                 <div class="code-block glass-panel">
                     <pre><code class="language-toml">[dependencies]
-chopin-core = "0.5.7"
-chopin-macros = "0.5.7"    # For attribute routing
-chopin-pg = "0.5.7"        # High-performance PostgreSQL driver
-chopin-orm = "0.5.7"       # Zero-allocation ORM layer
-kowito-json = "0.2.8"    # Schema-JIT SIMD JSON parser
+chopin-core = "0.5.8"
+chopin-macros = "0.5.8"    # For attribute routing
+chopin-pg = "0.5.8"        # High-performance PostgreSQL driver
+chopin-orm = "0.5.8"       # Zero-allocation ORM layer
+kowito-json = "0.2.11"   # Schema-JIT SIMD JSON serializer
 </code></pre>
                 </div>
             </section>
@@ -412,7 +439,7 @@ kowito-json = "0.2.8"    # Schema-JIT SIMD JSON parser
                 <p>Modern Chopin uses attribute macros for routing and implicit discovery.</p>
 
                 <div class="code-block glass-panel">
-                    <pre><code class="language-rust">use chopin_core::Chopin;
+                    <pre><code class="language-rust">use chopin_core::{Context, Response};
 use chopin_macros::get;
 
 #[get("/")]
@@ -466,63 +493,207 @@ router.get("/static/*path", static_file_handler);
 
             <!-- Extractors User Manual -->
             <section id="extractors">
-                <h2>Extractors & JSON</h2>
-                <p>Chopin relies on <code>kowito-json</code> for "Schema-JIT" serialization. Because it generates the
-                    JSON serialization logic at compile time, JSON payload encoding operates at memory bandwidth speeds.
-                </p>
+                <h2>Extractors &amp; JSON</h2>
+                <p>Chopin uses <code>kowito-json</code> for "Schema-JIT" serialization. Serialization logic is
+                    generated at compile time — JSON encoding runs at near-memory bandwidth speeds. Deserialization uses
+                    <code>serde</code>.</p>
 
+                <h3>Serializing Responses</h3>
                 <div class="code-block glass-panel">
-                    <pre><code class="language-rust">use chopin_core::{Server, Router, Context, Response};
-use kowito_json::KJson; // High-performance schema-based JSON
+                    <pre><code class="language-rust">use chopin_core::{Context, Response};
+use kowito_json::serialize::Serialize;
 
-#[derive(KJson, Default)]
+#[derive(Serialize)]
 struct User {
     id: u64,
     username: String,
     is_active: bool,
 }
 
-fn user_handler(ctx: Context) -> Response {
-    let user = User {
-        id: 42,
-        username: "virtuoso".into(),
-        is_active: true,
-    };
-    
-    // Turbo-charged Schema-JIT serialization
-    ctx.json(&user) 
+#[get("/user/:id")]
+fn get_user(ctx: Context) -> Response {
+    let user = User { id: 42, username: "virtuoso".into(), is_active: true };
+    ctx.json(&user)  // or Response::json(&user)
 }</code></pre>
                 </div>
 
-                <p>You can also ergonomically extract data from incoming requests if you build custom extractors
-                    bridging with <code>Context</code>.</p>
+                <h3>Deserializing Request Bodies (<code>Json&lt;T&gt;</code>)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use serde::Deserialize;
+use chopin_core::extract::Json;
+
+#[derive(Deserialize)]
+struct CreateUser { username: String, email: String }
+
+#[post("/users")]
+fn create_user(ctx: Context) -> Response {
+    let Json(body) = match ctx.extract::&lt;Json&lt;CreateUser&gt;&gt;() {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    // body.username and body.email are ready to use
+    Response::new(201)
+}</code></pre>
+                </div>
+
+                <h3>Query Parameters (<code>Query&lt;T&gt;</code>)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use serde::Deserialize;
+use chopin_core::extract::Query;
+
+#[derive(Deserialize)]
+struct SearchParams { q: String, page: Option&lt;u32&gt; }
+
+#[get("/search")]
+fn search(ctx: Context) -> Response {
+    let Query(params) = match ctx.extract::&lt;Query&lt;SearchParams&gt;&gt;() {
+        Ok(q) => q,
+        Err(e) => return e,
+    };
+    Response::text(format!("Searching: {}", params.q))
+}</code></pre>
+                </div>
             </section>
 
             <hr class="section-divider">
 
-            <!-- Multipart Section -->
+            <!-- File Serving Section -->
+            <section id="file-serving">
+                <h2>Zero-Copy File Serving</h2>
+                <p>Use <code>Response::file(path)</code> to serve files with zero user-space copying. The worker passes
+                    the file descriptor directly to the kernel via <code>sendfile</code> (Linux) / <code>sendfile</code>
+                    (macOS). Content-Type is inferred from the extension automatically (∼30 MIME types).</p>
+
+                <h3>Automatic Detection</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[get("/assets/*path")]
+fn serve_asset(ctx: Context) -> Response {
+    let path = ctx.param("path").unwrap_or("");
+    // Automatically sets Content-Type. Returns 404 if not found.
+    Response::file(&format!("public/{}", path))
+}</code></pre>
+                </div>
+
+                <h3>Custom Range / Content-Type</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_core::http::OwnedFd;
+use chopin_core::syscalls::{open_file_readonly, file_size};
+
+#[get("/download")]
+fn download(ctx: Context) -> Response {
+    let fd = open_file_readonly("/data/archive.tar.gz").unwrap();
+    let size = file_size(fd).unwrap();
+    // Response::sendfile(fd, offset, len, content_type)
+    Response::sendfile(OwnedFd::new(fd), 0, size, "application/gzip")
+}</code></pre>
+                </div>
+
+                <div class="table-wrapper glass-panel" style="margin-top: 1.5rem;">
+                    <table>
+                        <thead><tr><th>Extension</th><th>Content-Type</th><th>Extension</th><th>Content-Type</th></tr></thead>
+                        <tbody>
+                            <tr><td>.html</td><td>text/html</td><td>.json</td><td>application/json</td></tr>
+                            <tr><td>.js</td><td>application/javascript</td><td>.css</td><td>text/css</td></tr>
+                            <tr><td>.png</td><td>image/png</td><td>.jpg/.jpeg</td><td>image/jpeg</td></tr>
+                            <tr><td>.svg</td><td>image/svg+xml</td><td>.webp</td><td>image/webp</td></tr>
+                            <tr><td>.wasm</td><td>application/wasm</td><td>.gz</td><td>application/gzip</td></tr>
+                            <tr><td>.pdf</td><td>application/pdf</td><td>.mp4</td><td>video/mp4</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Response API Reference Section -->
+            <section id="response-api">
+                <h2>Response API Reference</h2>
+                <p>Every handler returns a <code>Response</code>. All constructors return a 200-status response unless
+                    noted. Use <code>.with_header(name, value)</code> to chain custom headers.</p>
+
+                <div class="table-wrapper glass-panel">
+                    <table>
+                        <thead>
+                            <tr><th>Method</th><th>Status</th><th>Body / Behaviour</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td><code>Response::text(body)</code></td><td>200</td><td>Allocates a byte body with <code>text/plain</code> content-type.</td></tr>
+                            <tr><td><code>Response::text_static(body)</code></td><td>200</td><td><strong>Zero-alloc.</strong> Takes <code>&amp;'static [u8]</code>. Ideal for fixed messages.</td></tr>
+                            <tr><td><code>Response::json(&amp;val)</code></td><td>200</td><td>Serializes <code>T: Serialize</code> via Schema-JIT engine.</td></tr>
+                            <tr><td><code>Response::json_bytes(body)</code></td><td>200</td><td>Pre-serialized JSON bytes. Sets <code>application/json</code>.</td></tr>
+                            <tr><td><code>Response::file(path)</code></td><td>200/404</td><td>Zero-copy <code>sendfile</code>. Auto Content-Type. Returns 404 on missing file.</td></tr>
+                            <tr><td><code>Response::sendfile(fd, offset, len, ct)</code></td><td>200</td><td>Custom range sendfile with explicit content-type.</td></tr>
+                            <tr><td><code>Response::new(status)</code></td><td>any</td><td>Empty body with given status code.</td></tr>
+                            <tr><td><code>Response::not_found()</code></td><td>404</td><td>Plain-text "Not Found".</td></tr>
+                            <tr><td><code>Response::bad_request()</code></td><td>400</td><td>Plain-text "Bad Request".</td></tr>
+                            <tr><td><code>Response::unauthorized()</code></td><td>401</td><td>Plain-text "Unauthorized".</td></tr>
+                            <tr><td><code>Response::forbidden()</code></td><td>403</td><td>Plain-text "Forbidden".</td></tr>
+                            <tr><td><code>Response::server_error()</code></td><td>500</td><td>Plain-text "Internal Server Error".</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3>Adding Custom Headers</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">// Builder style — chains on a value
+Response::json(&data)
+    .with_header("X-Request-Id", request_id)
+    .with_header("Cache-Control", "no-store")
+
+// Direct mutation in middleware
+fn cors_middleware(ctx: Context, next: BoxedHandler) -> Response {
+    next(ctx).with_header("Access-Control-Allow-Origin", "*")
+}</code></pre>
+                </div>
+
+                <h3>Context Helpers</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">// Path parameter
+let id: &str = ctx.param("id").unwrap_or("0");
+
+// Request header (case-insensitive)
+let auth: Option&lt;&str&gt; = ctx.header("Authorization");
+
+// Raw query string (e.g. "page=2&limit=50")
+let qs: Option&lt;&str&gt; = ctx.req.query;
+
+// Raw request body bytes
+let body: &[u8] = ctx.req.body;
+
+// HTTP method and path
+let method = ctx.req.method; // Method::Get / Post / Put / Delete
+let path   = ctx.req.path;   // &str</code></pre>
+                </div>
+            </section>
+
+            <hr class="section-divider">
             <section id="multipart">
-                <h2>Multipart & File Uploads</h2>
+                <h2>Multipart &amp; File Uploads</h2>
                 <p>Chopin includes a zero-allocation <code>Multipart</code> parser that operates directly on the request
-                    buffer, allowing for efficient file uploads without unnecessary memory copying.</p>
+                    buffer. Use <code>ctx.multipart()</code> — it automatically reads the <code>Content-Type</code>
+                    boundary. No imports needed.</p>
 
                 <div class="code-block glass-panel">
-                    <pre><code class="language-rust">use chopin_core::multipart::Multipart;
-
-#[post("/upload")]
+                    <pre><code class="language-rust">#[post("/upload")]
 fn upload_handler(ctx: Context) -> Response {
-    let boundary = ctx.req.header("Content-Type")?.split("boundary=")?.get(1)?;
-    let multipart = Multipart::new(ctx.req.body, boundary);
+    let Some(multipart) = ctx.multipart() else {
+        return Response::bad_request();
+    };
 
     for part in multipart {
-        let part = part?;
-        println!("Received part: {} ({} bytes)", part.name.unwrap_or("unnamed"), part.body.len());
-        // Save part.body to disk or process...
+        let p = part.unwrap();
+        println!("Field: {}, File: {:?}, Size: {} bytes",
+            p.name.unwrap_or("unnamed"),
+            p.filename,
+            p.body.len()); // p.body is a &[u8] — zero-copy into the read buffer
     }
     
     Response::text("Upload complete")
 }</code></pre>
                 </div>
+
+                <p>Each <code>Part</code> contains a <code>&amp;[u8]</code> slice pointing directly into the connection
+                    read buffer — no heap allocation, no copy.</p>
             </section>
 
             <hr class="section-divider">
