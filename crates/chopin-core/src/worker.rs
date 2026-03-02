@@ -373,10 +373,13 @@ impl Worker {
                                                 w!(b"Server: chopin\r\n");
                                             }
 
-                                            // Date header: format_http_date uses the loop's `now`
-                                            // (refreshed every 1024 iters) — zero extra syscall.
+                                            // Date header: fresh timestamp per response — no caching.
                                             let mut date_buf = [0u8; 37];
-                                            format_http_date(now, &mut date_buf);
+                                            let response_now = SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .map_err(|_| ChopinError::ClockError)?
+                                                .as_secs() as u32;
+                                            format_http_date(response_now, &mut date_buf);
                                             w!(&date_buf[..]);
 
                                             // Pre-baked content-type for common types

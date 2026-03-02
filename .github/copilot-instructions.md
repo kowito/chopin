@@ -63,7 +63,7 @@ struct Msg { message: &'static str }
 - **No `Arc::new` / `Vec::new` on the hot request path.** Headers use `Headers` (fixed stack array). Route params use `[(&str, &str); MAX_PARAMS]`.
 - **No `String` allocation in parsers or serializers.** Use `&str` slices into buffers.
 - **`Conn` and `WorkerMetrics` are `#[repr(C, align(64))]`** — keep them that way to prevent false sharing.
-- **`SystemTime::now()` must not be called per-request.** The `Date` header is written per-response using `format_http_date(now, &mut date_buf)` where `now` is the loop-maintained timestamp (refreshed every ~1024 epoll iterations) — zero extra syscall.
+- **`SystemTime::now()` for the `Date` header is called once per-response.** This is intentional — do not replace it with a cached/stale value. `format_http_date(unix_secs, &mut buf)` is cheap (~200 cycles); the syscall cost is acceptable.
 - **Buffers**: `READ_BUF_SIZE = 8192`, `WRITE_BUF_SIZE = 16384` (conn.rs). Static/byte bodies bypass `write_buf` entirely via `writev` zero-copy.
 
 ## ORM pattern
@@ -90,4 +90,4 @@ router.middleware("/admin", auth_middleware);
 ## TFB compliance checklist
 All responses must include `Date`, `Server: chopin`, `Content-Type`, `Content-Length`, and `Connection`.
 
-**NEVER pre-cache or store the formatted Date string.** Call `format_http_date(now, &mut date_buf)` per-response using the worker loop's existing `now` variable — this is already a cheap stack write (~200 cycles), not a syscall. Do not add `date_cache` fields to `Worker` or any other struct.
+**NEVER pre-cache or store the formatted Date string.** Each response calls `SystemTime::now()` and `format_http_date(unix_secs, &mut date_buf)` directly — no `date_cache` fields, no struct state, no stale timestamps.
