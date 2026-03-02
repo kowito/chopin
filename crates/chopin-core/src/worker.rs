@@ -545,6 +545,19 @@ impl Worker {
                                                         }
                                                         w!(b"0\r\n\r\n");
                                                     }
+                                                    crate::http::Body::File {
+                                                        mut fd,
+                                                        offset,
+                                                        len,
+                                                    } => {
+                                                        // Zero-copy path: don't write body to
+                                                        // write_buf. Instead, store sendfile state
+                                                        // on the connection. The file body will be
+                                                        // sent via sendfile() after headers flush.
+                                                        conn.sendfile_fd = fd.take();
+                                                        conn.sendfile_offset = offset;
+                                                        conn.sendfile_remaining = len;
+                                                    }
                                                 }
                                             }
 
@@ -650,6 +663,7 @@ impl Worker {
                             // ── Write ──
                             if next_state == ConnState::Writing || is_write {
                                 if let Some(conn) = slab.get_mut(idx) {
+                                    // Phase 1: Flush write_buf (HTTP headers + non-file body)
                                     let write_total = conn.write_len as usize;
                                     let ws = conn.write_pos as usize;
                                     if ws < write_total {
@@ -660,33 +674,62 @@ impl Worker {
                                             Ok(n) if n > 0 => {
                                                 self.metrics.add_bytes(n);
                                                 conn.write_pos += n as u16;
-                                                if conn.write_pos as usize >= write_total {
-                                                    // Fully flushed — reset write buffer
-                                                    conn.write_len = 0;
-                                                    conn.write_pos = 0;
-                                                    let ka = (conn.flags
-                                                        & crate::conn::CONN_KEEP_ALIVE)
-                                                        != 0;
-                                                    if ka && !is_shutting_down {
-                                                        if conn.read_len > 0 {
-                                                            // More pipelined data to parse!
-                                                            next_state = ConnState::Parsing;
-                                                            conn.state = ConnState::Parsing;
-                                                            continue 'pipeline;
-                                                        } else {
-                                                            conn.state = ConnState::Reading;
-                                                            next_state = ConnState::Reading;
-                                                        }
-                                                    } else {
-                                                        conn.state = ConnState::Closing;
-                                                        next_state = ConnState::Closing;
-                                                    }
-                                                }
                                             }
-                                            Ok(_) => {}
+                                            Ok(_) => {} // WouldBlock — wait for EPOLLOUT
                                             Err(_) => {
+                                                conn.close_sendfile();
                                                 next_state = ConnState::Closing;
                                             }
+                                        }
+                                    }
+
+                                    // Phase 2: Zero-copy sendfile (only after headers fully flushed)
+                                    if next_state != ConnState::Closing
+                                        && conn.write_pos as usize >= conn.write_len as usize
+                                        && conn.sendfile_remaining > 0
+                                    {
+                                        match syscalls::sendfile_nonblocking(
+                                            fd,
+                                            conn.sendfile_fd,
+                                            &mut conn.sendfile_offset,
+                                            conn.sendfile_remaining,
+                                        ) {
+                                            Ok(n) if n > 0 => {
+                                                self.metrics.add_bytes(n);
+                                                conn.sendfile_remaining -= n as u64;
+                                            }
+                                            Ok(_) => {} // WouldBlock — wait for EPOLLOUT
+                                            Err(_) => {
+                                                conn.close_sendfile();
+                                                next_state = ConnState::Closing;
+                                            }
+                                        }
+                                    }
+
+                                    // Check if fully done (headers flushed AND no sendfile pending)
+                                    if next_state != ConnState::Closing
+                                        && conn.write_pos as usize >= conn.write_len as usize
+                                        && conn.sendfile_remaining == 0
+                                    {
+                                        // Close the sendfile fd if one was active
+                                        conn.close_sendfile();
+                                        // Reset write buffer
+                                        conn.write_len = 0;
+                                        conn.write_pos = 0;
+                                        let ka = (conn.flags & crate::conn::CONN_KEEP_ALIVE) != 0;
+                                        if ka && !is_shutting_down {
+                                            if conn.read_len > 0 {
+                                                // More pipelined data to parse!
+                                                next_state = ConnState::Parsing;
+                                                conn.state = ConnState::Parsing;
+                                                continue 'pipeline;
+                                            } else {
+                                                conn.state = ConnState::Reading;
+                                                next_state = ConnState::Reading;
+                                            }
+                                        } else {
+                                            conn.state = ConnState::Closing;
+                                            next_state = ConnState::Closing;
                                         }
                                     }
                                 }
@@ -703,6 +746,10 @@ impl Worker {
                         }
 
                         if next_state == ConnState::Closing {
+                            // Clean up any in-progress sendfile before closing
+                            if let Some(conn) = slab.get_mut(idx) {
+                                conn.close_sendfile();
+                            }
                             epoll.delete(fd).ok();
                             unsafe {
                                 libc::close(fd);
@@ -723,8 +770,9 @@ impl Worker {
         }
 
         for i in 0..slab.capacity() {
-            if let Some(conn) = slab.get(i) {
+            if let Some(conn) = slab.get_mut(i) {
                 if conn.state != ConnState::Free {
+                    conn.close_sendfile();
                     unsafe {
                         libc::close(conn.fd);
                     }
@@ -752,6 +800,12 @@ impl Worker {
                         }
                         if now.wrapping_sub(conn.last_active) > TIMEOUT {
                             let fd = conn.fd;
+                            // Clean up any in-progress sendfile
+                            if conn.sendfile_fd >= 0 {
+                                unsafe {
+                                    libc::close(conn.sendfile_fd);
+                                }
+                            }
                             epoll.delete(fd).ok();
                             unsafe {
                                 libc::close(fd);

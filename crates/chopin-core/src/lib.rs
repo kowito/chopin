@@ -18,7 +18,7 @@ pub mod worker;
 // Re-exports for users
 pub use error::{ChopinError, ChopinResult};
 pub use extract::{FromRequest, Json, Query};
-pub use http::{Context, Method, Request, Response};
+pub use http::{Body, Context, Method, OwnedFd, Request, Response};
 pub use json::KJson;
 pub use router::{RouteDef, Router};
 pub use server::{Chopin, Server};

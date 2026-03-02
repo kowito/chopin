@@ -1,4 +1,6 @@
 // src/http.rs
+use crate::syscalls;
+use std::io;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -111,11 +113,52 @@ pub struct Request<'a> {
     pub body: &'a [u8],
 }
 
+/// RAII wrapper for a file descriptor. Closes the fd on drop unless taken.
+pub struct OwnedFd(i32);
+
+impl OwnedFd {
+    /// Wrap an already-opened file descriptor.
+    pub fn new(fd: i32) -> Self {
+        Self(fd)
+    }
+
+    /// Take the raw fd, preventing Drop from closing it.
+    /// The caller assumes ownership of closing the fd.
+    pub(crate) fn take(&mut self) -> i32 {
+        let fd = self.0;
+        self.0 = -1;
+        fd
+    }
+
+    /// Peek at the raw fd without taking ownership.
+    #[allow(dead_code)]
+    pub fn raw(&self) -> i32 {
+        self.0
+    }
+}
+
+impl Drop for OwnedFd {
+    fn drop(&mut self) {
+        if self.0 >= 0 {
+            unsafe {
+                libc::close(self.0);
+            }
+        }
+    }
+}
+
 pub enum Body {
     Empty,
     Static(&'static [u8]),
     Bytes(Vec<u8>),
     Stream(Box<dyn Iterator<Item = Vec<u8>> + Send>),
+    /// Zero-copy file body — served via `sendfile()` entirely in kernel space.
+    /// The fd is owned and will be closed when the response is consumed or dropped.
+    File {
+        fd: OwnedFd,
+        offset: u64,
+        len: u64,
+    },
 }
 
 impl Body {
@@ -126,6 +169,7 @@ impl Body {
             Body::Static(b) => b.len(),
             Body::Bytes(b) => b.len(),
             Body::Stream(_) => 0, // Chunked has no predefined length
+            Body::File { len, .. } => *len as usize,
         }
     }
 
@@ -141,7 +185,14 @@ impl Body {
             Body::Static(b) => b,
             Body::Bytes(b) => b.as_slice(),
             Body::Stream(_) => &[], // Streams must be polled/chunked iteratively
+            Body::File { .. } => &[], // File data lives on disk, sent via sendfile
         }
+    }
+
+    /// Returns `true` if this body will be served via zero-copy `sendfile`.
+    #[inline(always)]
+    pub fn is_file(&self) -> bool {
+        matches!(self, Body::File { .. })
     }
 }
 
@@ -267,6 +318,101 @@ impl Response {
             content_type: "application/octet-stream",
             headers: Vec::new(),
         }
+    }
+
+    /// Serve a file using zero-copy `sendfile`. Content-Type is inferred from the
+    /// file extension. Returns 404 if the file does not exist or cannot be opened.
+    pub fn file(path: &str) -> Self {
+        match Self::try_file(path) {
+            Ok(resp) => resp,
+            Err(_) => Self::not_found(),
+        }
+    }
+
+    /// Internal: attempt to open a file and build a zero-copy response.
+    fn try_file(path: &str) -> io::Result<Self> {
+        let fd = syscalls::open_file_readonly(path)?;
+        let size = match syscalls::file_size(fd) {
+            Ok(s) => s,
+            Err(e) => {
+                unsafe {
+                    libc::close(fd);
+                }
+                return Err(e);
+            }
+        };
+        let content_type = mime_from_path(path);
+
+        Ok(Self {
+            status: 200,
+            body: Body::File {
+                fd: OwnedFd::new(fd),
+                offset: 0,
+                len: size,
+            },
+            content_type,
+            headers: Vec::new(),
+        })
+    }
+
+    /// Serve a byte range of a file (e.g. for `Range` header support).
+    /// The caller provides an already-opened fd, offset, and length.
+    /// Ownership of the fd is transferred to the response.
+    pub fn sendfile(fd: i32, offset: u64, len: u64, content_type: &'static str) -> Self {
+        Self {
+            status: 200,
+            body: Body::File {
+                fd: OwnedFd::new(fd),
+                offset,
+                len,
+            },
+            content_type,
+            headers: Vec::new(),
+        }
+    }
+}
+
+/// Infer a Content-Type from a file path's extension.
+/// Returns a `&'static str` so it can be stored directly in Response.
+fn mime_from_path(path: &str) -> &'static str {
+    let ext = match path.rsplit('.').next() {
+        Some(e) => e,
+        None => return "application/octet-stream",
+    };
+    match ext {
+        // Text
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "xml" => "application/xml; charset=utf-8",
+        "txt" => "text/plain; charset=utf-8",
+        "csv" => "text/csv; charset=utf-8",
+        "svg" => "image/svg+xml",
+        // Images
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        // Fonts
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        // Media
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        // Archives / binary
+        "wasm" => "application/wasm",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "gz" | "gzip" => "application/gzip",
+        "tar" => "application/x-tar",
+        _ => "application/octet-stream",
     }
 }
 

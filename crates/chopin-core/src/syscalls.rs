@@ -802,6 +802,103 @@ pub fn write_nonblocking(fd: c_int, buf: &[u8]) -> ChopinResult<usize> {
     }
 }
 
+// ---- File Operations for Zero-Copy Serving ----
+
+/// Open a file in read-only mode, returning its file descriptor.
+pub fn open_file_readonly(path: &str) -> io::Result<c_int> {
+    let c_path =
+        std::ffi::CString::new(path).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    unsafe {
+        let fd = libc::open(c_path.as_ptr(), libc::O_RDONLY);
+        if fd < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(fd)
+        }
+    }
+}
+
+/// Get the size in bytes of an open file descriptor using `fstat`.
+pub fn file_size(fd: c_int) -> io::Result<u64> {
+    unsafe {
+        let mut stat: libc::stat = mem::zeroed();
+        if libc::fstat(fd, &mut stat) < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(stat.st_size as u64)
+        }
+    }
+}
+
+/// Zero-copy sendfile: transfer data directly from a file descriptor to a socket
+/// entirely within the kernel. Returns the number of bytes transferred, or 0 for
+/// `EAGAIN`/`EWOULDBLOCK` (socket buffer full — wait for EPOLLOUT).
+///
+/// # Safety
+/// Both `socket_fd` and `file_fd` must be valid open file descriptors.
+#[cfg(target_os = "linux")]
+pub fn sendfile_nonblocking(
+    socket_fd: c_int,
+    file_fd: c_int,
+    offset: &mut u64,
+    count: u64,
+) -> ChopinResult<usize> {
+    unsafe {
+        let mut off = *offset as libc::off_t;
+        let res = libc::sendfile(socket_fd, file_fd, &mut off, count as libc::size_t);
+        if res < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::WouldBlock {
+                Ok(0)
+            } else {
+                Err(err.into())
+            }
+        } else {
+            *offset = off as u64;
+            Ok(res as usize)
+        }
+    }
+}
+
+/// Zero-copy sendfile for macOS. macOS `sendfile` has a different signature:
+/// `sendfile(fd, s, offset, &mut len, hdtr, flags)` where `fd` is the file
+/// and `s` is the socket. `len` is in/out: pass desired count, get actual sent.
+#[cfg(target_os = "macos")]
+pub fn sendfile_nonblocking(
+    socket_fd: c_int,
+    file_fd: c_int,
+    offset: &mut u64,
+    count: u64,
+) -> ChopinResult<usize> {
+    unsafe {
+        let mut len = count as libc::off_t;
+        let res = libc::sendfile(
+            file_fd,
+            socket_fd,
+            *offset as libc::off_t,
+            &mut len,
+            ptr::null_mut(),
+            0,
+        );
+        let sent = len as usize;
+        if res < 0 {
+            let err = io::Error::last_os_error();
+            // macOS sendfile may return -1 with EAGAIN but still transfer some bytes
+            if err.kind() == io::ErrorKind::WouldBlock {
+                *offset += sent as u64;
+                Ok(sent)
+            } else {
+                // Even on error, advance offset by whatever was sent
+                *offset += sent as u64;
+                if sent > 0 { Ok(sent) } else { Err(err.into()) }
+            }
+        } else {
+            *offset += sent as u64;
+            Ok(sent)
+        }
+    }
+}
+
 /// Vectored write: write multiple buffers in a single syscall (scatter-gather I/O)
 pub fn writev_nonblocking(fd: c_int, bufs: &[&[u8]]) -> ChopinResult<usize> {
     if bufs.is_empty() {

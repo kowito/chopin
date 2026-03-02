@@ -32,6 +32,11 @@ pub struct Conn {
     pub last_active: u32,     // Cached timestamp in seconds
     pub requests_served: u32, // Number of HTTP requests served on this keep-alive connection
 
+    // Zero-copy sendfile state (set when serving Body::File)
+    pub sendfile_fd: i32,     // File descriptor to sendfile from (-1 = inactive)
+    pub sendfile_offset: u64, // Current offset in the file
+    pub sendfile_remaining: u64, // Bytes still to transfer
+
     pub read_buf: [u8; READ_BUF_SIZE],
     pub write_buf: [u8; WRITE_BUF_SIZE],
 }
@@ -48,8 +53,24 @@ impl Conn {
             write_len: 0,
             last_active: 0,
             requests_served: 0,
+            sendfile_fd: -1,
+            sendfile_offset: 0,
+            sendfile_remaining: 0,
             read_buf: [0; READ_BUF_SIZE],
             write_buf: [0; WRITE_BUF_SIZE],
+        }
+    }
+
+    /// Close and reset any in-progress sendfile transfer.
+    #[inline]
+    pub fn close_sendfile(&mut self) {
+        if self.sendfile_fd >= 0 {
+            unsafe {
+                libc::close(self.sendfile_fd);
+            }
+            self.sendfile_fd = -1;
+            self.sendfile_offset = 0;
+            self.sendfile_remaining = 0;
         }
     }
 }
@@ -70,7 +91,8 @@ mod tests {
         assert_eq!(std::mem::align_of::<Conn>(), 64);
 
         // Header fields: fd(4) + state(1) + flags(1) + read_len(2) + write_pos(2) +
-        //                write_len(2) + _pad(0) + last_active(4) + requests_served(4) = 20 bytes
+        //                write_len(2) + last_active(4) + requests_served(4) +
+        //                sendfile_fd(4) + sendfile_offset(8) + sendfile_remaining(8) = 40 bytes
         // Padded to next 64-byte boundary = 64 bytes total for the header block.
         let header_block = 64_usize;
         let total_size = header_block + READ_BUF_SIZE + WRITE_BUF_SIZE;
