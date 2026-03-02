@@ -5,6 +5,7 @@ pub const WRITE_BUF_SIZE: usize = 16384;
 
 /// Connection flags (bit field)
 pub const CONN_KEEP_ALIVE: u8 = 1;
+pub const CONN_EPOLLOUT: u8 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]

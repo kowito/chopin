@@ -22,6 +22,11 @@ const CT_APP_JSON: &[u8] = b"Content-Type: application/json\r\n";
 /// Pre-baked 200 OK response prefix: status line + Server header.
 const STATUS_200_PREFIX: &[u8] = b"HTTP/1.1 200 OK\r\nServer: chopin\r\n";
 
+/// Pre-baked 200 OK fast-paths: status + server + content-type in one memcpy.
+const FAST_200_JSON: &[u8] = b"HTTP/1.1 200 OK\r\nServer: chopin\r\nContent-Type: application/json\r\n";
+const FAST_200_TEXT: &[u8] = b"HTTP/1.1 200 OK\r\nServer: chopin\r\nContent-Type: text/plain\r\n";
+const FAST_200_HTML: &[u8] = b"HTTP/1.1 200 OK\r\nServer: chopin\r\nContent-Type: text/html; charset=utf-8\r\n";
+
 /// Format an HTTP status line into a fixed 40-byte buffer. Returns the slice length.
 #[inline(always)]
 fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
@@ -362,34 +367,44 @@ impl Worker {
                                                 };
                                             }
 
-                                            // Pre-baked 200 OK prefix: status + server in one copy
-                                            if response.status == 200 {
-                                                w!(STATUS_200_PREFIX);
+                                            // Fast-path: 200 OK + known content-type → single memcpy
+                                            // (status + server + content-type pre-baked together).
+                                            let ct_written = if response.status == 200 {
+                                                match response.content_type {
+                                                    "application/json" => { w!(FAST_200_JSON); true }
+                                                    "text/plain" => { w!(FAST_200_TEXT); true }
+                                                    "text/html; charset=utf-8" => { w!(FAST_200_HTML); true }
+                                                    _ => { w!(STATUS_200_PREFIX); false }
+                                                }
                                             } else {
                                                 let mut sl_buf = [0u8; 40];
                                                 let sl_len =
                                                     status_line(response.status, &mut sl_buf);
                                                 w!(&sl_buf[..sl_len]);
                                                 w!(b"Server: chopin\r\n");
-                                            }
+                                                false
+                                            };
 
                                             // Date header: fresh timestamp per response — no caching.
                                             let mut date_buf = [0u8; 37];
                                             let response_now = SystemTime::now()
                                                 .duration_since(UNIX_EPOCH)
                                                 .map_err(|_| ChopinError::ClockError)?
-                                                .as_secs() as u32;
+                                                .as_secs()
+                                                as u32;
                                             format_http_date(response_now, &mut date_buf);
                                             w!(&date_buf[..]);
 
-                                            // Pre-baked content-type for common types
-                                            match response.content_type {
-                                                "text/plain" => w!(CT_TEXT_PLAIN),
-                                                "application/json" => w!(CT_APP_JSON),
-                                                ct => {
-                                                    w!(b"Content-Type: ");
-                                                    w!(ct.as_bytes());
-                                                    w!(b"\r\n");
+                                            // Content-Type: skip if already baked into fast-path prefix
+                                            if !ct_written {
+                                                match response.content_type {
+                                                    "text/plain" => w!(CT_TEXT_PLAIN),
+                                                    "application/json" => w!(CT_APP_JSON),
+                                                    ct => {
+                                                        w!(b"Content-Type: ");
+                                                        w!(ct.as_bytes());
+                                                        w!(b"\r\n");
+                                                    }
                                                 }
                                             }
 
@@ -775,6 +790,19 @@ impl Worker {
                         // syscall for every request whose response fits in a single write.
                         if next_state == ConnState::Writing {
                             let _ = epoll.modify(fd, idx as u64, EPOLLIN | EPOLLOUT);
+                            if let Some(conn) = slab.get_mut(idx) {
+                                conn.flags |= crate::conn::CONN_EPOLLOUT;
+                            }
+                        } else if next_state != ConnState::Closing {
+                            // Write completed — remove EPOLLOUT interest if it was
+                            // previously registered (avoids spurious writable wakeups
+                            // on idle keep-alive connections).
+                            if let Some(conn) = slab.get_mut(idx) {
+                                if (conn.flags & crate::conn::CONN_EPOLLOUT) != 0 {
+                                    conn.flags &= !crate::conn::CONN_EPOLLOUT;
+                                    let _ = epoll.modify(fd, idx as u64, EPOLLIN);
+                                }
+                            }
                         }
 
                         if next_state == ConnState::Closing {
