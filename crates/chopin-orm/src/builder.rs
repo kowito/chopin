@@ -189,4 +189,66 @@ mod tests {
             "SELECT id, name FROM mocks ORDER BY name DESC LIMIT 10 OFFSET 5"
         );
     }
+
+    #[test]
+    fn test_order_by_without_where() {
+        let qb = QueryBuilder::<MockModel>::new().order_by("id ASC");
+        assert_eq!(qb.build_query(), "SELECT id, name FROM mocks ORDER BY id ASC");
+    }
+
+    #[test]
+    fn test_limit_only() {
+        let qb = QueryBuilder::<MockModel>::new().limit(20);
+        assert_eq!(qb.build_query(), "SELECT id, name FROM mocks LIMIT 20");
+    }
+
+    #[test]
+    fn test_offset_only() {
+        let qb = QueryBuilder::<MockModel>::new().offset(15);
+        assert_eq!(qb.build_query(), "SELECT id, name FROM mocks OFFSET 15");
+    }
+
+    #[test]
+    fn test_limit_and_offset_without_where() {
+        let qb = QueryBuilder::<MockModel>::new().limit(5).offset(10);
+        assert_eq!(qb.build_query(), "SELECT id, name FROM mocks LIMIT 5 OFFSET 10");
+    }
+
+    #[test]
+    fn test_multiple_filters() {
+        let qb = QueryBuilder::<MockModel>::new()
+            .filter("id > $1", vec![])
+            .filter("name = $2", vec![])
+            .filter("active = $3", vec![]);
+        assert_eq!(
+            qb.build_query(),
+            "SELECT id, name FROM mocks WHERE id > $1 AND name = $2 AND active = $3"
+        );
+    }
+
+    #[test]
+    fn test_full_query_with_all_clauses() {
+        let qb = QueryBuilder::<MockModel>::new()
+            .filter("status = $1", vec![])
+            .order_by("created_at DESC")
+            .limit(25)
+            .offset(50);
+        assert_eq!(
+            qb.build_query(),
+            "SELECT id, name FROM mocks WHERE status = $1 ORDER BY created_at DESC LIMIT 25 OFFSET 50"
+        );
+    }
+
+    #[test]
+    fn test_default_equals_new() {
+        let qb_default: QueryBuilder<MockModel> = Default::default();
+        let qb_new: QueryBuilder<MockModel> = QueryBuilder::new();
+        assert_eq!(qb_default.build_query(), qb_new.build_query());
+    }
+
+    #[test]
+    fn test_no_clauses_is_plain_select() {
+        let qb: QueryBuilder<MockModel> = QueryBuilder::new();
+        assert_eq!(qb.build_query(), "SELECT id, name FROM mocks");
+    }
 }

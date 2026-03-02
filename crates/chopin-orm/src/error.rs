@@ -43,3 +43,94 @@ impl From<PgError> for OrmError {
 }
 
 pub type OrmResult<T> = Result<T, OrmError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chopin_pg::error::PgError;
+
+    // ─── Display ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_display_record_not_found() {
+        let s = OrmError::RecordNotFound.to_string();
+        assert!(s.contains("not found") || s.contains("Record"), "unexpected: {}", s);
+    }
+
+    #[test]
+    fn test_display_multiple_records_found() {
+        let s = OrmError::MultipleRecordsFound.to_string();
+        assert!(s.contains("Multiple") || s.contains("multiple"), "unexpected: {}", s);
+    }
+
+    #[test]
+    fn test_display_extraction() {
+        let s = OrmError::Extraction("bad type".to_string()).to_string();
+        assert!(s.contains("bad type"), "unexpected: {}", s);
+    }
+
+    #[test]
+    fn test_display_model_error() {
+        let s = OrmError::ModelError("invalid field".to_string()).to_string();
+        assert!(s.contains("invalid field"), "unexpected: {}", s);
+    }
+
+    #[test]
+    fn test_display_database() {
+        let pg_err = PgError::Protocol("test error".to_string());
+        let s = OrmError::Database(pg_err).to_string();
+        assert!(s.contains("Database") || s.contains("test error"), "unexpected: {}", s);
+    }
+
+    // ─── Error::source() ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_source_database_is_some() {
+        use std::error::Error;
+        let e = OrmError::Database(PgError::Protocol("x".to_string()));
+        assert!(e.source().is_some());
+    }
+
+    #[test]
+    fn test_source_non_database_is_none() {
+        use std::error::Error;
+        assert!(OrmError::RecordNotFound.source().is_none());
+        assert!(OrmError::MultipleRecordsFound.source().is_none());
+        assert!(OrmError::Extraction("e".into()).source().is_none());
+        assert!(OrmError::ModelError("m".into()).source().is_none());
+    }
+
+    // ─── From<PgError> ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_from_pgerror() {
+        let pg_err = PgError::Protocol("from-test".to_string());
+        let orm_err: OrmError = pg_err.into();
+        assert!(matches!(orm_err, OrmError::Database(_)));
+    }
+
+    // ─── Debug ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_debug_does_not_panic() {
+        let _ = format!("{:?}", OrmError::RecordNotFound);
+        let _ = format!("{:?}", OrmError::MultipleRecordsFound);
+        let _ = format!("{:?}", OrmError::Extraction("e".into()));
+        let _ = format!("{:?}", OrmError::ModelError("m".into()));
+        let _ = format!("{:?}", OrmError::Database(PgError::Protocol("x".into())));
+    }
+
+    // ─── OrmResult type alias ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_orm_result_ok() {
+        let r: OrmResult<i32> = Ok(7);
+        assert_eq!(r.unwrap(), 7);
+    }
+
+    #[test]
+    fn test_orm_result_err() {
+        let r: OrmResult<i32> = Err(OrmError::RecordNotFound);
+        assert!(r.is_err());
+    }
+}

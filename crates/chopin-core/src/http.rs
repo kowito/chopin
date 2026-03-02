@@ -507,3 +507,168 @@ impl<'a> Context<'a> {
         Response::json(val)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── Method::from_bytes ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_method_get()     { assert_eq!(Method::from_bytes(b"GET"),     Method::Get);     }
+    #[test]
+    fn test_method_post()    { assert_eq!(Method::from_bytes(b"POST"),    Method::Post);    }
+    #[test]
+    fn test_method_put()     { assert_eq!(Method::from_bytes(b"PUT"),     Method::Put);     }
+    #[test]
+    fn test_method_delete()  { assert_eq!(Method::from_bytes(b"DELETE"),  Method::Delete);  }
+    #[test]
+    fn test_method_patch()   { assert_eq!(Method::from_bytes(b"PATCH"),   Method::Patch);   }
+    #[test]
+    fn test_method_head()    { assert_eq!(Method::from_bytes(b"HEAD"),    Method::Head);    }
+    #[test]
+    fn test_method_options() { assert_eq!(Method::from_bytes(b"OPTIONS"), Method::Options); }
+    #[test]
+    fn test_method_trace()   { assert_eq!(Method::from_bytes(b"TRACE"),   Method::Trace);   }
+    #[test]
+    fn test_method_connect() { assert_eq!(Method::from_bytes(b"CONNECT"), Method::Connect); }
+
+    #[test]
+    fn test_method_empty_is_unknown() {
+        assert_eq!(Method::from_bytes(b""), Method::Unknown);
+    }
+
+    #[test]
+    fn test_method_lowercase_is_unknown() {
+        assert_eq!(Method::from_bytes(b"get"),  Method::Unknown);
+        assert_eq!(Method::from_bytes(b"post"), Method::Unknown);
+    }
+
+    #[test]
+    fn test_method_truncated_is_unknown() {
+        assert_eq!(Method::from_bytes(b"GE"),   Method::Unknown);
+        assert_eq!(Method::from_bytes(b"POS"),  Method::Unknown);
+        assert_eq!(Method::from_bytes(b"DEL"),  Method::Unknown);
+    }
+
+    #[test]
+    fn test_method_junk_is_unknown() {
+        assert_eq!(Method::from_bytes(b"GETX"),  Method::Unknown);
+        assert_eq!(Method::from_bytes(b"XPOST"), Method::Unknown);
+    }
+
+    #[test]
+    fn test_method_eq_and_copy() {
+        let m = Method::Get;
+        let m2 = m; // Copy
+        assert_eq!(m, m2);
+        assert_ne!(Method::Get, Method::Post);
+    }
+
+    // ─── Response constructors ────────────────────────────────────────────────
+
+    #[test]
+    fn test_response_new_status() {
+        let r = Response::new(204);
+        assert_eq!(r.status, 204);
+        assert!(r.body.is_empty());
+    }
+
+    #[test]
+    fn test_response_text_status_and_ct() {
+        let r = Response::text(b"hello".to_vec());
+        assert_eq!(r.status, 200);
+        assert_eq!(r.content_type, "text/plain");
+        assert_eq!(r.body.as_bytes(), b"hello");
+    }
+
+    #[test]
+    fn test_response_text_static() {
+        let r = Response::text_static(b"static");
+        assert_eq!(r.status, 200);
+        assert_eq!(r.content_type, "text/plain");
+        assert_eq!(r.body.as_bytes(), b"static");
+    }
+
+    #[test]
+    fn test_response_json_bytes() {
+        let r = Response::json_bytes(b"{}".to_vec());
+        assert_eq!(r.status, 200);
+        assert_eq!(r.content_type, "application/json");
+        assert_eq!(r.body.as_bytes(), b"{}");
+    }
+
+    #[test]
+    fn test_response_not_found() {
+        let r = Response::not_found();
+        assert_eq!(r.status, 404);
+    }
+
+    #[test]
+    fn test_response_server_error() {
+        let r = Response::server_error();
+        assert_eq!(r.status, 500);
+    }
+
+    #[test]
+    fn test_response_bad_request() {
+        let r = Response::bad_request();
+        assert_eq!(r.status, 400);
+    }
+
+    #[test]
+    fn test_response_unauthorized() {
+        let r = Response::unauthorized();
+        assert_eq!(r.status, 401);
+    }
+
+    #[test]
+    fn test_response_forbidden() {
+        let r = Response::forbidden();
+        assert_eq!(r.status, 403);
+    }
+
+    #[test]
+    fn test_response_with_header_adds_header() {
+        let r = Response::new(200).with_header("x-custom", "value");
+        assert_eq!(r.status, 200);
+        // Headers should contain the custom header
+        let found = r.headers.iter().any(|h| h.name == "x-custom" && h.value.as_str() == "value");
+        assert!(found, "header x-custom: value not found");
+    }
+
+    // ─── Body ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_body_empty() {
+        let b = Body::Empty;
+        assert_eq!(b.len(), 0);
+        assert!(b.is_empty());
+        assert_eq!(b.as_bytes(), b"");
+        assert!(!b.is_file());
+    }
+
+    #[test]
+    fn test_body_static() {
+        let b = Body::Static(b"hello");
+        assert_eq!(b.len(), 5);
+        assert!(!b.is_empty());
+        assert_eq!(b.as_bytes(), b"hello");
+    }
+
+    #[test]
+    fn test_body_bytes() {
+        let v = b"world".to_vec();
+        let b = Body::Bytes(v.clone());
+        assert_eq!(b.len(), 5);
+        assert_eq!(b.as_bytes(), b"world");
+    }
+
+    #[test]
+    fn test_body_stream_len_is_zero() {
+        let b = Body::Stream(Box::new(std::iter::empty()));
+        assert_eq!(b.len(), 0);
+        assert!(b.is_empty());
+        assert!(!b.is_file());
+    }
+}
