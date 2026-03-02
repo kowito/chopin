@@ -191,4 +191,66 @@ mod tests {
         assert_eq!(to_pascal_case("user_profile"), "UserProfile");
         assert_eq!(to_pascal_case("billing"), "Billing");
     }
+
+    #[test]
+    fn test_to_pascal_case_empty_string() {
+        assert_eq!(to_pascal_case(""), "");
+    }
+
+    #[test]
+    fn test_to_pascal_case_single_char() {
+        assert_eq!(to_pascal_case("a"), "A");
+        assert_eq!(to_pascal_case("z"), "Z");
+    }
+
+    #[test]
+    fn test_to_pascal_case_multiple_underscores() {
+        assert_eq!(to_pascal_case("order_line_item"), "OrderLineItem");
+        assert_eq!(to_pascal_case("a_b_c_d"), "ABCD");
+    }
+
+    #[test]
+    fn test_to_pascal_case_trailing_underscore() {
+        // trailing underscore produces an empty last word (empty string in collect)
+        let result = to_pascal_case("user_");
+        // "user_" splits into ["user", ""] so result is "User" + "" = "User"
+        assert_eq!(result, "User");
+    }
+
+    #[test]
+    fn test_to_pascal_case_with_numbers() {
+        assert_eq!(to_pascal_case("order_123"), "Order123");
+        assert_eq!(to_pascal_case("v2_api"), "V2Api");
+    }
+
+    #[test]
+    fn test_generate_app_creates_files() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_app(dir.path(), "widget").unwrap();
+        let app_dir = dir.path().join("src/apps/widget");
+        assert!(app_dir.join("mod.rs").exists(),     "mod.rs missing");
+        assert!(app_dir.join("models.rs").exists(),  "models.rs missing");
+        assert!(app_dir.join("services.rs").exists(),"services.rs missing");
+        assert!(app_dir.join("errors.rs").exists(),  "errors.rs missing");
+        assert!(app_dir.join("handlers.rs").exists(),"handlers.rs missing");
+        assert!(app_dir.join("tests.rs").exists(),   "tests.rs missing");
+    }
+
+    #[test]
+    fn test_generate_app_model_contains_pascal_name() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_app(dir.path(), "order_item").unwrap();
+        let models = std::fs::read_to_string(
+            dir.path().join("src/apps/order_item/models.rs")
+        ).unwrap();
+        assert!(models.contains("OrderItem"), "model struct should be PascalCase");
+    }
+
+    #[test]
+    fn test_generate_app_duplicate_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_app(dir.path(), "product").unwrap();
+        let result = generate_app(dir.path(), "product");
+        assert!(result.is_err(), "duplicate app should fail");
+    }
 }

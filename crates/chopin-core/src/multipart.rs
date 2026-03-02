@@ -147,3 +147,147 @@ impl<'a> Iterator for Multipart<'a> {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn boundary() -> &'static str {
+        "testboundary"
+    }
+
+    /// Build a minimal single-field multipart body.
+    fn single_field(field_name: &str, body: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(b"--testboundary\r\n");
+        v.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", field_name).as_bytes(),
+        );
+        v.extend_from_slice(body);
+        v.extend_from_slice(b"\r\n--testboundary--\r\n");
+        v
+    }
+
+    /// Build a two-field multipart body with optional filename.
+    fn two_fields(n1: &str, b1: &[u8], n2: &str, file: Option<&str>, b2: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        // Part 1
+        v.extend_from_slice(b"--testboundary\r\n");
+        v.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", n1).as_bytes(),
+        );
+        v.extend_from_slice(b1);
+        v.extend_from_slice(b"\r\n");
+        // Part 2
+        v.extend_from_slice(b"--testboundary\r\n");
+        match file {
+            Some(f) => v.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n\r\n",
+                    n2, f
+                )
+                .as_bytes(),
+            ),
+            None => v.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", n2).as_bytes(),
+            ),
+        }
+        v.extend_from_slice(b2);
+        v.extend_from_slice(b"\r\n--testboundary--\r\n");
+        v
+    }
+
+    // ─── single part ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_single_part_name_and_body() {
+        let body = single_field("username", b"alice");
+        let mut mp = Multipart::new(&body, boundary());
+        let part = mp.next().expect("should have one part").unwrap();
+        assert_eq!(part.name, Some("username"));
+        assert_eq!(part.body, b"alice");
+        assert!(mp.next().is_none(), "should have no more parts");
+    }
+
+    #[test]
+    fn test_single_part_empty_body() {
+        let body = single_field("field", b"");
+        let mut mp = Multipart::new(&body, boundary());
+        let part = mp.next().unwrap().unwrap();
+        assert_eq!(part.name, Some("field"));
+        assert_eq!(part.body, b"");
+    }
+
+    // ─── two parts ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_two_parts_basic() {
+        let body = two_fields("first", b"hello", "second", None, b"world");
+        let mut mp = Multipart::new(&body, boundary());
+        let p1 = mp.next().unwrap().unwrap();
+        assert_eq!(p1.name, Some("first"));
+        assert_eq!(p1.body, b"hello");
+        let p2 = mp.next().unwrap().unwrap();
+        assert_eq!(p2.name, Some("second"));
+        assert_eq!(p2.body, b"world");
+        assert!(mp.next().is_none());
+    }
+
+    #[test]
+    fn test_file_part_has_filename() {
+        let body = two_fields("meta", b"info", "upload", Some("photo.jpg"), b"JPEG_DATA");
+        let mut mp = Multipart::new(&body, boundary());
+        let _meta = mp.next().unwrap().unwrap();
+        let file_part = mp.next().unwrap().unwrap();
+        assert_eq!(file_part.name, Some("upload"));
+        assert_eq!(file_part.filename, Some("photo.jpg"));
+        assert_eq!(file_part.body, b"JPEG_DATA");
+    }
+
+    // ─── content-type header ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_content_type_parsed() {
+        let mut v = Vec::new();
+        v.extend_from_slice(b"--testboundary\r\n");
+        v.extend_from_slice(b"Content-Disposition: form-data; name=\"file\"; filename=\"data.json\"\r\n");
+        v.extend_from_slice(b"Content-Type: application/json\r\n");
+        v.extend_from_slice(b"\r\n");
+        v.extend_from_slice(b"{\"key\":\"val\"}");
+        v.extend_from_slice(b"\r\n--testboundary--\r\n");
+
+        let mut mp = Multipart::new(&v, boundary());
+        let part = mp.next().unwrap().unwrap();
+        assert_eq!(part.content_type, Some("application/json"));
+        assert_eq!(part.body, b"{\"key\":\"val\"}");
+    }
+
+    // ─── empty / missing boundary ────────────────────────────────────────────
+
+    #[test]
+    fn test_empty_body_yields_none() {
+        let mut mp = Multipart::new(b"", boundary());
+        assert!(mp.next().is_none());
+    }
+
+    #[test]
+    fn test_no_boundary_in_body_yields_none() {
+        // Body has content but not the right boundary
+        let mut mp = Multipart::new(b"--wrongboundary\r\nsome data\r\n--wrongboundary--", boundary());
+        assert!(mp.next().is_none());
+    }
+
+    // ─── incomplete body ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_missing_closing_boundary_returns_err() {
+        // Part starts but never terminates with --boundary or --boundary--
+        let mut v = Vec::new();
+        v.extend_from_slice(b"--testboundary\r\n");
+        v.extend_from_slice(b"Content-Disposition: form-data; name=\"f\"\r\n\r\n");
+        v.extend_from_slice(b"truncated body with no closing boundary");
+        let mut mp = Multipart::new(&v, boundary());
+        let result = mp.next().unwrap();
+        assert!(result.is_err(), "truncated body should return Err(Incomplete)");
+    }
+}

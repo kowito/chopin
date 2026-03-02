@@ -158,4 +158,69 @@ pool_size = 10
         assert_eq!(result, "value = \"hello\"");
         unsafe { std::env::remove_var("TEST_CHOPIN_VAR") };
     }
+
+    #[test]
+    fn test_interpolate_missing_var_becomes_empty() {
+        unsafe { std::env::remove_var("CHOPIN_DEFINITELY_NOT_SET_XYZ") };
+        let result = interpolate_env_vars("x=${CHOPIN_DEFINITELY_NOT_SET_XYZ}");
+        assert_eq!(result, "x=");
+    }
+
+    #[test]
+    fn test_interpolate_multiple_vars() {
+        unsafe {
+            std::env::set_var("CHOPIN_TEST_HOST", "myhost");
+            std::env::set_var("CHOPIN_TEST_PORT", "9999");
+        }
+        let tpl = "${CHOPIN_TEST_HOST}:${CHOPIN_TEST_PORT}";
+        let result = interpolate_env_vars(tpl);
+        assert_eq!(result, "myhost:9999");
+        unsafe {
+            std::env::remove_var("CHOPIN_TEST_HOST");
+            std::env::remove_var("CHOPIN_TEST_PORT");
+        }
+    }
+
+    #[test]
+    fn test_server_config_default_fields() {
+        let s = ServerConfig::default();
+        assert_eq!(s.host, "0.0.0.0");
+        assert_eq!(s.port, 8080);
+        assert_eq!(s.workers, 0);
+    }
+
+    #[test]
+    fn test_database_config_default_fields() {
+        let d = DatabaseConfig::default();
+        assert!(d.url.contains("5432"), "default url should include PG port 5432");
+        assert_eq!(d.pool_size, 5);
+    }
+
+    #[test]
+    fn test_load_defaults_when_no_toml_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // No Chopin.toml in this directory
+        let config = ChopinConfig::load(dir.path()).unwrap();
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.server.host, "0.0.0.0");
+    }
+
+    #[test]
+    fn test_load_from_toml_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_content = "[server]\nport = 4000\n[database]\npool_size = 20\n";
+        std::fs::write(dir.path().join("Chopin.toml"), toml_content).unwrap();
+        let config = ChopinConfig::load(dir.path()).unwrap();
+        assert_eq!(config.server.port, 4000);
+        assert_eq!(config.database.pool_size, 20);
+    }
+
+    #[test]
+    fn test_env_var_overrides_port() {
+        unsafe { std::env::set_var("PORT", "7777") };
+        let dir = tempfile::tempdir().unwrap();
+        let config = ChopinConfig::load(dir.path()).unwrap();
+        assert_eq!(config.server.port, 7777);
+        unsafe { std::env::remove_var("PORT") };
+    }
 }
