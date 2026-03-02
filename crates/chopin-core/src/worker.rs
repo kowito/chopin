@@ -273,6 +273,7 @@ impl Worker {
                                             if is_shutting_down {
                                                 keep_alive = false;
                                             } else if keep_alive {
+                                                // Check for Connection: close header
                                                 for i in 0..ctx.req.header_count as usize {
                                                     let (k, v) = ctx.req.headers[i];
                                                     if k.len() == 10
@@ -284,9 +285,8 @@ impl Worker {
                                                         break;
                                                     }
                                                 }
-                                                if conn.requests_served >= 10_000 {
-                                                    keep_alive = false;
-                                                }
+                                                // Keep-alive enabled by default indefinitely;
+                                                // clients or proxies can close if needed
                                             }
 
                                             self.metrics.inc_req();
