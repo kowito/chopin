@@ -7,6 +7,7 @@ mod config;
 mod deploy;
 mod generate;
 mod openapi;
+mod migrations;
 
 #[derive(Parser)]
 #[command(name = "chopin")]
@@ -141,23 +142,8 @@ async fn main() -> Result<()> {
             child.wait()?;
         }
         Commands::Migrate { command } => {
-            eprintln!(
-                "{} Migration support is not yet implemented in the Chopin CLI.",
-                "⚠".yellow()
-            );
-            eprintln!(
-                "  Planned commands: {:?}",
-                match command {
-                    MigrateCommands::Status => "status",
-                    MigrateCommands::Up => "up",
-                    MigrateCommands::Down { .. } => "down",
-                    MigrateCommands::Generate { .. } => "generate",
-                }
-            );
-            eprintln!(
-                "  Tip: use a standalone migration tool (e.g., sqitch, flyway, golang-migrate)."
-            );
-            std::process::exit(1);
+            let project_dir = std::env::current_dir()?;
+            migrations::run_migration_command(&project_dir, command)?;
         }
         Commands::Db { command } => {
             let project_dir = std::env::current_dir()?;

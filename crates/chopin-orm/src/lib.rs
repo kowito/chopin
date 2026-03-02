@@ -13,6 +13,8 @@ pub mod builder;
 pub use builder::QueryBuilder;
 pub mod error;
 pub use error::{OrmError, OrmResult};
+pub mod active_model;
+pub use active_model::{ActiveModelTrait, ActiveValue};
 
 pub trait Executor {
     fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToSql])
@@ -87,7 +89,13 @@ impl<'a> Executor for Transaction<'a> {
     }
 }
 
-pub trait Model: FromRow + Sized + Send + Sync {
+pub trait Validate {
+    fn validate(&self) -> Result<(), Vec<String>> {
+        Ok(()) // Default passes
+    }
+}
+
+pub trait Model: FromRow + Validate + Sized + Send + Sync {
     fn table_name() -> &'static str;
     fn primary_key_columns() -> &'static [&'static str];
     fn generated_columns() -> &'static [&'static str];
@@ -97,8 +105,52 @@ pub trait Model: FromRow + Sized + Send + Sync {
     fn set_generated_values(&mut self, values: Vec<PgValue>) -> OrmResult<()>;
     fn get_values(&self) -> Vec<PgValue>;
 
+    /// Generate the CREATE TABLE statement for this model
+    fn create_table_stmt() -> String;
+
+    /// Returns the literal raw SQL column definitions (name, type) for auto-migrations
+    fn column_definitions() -> Vec<(&'static str, &'static str)>;
+
+    /// Execute the CREATE TABLE statement against the database
+    fn create_table(executor: &mut impl Executor) -> OrmResult<()> {
+        executor.execute(&Self::create_table_stmt(), &[])?;
+        Ok(())
+    }
+
+    /// Automatically diffs and migrates the table schema based on structural column metadata
+    fn sync_schema(executor: &mut impl Executor) -> OrmResult<()> {
+        Self::create_table(executor)?;
+
+        // check existing columns
+        let db_cols_query = "SELECT column_name FROM information_schema.columns WHERE table_name = $1";
+        let table_name = Self::table_name();
+        let params: Vec<&dyn chopin_pg::types::ToSql> = vec![&table_name];
+        let rows = executor.query(db_cols_query, &params)?;
+
+        let mut existing_cols = Vec::new();
+        for row in rows {
+            if let Ok(chopin_pg::PgValue::Text(val)) = row.get(0) {
+                existing_cols.push(val.clone());
+            }
+        }
+
+        let definitions = Self::column_definitions();
+        for (col_name, col_def) in definitions {
+            if !existing_cols.contains(&col_name.to_string()) {
+                let alter_stmt = format!("ALTER TABLE {} ADD COLUMN {} {}", Self::table_name(), col_name, col_def);
+                executor.execute(&alter_stmt, &[])?;
+                println!("Auto-Migrated {}: added column {}", Self::table_name(), col_name);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Insert the model into the database. Retrieves generated columns.
     fn insert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
+        if let Err(errors) = self.validate() {
+            return Err(OrmError::ModelError(format!("Validation failed: {}", errors.join(", "))));
+        }
         let all_cols = Self::columns();
         let gen_cols = Self::generated_columns();
 
@@ -148,6 +200,9 @@ pub trait Model: FromRow + Sized + Send + Sync {
 
     /// Insert the model or update it if the primary key conflicts
     fn upsert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
+        if let Err(errors) = self.validate() {
+            return Err(OrmError::ModelError(format!("Validation failed: {}", errors.join(", "))));
+        }
         let all_cols = Self::columns();
         let pk_cols = Self::primary_key_columns();
         let gen_cols = Self::generated_columns();
@@ -212,8 +267,66 @@ pub trait Model: FromRow + Sized + Send + Sync {
         Ok(())
     }
 
+    /// Partially update the model, persisting only the specified columns to the database.
+    fn update_columns(&self, executor: &mut impl Executor, update_columns: &[&str]) -> OrmResult<Self> {
+        if let Err(errors) = self.validate() {
+            return Err(OrmError::ModelError(format!("Validation failed: {}", errors.join(", "))));
+        }
+        let all_columns = Self::columns();
+        let all_values = self.get_values();
+        
+        let mut set_clauses = Vec::new();
+        let mut query_values = Vec::new();
+        let mut param_idx = 1;
+        
+        for col in update_columns {
+            if let Some(pos) = all_columns.iter().position(|c| c == col) {
+                set_clauses.push(format!("{} = ${}", col, param_idx));
+                query_values.push(all_values[pos].clone());
+                param_idx += 1;
+            } else {
+                return Err(OrmError::ModelError(format!("Column not found: {}", col)));
+            }
+        }
+        
+        if set_clauses.is_empty() {
+             return Err(OrmError::ModelError("No valid columns provided for partial update".into()));
+        }
+        
+        // Add primary key to WHERE clause
+        let pk_cols = Self::primary_key_columns();
+        let pk_vals = self.primary_key_values();
+        
+        let mut where_clauses = Vec::new();
+        for (i, pk_col) in pk_cols.iter().enumerate() {
+            where_clauses.push(format!("{} = ${}", pk_col, param_idx));
+            query_values.push(pk_vals[i].clone());
+            param_idx += 1;
+        }
+        
+        let query = format!(
+            "UPDATE {} SET {} WHERE {} RETURNING {}",
+            Self::table_name(),
+            set_clauses.join(", "),
+            where_clauses.join(" AND "),
+            Self::columns().join(", ")
+        );
+        
+        let params_ref: Vec<&dyn chopin_pg::types::ToSql> = query_values.iter().map(|v| v as _).collect();
+        let rows = executor.query(&query, &params_ref)?;
+        
+        if let Some(row) = rows.first() {
+            Self::from_row(&row)
+        } else {
+            Err(OrmError::ModelError("Update failed, no rows returned".into()))
+        }
+    }
+
     /// Update the model in the database matching its primary key.
     fn update(&self, executor: &mut impl Executor) -> OrmResult<()> {
+        if let Err(errors) = self.validate() {
+            return Err(OrmError::ModelError(format!("Validation failed: {}", errors.join(", "))));
+        }
         let cols = Self::columns();
         let pk_cols = Self::primary_key_columns();
 

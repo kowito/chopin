@@ -13,6 +13,7 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
     let mut pk_fields = Vec::new();
     let mut generated_fields = Vec::new();
     let mut columns = Vec::new();
+    let mut has_many_rels = Vec::new(); // stores (related_model_ident, fk_column_name_str)
 
     // Parse struct attributes for table_name
     for attr in &input.attrs {
@@ -23,15 +24,39 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
                     let s: LitStr = value.parse()?;
                     table_name = s.value();
                 }
+                if meta.path.is_ident("has_many") {
+                    let mut target_ident: Option<syn::Ident> = None;
+                    let mut fk_name = String::new();
+                    
+                    let _ = meta.parse_nested_meta(|inner| {
+                        if inner.path.is_ident("fk") {
+                            let value = inner.value()?;
+                            let s: LitStr = value.parse()?;
+                            fk_name = s.value();
+                        } else if target_ident.is_none() {
+                            target_ident = inner.path.get_ident().cloned();
+                        }
+                        Ok(())
+                    });
+                    
+                    if let Some(ident) = target_ident {
+                        has_many_rels.push((ident, fk_name));
+                    }
+                }
                 Ok(())
             });
         }
     }
 
-    let fields = if let Data::Struct(data_struct) = &input.data {
-        if let Fields::Named(fields) = &data_struct.fields {
+    let mut field_types = Vec::new();
+    let mut non_pk_fields = Vec::new();
+    let mut non_pk_types = Vec::new();
+    let mut belongs_to_fks = Vec::new(); // stores (field_ident, related_model_ident)
+
+    let fields_list = if let Data::Struct(data_struct) = &input.data {
+        if let Fields::Named(syn_fields) = &data_struct.fields {
             let mut extracted = Vec::new();
-            for f in &fields.named {
+            for f in &syn_fields.named {
                 let field_name = match &f.ident {
                     Some(ident) => ident,
                     None => {
@@ -42,6 +67,7 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
                 };
                 let field_name_str = field_name.to_string();
                 columns.push(field_name_str.clone());
+                field_types.push(f.ty.clone());
 
                 let mut is_pk = false;
                 let mut is_gen = false;
@@ -55,6 +81,14 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
                             if meta.path.is_ident("generated") {
                                 is_gen = true;
                             }
+                            if meta.path.is_ident("belongs_to") {
+                                let _ = meta.parse_nested_meta(|inner| {
+                                    if let Some(ident) = inner.path.get_ident() {
+                                        belongs_to_fks.push((field_name.clone(), ident.clone()));
+                                    }
+                                    Ok(())
+                                });
+                            }
                             Ok(())
                         });
                     }
@@ -62,7 +96,16 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
                 
                 if is_pk {
                     pk_fields.push(field_name.clone());
+                    let ty = &f.ty;
+                    let ty_str = quote::quote!(#ty).to_string().replace(" ", "");
+                    if ty_str == "i32" || ty_str == "i64" {
+                        is_gen = true;
+                    }
+                } else {
+                    non_pk_fields.push(field_name.clone());
+                    non_pk_types.push(f.ty.clone());
                 }
+                
                 if is_gen {
                     generated_fields.push(field_name.clone());
                 }
@@ -100,12 +143,100 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
     let pk_names_str: Vec<String> = pk_fields.iter().map(|i| i.to_string()).collect();
     let gen_names_str: Vec<String> = generated_fields.iter().map(|i| i.to_string()).collect();
 
+    let column_enum_name = syn::Ident::new(&format!("{}Column", name), proc_macro2::Span::call_site());
+    let active_model_name = syn::Ident::new(&format!("{}ActiveModel", name), proc_macro2::Span::call_site());
+
     let gen_field_names = generated_fields.clone();
+    let gen_fields_len = generated_fields.len();
+
+    let mut column_defs = Vec::new();
+    let mut col_names = Vec::new();
+    let mut col_types = Vec::new();
+    for (i, field_name) in columns.iter().enumerate() {
+        let ty = &field_types[i];
+        let is_pk = pk_names_str.contains(field_name);
+        let is_gen = gen_names_str.contains(field_name);
+        
+        let mut not_null = true;
+        let mut inner_ty = ty;
+        if let syn::Type::Path(type_path) = ty {
+            if let Some(segment) = type_path.path.segments.last() {
+                if segment.ident == "Option" {
+                    not_null = false;
+                    if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                        if let Some(syn::GenericArgument::Type(t)) = args.args.first() {
+                            inner_ty = t;
+                        }
+                    }
+                }
+            }
+        }
+        
+        let type_str = quote::quote!(#inner_ty).to_string().replace(" ", "");
+        
+        let mut sql_type = match type_str.as_str() {
+            "i32" if is_gen && is_pk && pk_fields.len() == 1 => "SERIAL PRIMARY KEY".to_string(),
+            "i32" if is_gen => "SERIAL".to_string(),
+            "i32" => "INT".to_string(),
+            "i64" if is_gen && is_pk && pk_fields.len() == 1 => "BIGSERIAL PRIMARY KEY".to_string(),
+            "i64" if is_gen => "BIGSERIAL".to_string(),
+            "i64" => "BIGINT".to_string(),
+            "String" => "TEXT".to_string(),
+            "bool" => "BOOLEAN".to_string(),
+            "f64" => "DOUBLE PRECISION".to_string(),
+            _ => "TEXT".to_string(),
+        };
+        
+        if is_pk && pk_fields.len() == 1 && !sql_type.contains("PRIMARY KEY") {
+            sql_type.push_str(" PRIMARY KEY");
+        }
+        
+        if not_null && !sql_type.contains("PRIMARY KEY") && !sql_type.contains("SERIAL") {
+            sql_type.push_str(" NOT NULL");
+        }
+        
+        col_names.push(field_name.clone());
+        col_types.push(sql_type.clone());
+        column_defs.push(format!("{} {}", field_name, sql_type));
+    }
+    
+    if pk_fields.len() > 1 {
+        let pk_csv = pk_names_str.join(", ");
+        column_defs.push(format!("PRIMARY KEY ({})", pk_csv));
+    }
+    
+    let base_sql = format!("CREATE TABLE IF NOT EXISTS {} (\n    {}\n)", table_name, column_defs.join(",\n    "));
+
+    let fk_fields: Vec<_> = belongs_to_fks.iter().map(|(f, _)| f.clone()).collect();
+    let fk_models: Vec<_> = belongs_to_fks.iter().map(|(_, m)| m.clone()).collect();
+
+    let hm_targets: Vec<_> = has_many_rels.iter().map(|(m, _)| m.clone()).collect();
+    let hm_fks: Vec<_> = has_many_rels.iter().map(|(_, fk)| fk.clone()).collect();
+    let fetch_hm_names: Vec<_> = hm_targets.iter().map(|m| syn::Ident::new(&format!("fetch_{}s", m.to_string().to_lowercase()), proc_macro2::Span::call_site())).collect();
+    let fetch_bt_names: Vec<_> = fk_fields.iter().map(|f| syn::Ident::new(&format!("fetch_{}", f), proc_macro2::Span::call_site())).collect();
+    let first_pk = pk_fields[0].clone();
 
     let expanded = quote! {
         impl chopin_orm::Model for #name {
             fn table_name() -> &'static str {
                 #table_name
+            }
+            
+            fn create_table_stmt() -> String {
+                let mut sql = String::from(#base_sql);
+                #(
+                    sql.pop(); // Remove closing parenthesis
+                    sql.pop(); // Remove newline
+                    let fk_constraint = format!(",\n    FOREIGN KEY ({}) REFERENCES {} (id)\n)", stringify!(#fk_fields), <#fk_models as chopin_orm::Model>::table_name());
+                    sql.push_str(&fk_constraint);
+                )*
+                sql
+            }
+
+            fn column_definitions() -> Vec<(&'static str, &'static str)> {
+                vec![
+                    #( (#col_names, #col_types) ),*
+                ]
             }
 
             fn primary_key_columns() -> &'static [&'static str] {
@@ -130,12 +261,12 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
             fn get_values(&self) -> Vec<chopin_pg::PgValue> {
                 use chopin_pg::types::ToSql;
                 vec![
-                    #(self.#fields.to_sql()),*
+                    #(self.#fields_list.to_sql()),*
                 ]
             }
 
             fn set_generated_values(&mut self, mut values: Vec<chopin_pg::PgValue>) -> chopin_orm::OrmResult<()> {
-                if values.len() != #gen_names_str.len() {
+                if values.len() != #gen_fields_len {
                     return Err(chopin_orm::OrmError::ModelError("Generated values length mismatch".to_string()));
                 }
                 let mut iter = values.into_iter();
@@ -152,7 +283,7 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
             fn from_row(row: &chopin_pg::Row) -> chopin_orm::OrmResult<Self> {
                 Ok(Self {
                     #(
-                        #fields: chopin_orm::ExtractValue::extract(row, stringify!(#fields))?,
+                        #fields_list: chopin_orm::ExtractValue::extract(row, stringify!(#fields_list))?,
                     )*
                 })
             }
@@ -162,8 +293,118 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
             pub fn find() -> chopin_orm::QueryBuilder<#name> {
                 chopin_orm::QueryBuilder::new()
             }
+
+            #(
+                pub fn #fetch_bt_names(&self, executor: &mut impl chopin_orm::Executor) -> chopin_orm::OrmResult<Option<#fk_models>> {
+                    use chopin_pg::types::ToSql;
+                    use chopin_pg::types::ToParam;
+                    let qb = #fk_models::find().filter((
+                        format!("{} = $1", <#fk_models as chopin_orm::Model>::primary_key_columns()[0]),
+                        vec![self.#fk_fields.to_param()]
+                    ));
+                    qb.one(executor)
+                }
+            )*
+
+            #(
+                pub fn #fetch_hm_names(&self, executor: &mut impl chopin_orm::Executor) -> chopin_orm::OrmResult<Vec<#hm_targets>> {
+                    use chopin_pg::types::ToSql;
+                    use chopin_pg::types::ToParam;
+                    let target_pk: chopin_pg::PgValue = self.#first_pk.clone().to_param();
+                    let qb = #hm_targets::find().filter((
+                        format!("{} = $1", #hm_fks),
+                        vec![target_pk]
+                    ));
+                    qb.all(executor)
+                }
+            )*
+        }
+
+        #[allow(non_camel_case_types)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum #column_enum_name {
+            #(#fields_list),*
+        }
+
+        impl chopin_orm::builder::ColumnTrait<#name> for #column_enum_name {
+            fn column_name(&self) -> &'static str {
+                match self {
+                    #(Self::#fields_list => #field_names_str),*
+                }
+            }
         }
     };
 
-    TokenStream::from(expanded)
+    let active_expanded = quote! {
+        #[allow(non_camel_case_types)]
+        #[derive(Clone, Debug, PartialEq)]
+        pub struct #active_model_name {
+            #(pub #fields_list: chopin_orm::ActiveValue<#field_types>),*
+        }
+
+        impl chopin_orm::ActiveModelTrait for #active_model_name {
+            type Entity = #name;
+
+            fn update(&self, executor: &mut impl chopin_orm::Executor) -> chopin_orm::OrmResult<Self::Entity> {
+                let mut set_clauses = Vec::new();
+                let mut query_values = Vec::new();
+                let mut param_idx = 1;
+
+                #(
+                    if self.#non_pk_fields.is_set() {
+                        set_clauses.push(format!("{} = ${}", stringify!(#non_pk_fields), param_idx));
+                        use chopin_pg::types::ToSql;
+                        query_values.push(self.#non_pk_fields.as_ref().unwrap().to_sql());
+                        param_idx += 1;
+                    }
+                )*
+
+                if set_clauses.is_empty() {
+                    return Err(chopin_orm::OrmError::ModelError("No active fields to update".to_string()));
+                }
+
+                let mut where_clauses = Vec::new();
+                #(
+                    where_clauses.push(format!("{} = ${}", stringify!(#pk_fields), param_idx));
+                    use chopin_pg::types::ToSql;
+                    query_values.push(self.#pk_fields.as_ref().ok_or_else(|| chopin_orm::OrmError::ModelError(format!("Primary key {} must be Set or Unchanged", stringify!(#pk_fields))))?.to_sql());
+                    param_idx += 1;
+                )*
+
+                let query = format!(
+                    "UPDATE {} SET {} WHERE {} RETURNING {}",
+                    #table_name,
+                    set_clauses.join(", "),
+                    where_clauses.join(" AND "),
+                    <#name as chopin_orm::Model>::columns().join(", ")
+                );
+
+                let params: Vec<&dyn chopin_pg::types::ToSql> = query_values.iter().map(|v| v as _).collect();
+                let rows = executor.query(&query, &params)?;
+                
+                if let Some(row) = rows.first() {
+                    <#name as chopin_orm::FromRow>::from_row(&row)
+                } else {
+                    Err(chopin_orm::OrmError::ModelError("Update failed, no rows returned".to_string()))
+                }
+            }
+        }
+
+        impl From<#name> for #active_model_name {
+            fn from(model: #name) -> Self {
+                Self {
+                    #(
+                        #fields_list: chopin_orm::ActiveValue::Unchanged(model.#fields_list)
+                    ),*
+                }
+            }
+        }
+    };
+
+    let final_expanded = quote! {
+        #expanded
+        #active_expanded
+    };
+
+    TokenStream::from(final_expanded)
 }
