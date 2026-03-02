@@ -1,4 +1,13 @@
 // src/lib.rs
+
+// Use mimalloc as the global allocator for all binaries that link chopin-core.
+// mimalloc significantly outperforms the system allocator under high concurrency
+// due to its per-thread free-lists, low fragmentation, and cache-aware design.
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 pub mod conn;
 pub mod error;
 pub mod extract;

@@ -17,6 +17,7 @@ core_affinity = "0.8.3"
 ctrlc = "3.4.5"
 kowito-json = { workspace = true }
 libc = "0.2.180"
+mimalloc = { workspace = true }
 num_cpus = "1.17.0"
 serde = { workspace = true }
 serde_urlencoded = "0.7"
