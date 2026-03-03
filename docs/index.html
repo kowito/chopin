@@ -730,51 +730,207 @@ fn main() {
             <!-- Persistence Deep Dive Section -->
             <section id="persistence">
                 <h2>Persistence Deep-Dive</h2>
-                <p>Chopin is engineered for a <strong>Shared-Nothing</strong> database strategy. To eliminate lock
-                    contention and cross-core synchronization, each worker thread manages its own independent connection
-                    pool.</p>
+                <p><code>chopin-pg</code> is built for Chopin's <strong>Shared-Nothing</strong> model: each worker owns
+                    its own pool and connections. This section walks from first query to advanced features so you can
+                    use the full driver safely and efficiently.</p>
 
-                <div class="glass-panel" style="padding: 2rem; margin-bottom: 2rem;">
-                    <h3>The Thread-Local Pattern</h3>
-                    <p>The most efficient way to access your database in a Chopin handler is via
-                        <code>thread_local!</code>. This ensures zero allocation for handle retrieval during the request
-                        lifecycle.
-                    </p>
-                    <div class="code-block">
-                        <pre><code class="language-rust">use chopin_pg::{PgPool, PgConfig};
+                <h3>0) Install & connect</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_pg::{PgConfig, PgConnection, PgResult};
+
+fn main() -> PgResult&lt;()&gt; {
+    // URL form
+    let config = PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres")?;
+
+    // Builder form
+    let _config2 = PgConfig::new("127.0.0.1", 5432, "chopin", "chopin", "postgres");
+
+    // Unix socket form (macOS/Linux)
+    let _config3 = PgConfig::new("localhost", 5432, "chopin", "chopin", "postgres")
+        .with_socket_dir("/var/run/postgresql");
+
+    let mut conn = PgConnection::connect(&amp;config)?;
+    let rows = conn.query_simple("SELECT 1")?;
+    let one: i32 = rows[0].get_typed(0)?;
+    assert_eq!(one, 1);
+    Ok(())
+}</code></pre>
+                </div>
+
+                <h3>1) Worker-local pool (recommended in handlers)</h3>
+                <p><strong>Important:</strong> query methods are on <code>PgConnection</code>/<code>ConnectionGuard</code>,
+                    not directly on <code>PgPool</code>. Get a guard first via <code>pool.get()</code> or
+                    <code>pool.try_get()</code>.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_pg::{PgConfig, PgPool};
 use std::cell::RefCell;
 
 thread_local! {
-    /// Each worker thread initializes its own pool on first access
-    pub static DB: RefCell<PgPool> = RefCell::new(
+    pub static DB: RefCell&lt;PgPool&gt; = RefCell::new(
         PgPool::connect(
-            PgConfig::from_url("postgres://user:pass@localhost/main_db").unwrap(),
-            10 // 10 connections per worker thread
-        ).expect("Critical: Database unreachable")
+            PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap(),
+            10,
+        ).expect("DB connect failed")
     );
-}</code></pre>
-                    </div>
-                </div>
+}
 
-                <h3>Lower-Level: Raw SQL</h3>
-                <p>Chopin does not hide the power of SQL. You can execute raw queries directly through the pool or a
-                    checked-out connection.</p>
-                <div class="code-block glass-panel">
-                    <pre><code class="language-rust">#[get("/raw-stats")]
-fn stats_handler(_ctx: Context) -> Response {
+#[get("/users/:id")]
+fn get_user(ctx: Context) -> Response {
+    let id: i32 = ctx.param("id").unwrap_or("1").parse().unwrap_or(1);
     DB.with(|db| {
         let mut pool = db.borrow_mut();
-        // Dynamic queries with parameters
-        let rows = pool.query(
-            "SELECT count(*) FROM logs WHERE level = $1", 
-            &[&"error".to_param()]
-        ).unwrap();
-        
-        let count: i64 = rows[0].get(0).unwrap();
-        Response::text(format!("Errors: {}", count))
+        let mut conn = pool.get().unwrap();
+        let row = conn
+            .query_one("SELECT id, name FROM users WHERE id = $1", &amp;[&amp;id])
+            .unwrap();
+
+        let id: i32 = row.get_typed(0).unwrap();
+        let name: String = row.get_typed(1).unwrap();
+        Response::text(format!("{}:{}", id, name))
     })
 }</code></pre>
                 </div>
+
+                <h3>2) Query API (core CRUD)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">let mut conn = PgConnection::connect(&amp;config)?;
+
+// No parameters (simple protocol)
+let _rows = conn.query_simple("SELECT current_database()")?;
+
+// Multi-row
+let rows = conn.query("SELECT id FROM users WHERE active = $1", &amp;[&amp;true])?;
+
+// Exactly one row (Err(PgError::NoRows) if none)
+let row = conn.query_one("SELECT email FROM users WHERE id = $1", &amp;[&amp;42i32])?;
+
+// Optional row
+let maybe = conn.query_opt("SELECT email FROM users WHERE id = $1", &amp;[&amp;9999i32])?;
+
+// Execute returns affected rows
+let changed = conn.execute("UPDATE users SET active = $1 WHERE id = $2", &amp;[&amp;false, &amp;42i32])?;
+println!("updated={}", changed);</code></pre>
+                </div>
+
+                <h3>3) Transactions, savepoints, nesting</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">// Closure transaction (auto BEGIN/COMMIT/ROLLBACK)
+conn.transaction(|tx| {
+    tx.execute("INSERT INTO users (name) VALUES ($1)", &amp;[&amp;"Alice"])?;
+
+    // Nested transaction => SAVEPOINT
+    tx.transaction(|nested| {
+        nested.execute("INSERT INTO logs (msg) VALUES ($1)", &amp;[&amp;"created Alice"])?;
+        Ok(())
+    })?;
+
+    Ok(())
+})?;
+
+// Manual control
+conn.begin()?;
+conn.savepoint("sp1")?;
+conn.execute("UPDATE accounts SET balance = balance - 100 WHERE id = $1", &amp;[&amp;1i32])?;
+conn.rollback_to("sp1")?;
+conn.release_savepoint("sp1")?;
+conn.commit()?;</code></pre>
+                </div>
+
+                <h3>4) COPY IN / COPY OUT (bulk data)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">// COPY IN
+let mut writer = conn.copy_in("COPY users (name, email) FROM STDIN")?;
+writer.write_row(&amp;["Alice", "alice@example.com"])?;
+writer.write_row(&amp;["Bob", "bob@example.com"])?;
+let copied = writer.finish()?;
+println!("copied rows={}", copied);
+
+// COPY IN with failure path
+let writer = conn.copy_in("COPY users (name) FROM STDIN")?;
+writer.fail("invalid source format")?;
+
+// COPY OUT
+let mut reader = conn.copy_out("COPY users TO STDOUT")?;
+let bytes = reader.read_all()?;
+println!("{}", String::from_utf8_lossy(&amp;bytes));</code></pre>
+                </div>
+
+                <h3>5) LISTEN / NOTIFY</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">conn.listen("events")?;
+conn.notify("events", "hello")?;
+
+if let Some(n) = conn.poll_notification()? {
+    println!("pid={} channel={} payload={}", n.process_id, n.channel, n.payload);
+}
+
+for n in conn.drain_notifications() {
+    println!("{}: {}", n.channel, n.payload);
+}
+
+conn.unlisten("events")?;
+conn.unlisten_all()?;</code></pre>
+                </div>
+
+                <h3>6) Pool tuning and health</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_pg::{PgPool, PgPoolConfig};
+use std::time::Duration;
+
+let pool_cfg = PgPoolConfig::new()
+    .max_size(32)
+    .min_size(8)
+    .checkout_timeout(Duration::from_secs(3))
+    .connection_timeout(Duration::from_secs(3))
+    .idle_timeout(Duration::from_secs(300))
+    .max_lifetime(Duration::from_secs(1800))
+    .test_on_checkout(true);
+
+let mut pool = PgPool::connect_with_config(config.clone(), pool_cfg)?;
+
+// Non-blocking checkout
+let _guard = pool.try_get()?;
+
+println!(
+    "idle={} active={} total={}",
+    pool.idle_connections(),
+    pool.active_connections(),
+    pool.total_connections()
+);
+
+let stats = pool.stats();
+println!("checkouts={} created={}", stats.total_checkouts, stats.total_connections_created);</code></pre>
+                </div>
+
+                <h3>7) Connection tuning (timeout + statement cache)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use std::time::Duration;
+
+conn.set_io_timeout(Duration::from_secs(2));
+conn.set_statement_cache_capacity(512);
+
+// ... run workload ...
+
+conn.clear_statement_cache();</code></pre>
+                </div>
+
+                <h3>8) Error handling and retry policy</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_pg::{ErrorClass, PgError};
+
+match conn.query_one("SELECT * FROM users WHERE id = $1", &amp;[&amp;id]) {
+    Ok(row) =&gt; { /* use row */ }
+    Err(err) =&gt; match err.classify() {
+        ErrorClass::Transient =&gt; eprintln!("retry candidate: {}", err),
+        ErrorClass::Pool =&gt; eprintln!("pool pressure: {}", err),
+        ErrorClass::Client | ErrorClass::Permanent =&gt; eprintln!("fail fast: {}", err),
+    },
+}</code></pre>
+                </div>
+
+                <p><strong>Zero → Hero checklist:</strong> start with <code>PgConnection</code>, move to worker-local
+                    <code>PgPool</code>, then add transactions, COPY, LISTEN/NOTIFY, and tuning knobs. This gives full
+                    coverage of the public <code>chopin-pg</code> feature set.</p>
             </section>
 
             <hr class="section-divider">
