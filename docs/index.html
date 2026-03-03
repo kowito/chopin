@@ -701,30 +701,204 @@ fn upload_handler(ctx: Context) -> Response {
             <!-- Middleware & Auth Section -->
             <section id="middleware">
                 <h2>Middleware & Authentication</h2>
-                <p>Chopin uses a high-performance middleware system based on static function pointers.
-                    <code>chopin-auth</code> provides ready-to-use JWT management and role-based access control (RBAC).
-                </p>
+                <p><code>chopin-auth</code> provides JWT issuing/verification, request extraction,
+                    role-based middleware, token revocation, configurable auth errors, and Argon2 password hashing.
+                    This section walks zero-to-hero so you can use every public feature correctly.</p>
 
-                <h3>JWT & Role-Based Access</h3>
+                <h3>0) Add dependency</h3>
                 <div class="code-block glass-panel">
-                    <pre><code class="language-rust">use chopin_auth::{require_role_middleware, JwtManager, Role};
+                    <pre><code class="language-toml">[dependencies]
+chopin-auth = "0.5.16"
+serde = { version = "1", features = ["derive"] }</code></pre>
+                </div>
 
-#[derive(Serialize, Deserialize, Role, PartialEq)]
-enum UserRole { Admin, User }
+                <h3>1) Define claims (+ optional JTI for revocation)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::HasJti;
+use serde::{Deserialize, Serialize};
 
-// Generate a zero-allocation middleware for Admin role
-// The macro creates a function that checks the JWT claims
-require_role_middleware!(admin_only, MyClaims, UserRole::Admin, MyClaims::has_role);
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    role: String,
+    jti: String,
+    exp: u64,
+}
 
-#[get("/admin/config")]
-fn admin_handler(ctx: Context) -> Response { ... }
-
-fn main() {
-    let mut router = Router::new();
-    // Wrap handler with authentication middleware
-    router.get("/admin/config", admin_only(admin_handler));
+impl HasJti for Claims {
+    fn jti(&self) -> Option&lt;&str&gt; { Some(&self.jti) }
 }</code></pre>
                 </div>
+
+                <h3>2) Initialize global JWT manager (once at startup)</h3>
+                <p><code>init_jwt_manager(...)</code> must be called once before serving requests.
+                    Calling it more than once will panic.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::{init_jwt_manager, JwtManager, TokenBlacklist};
+use std::time::Duration;
+
+fn init_auth() {
+    let blacklist = TokenBlacklist::new();
+    blacklist.start_cleanup_task(Duration::from_secs(300));
+
+    let manager = JwtManager::new(b"super-secret")
+        .with_blacklist(blacklist.clone());
+
+    init_jwt_manager(manager);
+}</code></pre>
+                </div>
+
+                <h3>3) JWT manager modes (HS256 / RS256 / ES256)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::JwtManager;
+
+// HS256 sign + verify (shared secret)
+let _hs = JwtManager::new(b"secret");
+
+// HS256 verify-only (encode() returns EncodingKeyMissing)
+let _hs_verify = JwtManager::verify_only(b"secret");
+
+// RS256 sign + verify
+let _rs = JwtManager::from_rsa_pem(PRIVATE_PEM, PUBLIC_PEM)?;
+
+// RS256 verify-only
+let _rs_verify = JwtManager::from_rsa_public_pem(PUBLIC_PEM)?;
+
+// ES256 sign + verify
+let _es = JwtManager::from_ec_pem(EC_PRIVATE_PEM, EC_PUBLIC_PEM)?;
+
+// ES256 verify-only
+let _es_verify = JwtManager::from_ec_public_pem(EC_PUBLIC_PEM)?;
+
+// Advanced: use JwtManager::with_config(JwtConfig { ... }) for full validation/key control.</code></pre>
+                </div>
+
+                <h3>4) Issue + verify tokens</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::{AuthError, JwtManager};
+
+let manager = JwtManager::new(b"secret");
+let claims = Claims {
+    sub: "user-1".into(),
+    role: "admin".into(),
+    jti: "jti-123".into(),
+    exp: 4_102_444_800, // 2100-01-01 UTC
+};
+
+let token = manager.encode(&claims)?;
+let decoded: Claims = manager.decode(&token)?;
+
+match manager.decode::&lt;Claims&gt;("bad.token") {
+    Ok(_) =&gt; {}
+    Err(AuthError::Expired) =&gt; eprintln!("expired"),
+    Err(AuthError::Revoked) =&gt; eprintln!("revoked"),
+    Err(AuthError::InvalidToken(e)) =&gt; eprintln!("invalid: {}", e),
+    Err(e) =&gt; eprintln!("other auth error: {}", e),
+}</code></pre>
+                </div>
+
+                <h3>5) Protect handlers with the <code>Auth&lt;T&gt;</code> extractor</h3>
+                <p>The extractor validates <code>Authorization: Bearer ...</code> using the global manager and returns
+                    decoded claims. Default failures: 401 for token issues, 500 if manager is not initialized.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::Auth;
+use chopin_core::{Context, Response};
+
+#[get("/me")]
+fn me(ctx: Context) -> Response {
+    let auth = match ctx.extract::&lt;Auth&lt;Claims&gt;&gt;() {
+        Ok(a) =&gt; a,
+        Err(resp) =&gt; return resp,
+    };
+
+    Response::text(format!("hello {}", auth.claims.sub))
+}</code></pre>
+                </div>
+
+                <h3>6) Role-based middleware (RBAC)</h3>
+                <p><strong>Important:</strong> there is no derive macro for <code>Role</code>; implement
+                    <code>Role</code> and <code>RoleCheck</code> manually.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::{Role, RoleCheck, require_role_middleware};
+
+#[derive(Debug, PartialEq)]
+enum UserRole { Admin, User }
+impl Role for UserRole {}
+
+impl RoleCheck&lt;UserRole&gt; for Claims {
+    fn has_role(&self, role: &UserRole) -> bool {
+        matches!((&*self.role, role), ("admin", UserRole::Admin) | ("user", UserRole::User))
+    }
+}
+
+require_role_middleware!(admin_only, Claims, UserRole::Admin, Claims::has_role);
+
+// Use `admin_only` in your router/middleware chain for admin endpoints.</code></pre>
+                </div>
+
+                <h3>7) Token revocation (logout / emergency invalidation)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::TokenBlacklist;
+
+let blacklist = TokenBlacklist::new();
+
+// revoke until token expiry (recommended)
+blacklist.revoke("jti-123".to_string(), Some(4_102_444_800));
+
+// checks
+let revoked = blacklist.is_revoked("jti-123");
+println!("revoked={}", revoked);
+
+// maintenance
+blacklist.cleanup();
+println!("entries={} empty={}", blacklist.len(), blacklist.is_empty());</code></pre>
+                </div>
+
+                <h3>8) Custom auth error responses</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::{set_error_handler, AuthError, ErrorHandler};
+use chopin_core::Response;
+
+struct JsonAuthErrors;
+
+impl ErrorHandler for JsonAuthErrors {
+    fn handle(&self, err: AuthError) -> Response {
+        match err {
+            AuthError::Expired =&gt; Response::new(401),
+            AuthError::Revoked =&gt; Response::new(401),
+            AuthError::InvalidToken(_) =&gt; Response::new(401),
+            _ =&gt; Response::server_error(),
+        }
+    }
+}
+
+// call once at startup
+set_error_handler(JsonAuthErrors);</code></pre>
+                </div>
+
+                <h3>9) Password hashing (Argon2id)</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_auth::{PasswordHasher, hash_password, verify_password};
+
+// Presets
+let interactive = PasswordHasher::interactive(); // login default
+let sensitive = PasswordHasher::sensitive();     // stronger / slower
+
+// Custom params: memory_kib, iterations, parallelism
+let custom = PasswordHasher::custom(32_768, 3, 1)?;
+
+let hash = interactive.hash(b"my-password")?;
+assert!(interactive.verify(b"my-password", &hash)?);
+
+// Convenience helpers
+let h2 = hash_password(b"another-password")?;
+assert!(verify_password(b"another-password", &h2)?);
+assert!(!verify_password(b"wrong", &h2)?);</code></pre>
+                </div>
+
+                <p><strong>Zero → Hero checklist:</strong> define claims + <code>HasJti</code>, initialize
+                    <code>JwtManager</code> once, protect routes with <code>Auth&lt;Claims&gt;</code>, add RBAC middleware,
+                    enable blacklist revocation, customize error handling, and hash passwords with Argon2 presets/custom params.</p>
             </section>
 
             <!-- Persistence Deep Dive Section -->
