@@ -280,6 +280,19 @@ pub struct PgConnection {
     broken: bool,
 }
 
+/// Metadata for a single query slot in a [`PgConnection::pipeline_query`] batch.
+struct PipelineEntry {
+    /// Whether this statement was freshly parsed (needs Parse+Describe messages).
+    is_new: bool,
+    /// Original SQL text — used to finalize the statement cache on RowDescription.
+    sql: String,
+    /// Server-side prepared statement name.
+    stmt_name: String,
+    /// Pre-fetched column descriptors for already-cached statements.
+    /// `None` for new statements (columns arrive via RowDescription).
+    columns: Option<Rc<Vec<codec::ColumnDesc>>>,
+}
+
 impl PgConnection {
     /// Connect to PostgreSQL (blocking during handshake, then switches to
     /// non-blocking mode once authentication completes).
@@ -637,6 +650,161 @@ impl PgConnection {
     pub fn execute(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<u64> {
         let _rows = self.query(sql, params)?;
         Ok(self.last_affected_rows)
+    }
+
+    // ─── Query Pipelining ─────────────────────────────────────
+
+    /// Execute multiple queries in a single round-trip (query pipelining).
+    ///
+    /// All `Parse` / `Describe` / `Bind` / `Execute` messages are encoded into
+    /// one write buffer and sent with a **single `Sync`**.  This reduces N
+    /// independent queries from N network round-trips down to **one**, giving a
+    /// large throughput improvement for fan-out reads or bulk lookups.
+    ///
+    /// Results are returned in the same order as `queries`.  On any server
+    /// error the pipeline stops and returns `Err`; PostgreSQL discards the
+    /// remaining pipelined queries after an error within a Sync cycle.
+    ///
+    /// Repeated SQL strings within the same batch are automatically deduplicated:
+    /// only one `Parse` is sent for duplicate SQL, keeping the batch compact.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let results = conn.pipeline_query(&[
+    ///     ("SELECT id, name FROM users WHERE id = $1", &[&1i32] as &[&dyn ToSql]),
+    ///     ("SELECT id, name FROM users WHERE id = $1", &[&2i32] as &[&dyn ToSql]),
+    ///     ("SELECT count(*) FROM orders",              &[] as &[&dyn ToSql]),
+    /// ])?;
+    /// // results[0] → rows for the first SELECT
+    /// // results[1] → rows for the second SELECT
+    /// // results[2] → rows for the count query
+    /// ```
+    pub fn pipeline_query(&mut self, queries: &[(&str, &[&dyn ToSql])]) -> PgResult<Vec<Vec<Row>>> {
+        let (rows, _counts) = self.read_pipeline_results_for(queries)?;
+        Ok(rows)
+    }
+
+    /// Execute multiple statements (INSERT / UPDATE / DELETE / …) in a single
+    /// round-trip and return each query's affected-row count.
+    ///
+    /// Same pipelining semantics as [`pipeline_query`][Self::pipeline_query];
+    /// row data returned by the server is silently discarded.
+    pub fn pipeline_execute(&mut self, queries: &[(&str, &[&dyn ToSql])]) -> PgResult<Vec<u64>> {
+        let (_rows, counts) = self.read_pipeline_results_for(queries)?;
+        Ok(counts)
+    }
+
+    /// Shared implementation for both `pipeline_query` and `pipeline_execute`.
+    fn read_pipeline_results_for(
+        &mut self,
+        queries: &[(&str, &[&dyn ToSql])],
+    ) -> PgResult<(Vec<Vec<Row>>, Vec<u64>)> {
+        if queries.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let total_est: usize = queries
+            .iter()
+            .map(|(sql, params)| 300 + sql.len() + params.len() * 64)
+            .sum::<usize>()
+            + 5;
+        self.ensure_write_capacity(total_est);
+
+        let mut pos = 0usize;
+        let mut entries: Vec<PipelineEntry> = Vec::with_capacity(queries.len());
+
+        let mut pipeline_seen: std::collections::HashMap<
+            &str,
+            (String, Option<Vec<codec::ColumnDesc>>),
+        > = std::collections::HashMap::new();
+
+        for &(sql, params) in queries {
+            let (stmt_name, is_new, cached_cols) =
+                if let Some((name, cols)) = pipeline_seen.get(sql) {
+                    (name.clone(), false, cols.clone().map(Rc::new))
+                } else {
+                    let stmt = self.stmt_cache.get_or_create(sql);
+                    let cols = stmt.columns.clone();
+                    if stmt.is_new {
+                        pipeline_seen.insert(sql, (stmt.name.clone(), None));
+                    }
+                    (stmt.name, stmt.is_new, cols.map(Rc::new))
+                };
+
+            if is_new {
+                let needed = 20 + sql.len() + stmt_name.len();
+                if pos + needed > self.write_buf.len() {
+                    self.write_buf
+                        .resize((pos + needed).max(self.write_buf.len() * 2), 0);
+                }
+                let n = codec::encode_parse(&mut self.write_buf[pos..], &stmt_name, sql, &[]);
+                pos += n;
+                let n = codec::encode_describe(
+                    &mut self.write_buf[pos..],
+                    DescribeTarget::Statement,
+                    &stmt_name,
+                );
+                pos += n;
+            }
+
+            let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
+            let param_formats: Vec<i16> = pg_values
+                .iter()
+                .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
+                .collect();
+            let param_values: Vec<Option<Vec<u8>>> = pg_values
+                .iter()
+                .zip(param_formats.iter())
+                .map(|(v, &fmt)| {
+                    if fmt == 1 {
+                        v.to_binary_bytes()
+                    } else {
+                        v.to_text_bytes()
+                    }
+                })
+                .collect();
+            let param_refs: Vec<Option<&[u8]>> =
+                param_values.iter().map(|p| p.as_deref()).collect();
+
+            let param_data_size: usize = param_values
+                .iter()
+                .map(|v| v.as_ref().map_or(4, |d| 4 + d.len()))
+                .sum();
+            let needed = 50 + stmt_name.len() + param_data_size + 15;
+            if pos + needed > self.write_buf.len() {
+                self.write_buf
+                    .resize((pos + needed).max(self.write_buf.len() * 2), 0);
+            }
+
+            let n = codec::encode_bind(
+                &mut self.write_buf[pos..],
+                "",
+                &stmt_name,
+                &param_formats,
+                &param_refs,
+                &[1],
+            );
+            pos += n;
+
+            let n = codec::encode_execute(&mut self.write_buf[pos..], "", 0);
+            pos += n;
+
+            entries.push(PipelineEntry {
+                is_new,
+                sql: sql.to_string(),
+                stmt_name,
+                columns: cached_cols,
+            });
+        }
+
+        if pos + 5 > self.write_buf.len() {
+            self.write_buf.resize(pos + 5, 0);
+        }
+        let n = codec::encode_sync(&mut self.write_buf[pos..]);
+        pos += n;
+
+        self.flush_write_buf(pos)?;
+        self.read_pipeline_results(entries)
     }
 
     // ─── Transaction Support ──────────────────────────────────
@@ -1295,6 +1463,130 @@ impl PgConnection {
         }
     }
 
+    /// Read responses for a pipelined batch sent by [`pipeline_query`][Self::pipeline_query].
+    ///
+    /// Processes the flat stream of backend messages using `current_idx` to
+    /// track which query's result we are accumulating.  `CommandComplete`
+    /// advances `current_idx`; `ReadyForQuery` terminates the loop.
+    fn read_pipeline_results(
+        &mut self,
+        entries: Vec<PipelineEntry>,
+    ) -> PgResult<(Vec<Vec<Row>>, Vec<u64>)> {
+        let n = entries.len();
+        let mut results: Vec<Vec<Row>> = (0..n).map(|_| Vec::new()).collect();
+        let mut counts: Vec<u64> = vec![0u64; n];
+        let mut current_idx = 0usize;
+        let mut columns_rc: Rc<Vec<codec::ColumnDesc>> = Rc::new(Vec::new());
+
+        loop {
+            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
+                self.fill_read_buf(None)?;
+            }
+
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
+                let header = codec::decode_header(&self.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
+                let body = &self.read_buf[5..msg_len];
+
+                match header.tag {
+                    // ── Parse-phase responses for new statements ──────────
+                    BackendTag::ParseComplete | BackendTag::ParameterDescription => {
+                        // No action needed; column info comes in RowDescription.
+                    }
+                    BackendTag::RowDescription => {
+                        // New statement: decode and cache column descriptors.
+                        let mut columns = codec::parse_row_description(body);
+                        // Bind requests binary format (&[1]) but RowDescription
+                        // from Describe(Statement) always reports Text (0). Override.
+                        for col in &mut columns {
+                            col.format_code = FormatCode::Binary;
+                        }
+                        if current_idx < n && entries[current_idx].is_new {
+                            let entry = &entries[current_idx];
+                            if let Some(evicted) = self.stmt_cache.insert(
+                                &entry.sql,
+                                entry.stmt_name.clone(),
+                                0,
+                                Some(columns.clone()),
+                            ) {
+                                // Fire-and-forget: CloseComplete arrives after
+                                // ReadyForQuery and is silently consumed.
+                                self.close_statement_on_server(&evicted.name);
+                            }
+                        }
+                        columns_rc = Rc::new(columns);
+                    }
+                    BackendTag::NoData => {
+                        // New statement with no result columns (DML / DDL).
+                        if current_idx < n && entries[current_idx].is_new {
+                            let entry = &entries[current_idx];
+                            if let Some(evicted) =
+                                self.stmt_cache
+                                    .insert(&entry.sql, entry.stmt_name.clone(), 0, None)
+                            {
+                                self.close_statement_on_server(&evicted.name);
+                            }
+                        }
+                        columns_rc = Rc::new(Vec::new());
+                    }
+                    // ── Bind-phase response ───────────────────────────────
+                    BackendTag::BindComplete => {
+                        // For cached queries there is no RowDescription; restore
+                        // the column descriptors that were fetched from the cache.
+                        if current_idx < n
+                            && !entries[current_idx].is_new
+                            && let Some(ref c) = entries[current_idx].columns
+                        {
+                            columns_rc = Rc::clone(c);
+                        }
+                    }
+                    // ── Execute-phase responses ───────────────────────────
+                    BackendTag::DataRow => {
+                        if current_idx < n {
+                            let raw_values = codec::parse_data_row(body);
+                            results[current_idx].push(Row::new(Rc::clone(&columns_rc), raw_values));
+                        }
+                    }
+                    BackendTag::CommandComplete => {
+                        let (tag, rows_affected) = extract_command_complete(body);
+                        self.last_command_tag = tag;
+                        self.last_affected_rows = rows_affected;
+                        if current_idx < n {
+                            counts[current_idx] = rows_affected;
+                        }
+                        current_idx += 1; // advance to next query's result slot
+                    }
+                    // ── Terminal messages ─────────────────────────────────
+                    BackendTag::ReadyForQuery => {
+                        self.tx_status = TransactionStatus::from(body[0]);
+                        self.consume_read(msg_len);
+                        return Ok((results, counts));
+                    }
+                    BackendTag::ErrorResponse => {
+                        // On error PostgreSQL discards remaining pipeline queries.
+                        let err = if current_idx < n {
+                            self.parse_error_with_context(body, &entries[current_idx].sql)
+                        } else {
+                            self.parse_error(body)
+                        };
+                        self.consume_read(msg_len);
+                        self.drain_to_ready()?;
+                        return Err(err);
+                    }
+                    BackendTag::NotificationResponse => {
+                        let notification = Self::parse_notification(body);
+                        self.notifications.push_back(notification);
+                    }
+                    BackendTag::NoticeResponse => {
+                        self.dispatch_notice(body);
+                    }
+                    _ => {}
+                }
+                self.consume_read(msg_len);
+            }
+        }
+    }
+
     fn drain_to_ready(&mut self) -> PgResult<()> {
         loop {
             // Only read from the socket when the buffer has no complete message;
@@ -1510,6 +1802,20 @@ impl<'a> Transaction<'a> {
     /// Execute a statement that returns no rows.
     pub fn execute(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<u64> {
         self.conn.execute(sql, params)
+    }
+
+    /// Execute multiple queries in a single round-trip (query pipelining).
+    ///
+    /// See [`PgConnection::pipeline_query`] for full documentation.
+    pub fn pipeline_query(&mut self, queries: &[(&str, &[&dyn ToSql])]) -> PgResult<Vec<Vec<Row>>> {
+        self.conn.pipeline_query(queries)
+    }
+
+    /// Execute multiple statements in a single round-trip.
+    ///
+    /// See [`PgConnection::pipeline_execute`] for full documentation.
+    pub fn pipeline_execute(&mut self, queries: &[(&str, &[&dyn ToSql])]) -> PgResult<Vec<u64>> {
+        self.conn.pipeline_execute(queries)
     }
 
     /// Create a savepoint within this transaction.
