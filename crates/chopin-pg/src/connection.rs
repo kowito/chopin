@@ -789,6 +789,17 @@ impl PgConnection {
             let n = codec::encode_execute(&mut self.write_buf[pos..], "", 0);
             pos += n;
 
+            // TFB General Requirement #7: when using PostgreSQL's Extended Query
+            // Protocol, "each query must be separated by a Sync message".
+            // Putting Sync after every Execute ensures each query has its own
+            // error-recovery boundary (matching the semantics of N sequential
+            // queries), while still batching all N queries into one TCP write.
+            if pos + 5 > self.write_buf.len() {
+                self.write_buf.resize(pos + 5, 0);
+            }
+            let n = codec::encode_sync(&mut self.write_buf[pos..]);
+            pos += n;
+
             entries.push(PipelineEntry {
                 is_new,
                 sql: sql.to_string(),
@@ -797,12 +808,7 @@ impl PgConnection {
             });
         }
 
-        if pos + 5 > self.write_buf.len() {
-            self.write_buf.resize(pos + 5, 0);
-        }
-        let n = codec::encode_sync(&mut self.write_buf[pos..]);
-        pos += n;
-
+        // All Syncs have already been encoded inside the loop above.
         self.flush_write_buf(pos)?;
         self.read_pipeline_results(entries)
     }
@@ -1476,6 +1482,9 @@ impl PgConnection {
         let mut results: Vec<Vec<Row>> = (0..n).map(|_| Vec::new()).collect();
         let mut counts: Vec<u64> = vec![0u64; n];
         let mut current_idx = 0usize;
+        // One Sync is sent per query, so we expect exactly N ReadyForQuery
+        // responses.  We count them and return only after all N arrive.
+        let mut rfq_received = 0usize;
         let mut columns_rc: Rc<Vec<codec::ColumnDesc>> = Rc::new(Vec::new());
 
         loop {
@@ -1489,15 +1498,9 @@ impl PgConnection {
                 let body = &self.read_buf[5..msg_len];
 
                 match header.tag {
-                    // ── Parse-phase responses for new statements ──────────
-                    BackendTag::ParseComplete | BackendTag::ParameterDescription => {
-                        // No action needed; column info comes in RowDescription.
-                    }
+                    BackendTag::ParseComplete | BackendTag::ParameterDescription => {}
                     BackendTag::RowDescription => {
-                        // New statement: decode and cache column descriptors.
                         let mut columns = codec::parse_row_description(body);
-                        // Bind requests binary format (&[1]) but RowDescription
-                        // from Describe(Statement) always reports Text (0). Override.
                         for col in &mut columns {
                             col.format_code = FormatCode::Binary;
                         }
@@ -1509,15 +1512,12 @@ impl PgConnection {
                                 0,
                                 Some(columns.clone()),
                             ) {
-                                // Fire-and-forget: CloseComplete arrives after
-                                // ReadyForQuery and is silently consumed.
                                 self.close_statement_on_server(&evicted.name);
                             }
                         }
                         columns_rc = Rc::new(columns);
                     }
                     BackendTag::NoData => {
-                        // New statement with no result columns (DML / DDL).
                         if current_idx < n && entries[current_idx].is_new {
                             let entry = &entries[current_idx];
                             if let Some(evicted) =
@@ -1529,10 +1529,7 @@ impl PgConnection {
                         }
                         columns_rc = Rc::new(Vec::new());
                     }
-                    // ── Bind-phase response ───────────────────────────────
                     BackendTag::BindComplete => {
-                        // For cached queries there is no RowDescription; restore
-                        // the column descriptors that were fetched from the cache.
                         if current_idx < n
                             && !entries[current_idx].is_new
                             && let Some(ref c) = entries[current_idx].columns
@@ -1540,7 +1537,6 @@ impl PgConnection {
                             columns_rc = Rc::clone(c);
                         }
                     }
-                    // ── Execute-phase responses ───────────────────────────
                     BackendTag::DataRow => {
                         if current_idx < n {
                             let raw_values = codec::parse_data_row(body);
@@ -1554,23 +1550,76 @@ impl PgConnection {
                         if current_idx < n {
                             counts[current_idx] = rows_affected;
                         }
-                        current_idx += 1; // advance to next query's result slot
+                        current_idx += 1;
                     }
-                    // ── Terminal messages ─────────────────────────────────
                     BackendTag::ReadyForQuery => {
                         self.tx_status = TransactionStatus::from(body[0]);
+                        rfq_received += 1;
                         self.consume_read(msg_len);
-                        return Ok((results, counts));
+                        if rfq_received >= n {
+                            return Ok((results, counts));
+                        }
+                        // More ReadyForQuery messages still coming; keep reading.
+                        continue;
                     }
                     BackendTag::ErrorResponse => {
-                        // On error PostgreSQL discards remaining pipeline queries.
+                        // With per-query Syncs, PostgreSQL still executes the
+                        // remaining queries (each has its own Sync boundary).
+                        // Record the error, consume through to this query's
+                        // ReadyForQuery, then continue reading remaining results
+                        // to keep the connection clean before returning Err.
                         let err = if current_idx < n {
                             self.parse_error_with_context(body, &entries[current_idx].sql)
                         } else {
                             self.parse_error(body)
                         };
                         self.consume_read(msg_len);
-                        self.drain_to_ready()?;
+                        // Drain to the ReadyForQuery for this failed query.
+                        loop {
+                            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
+                                self.fill_read_buf(None)?;
+                            }
+                            let mut got_rfq = false;
+                            while let Some(il) =
+                                codec::message_complete(&self.read_buf[..self.read_pos])
+                            {
+                                let ih = codec::decode_header(&self.read_buf).ok_or_else(|| {
+                                    PgError::Protocol("Incomplete header".to_string())
+                                })?;
+                                if ih.tag == BackendTag::ReadyForQuery {
+                                    let ib = &self.read_buf[5..il];
+                                    self.tx_status = TransactionStatus::from(ib[0]);
+                                    self.consume_read(il);
+                                    rfq_received += 1;
+                                    got_rfq = true;
+                                    break;
+                                }
+                                self.consume_read(il);
+                            }
+                            if got_rfq {
+                                break;
+                            }
+                        }
+                        // Drain all remaining queries in the pipeline so the
+                        // connection is left in a clean state, then return Err.
+                        while rfq_received < n {
+                            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
+                                self.fill_read_buf(None)?;
+                            }
+                            while let Some(dl) =
+                                codec::message_complete(&self.read_buf[..self.read_pos])
+                            {
+                                let dh = codec::decode_header(&self.read_buf).ok_or_else(|| {
+                                    PgError::Protocol("Incomplete header".to_string())
+                                })?;
+                                if dh.tag == BackendTag::ReadyForQuery {
+                                    let db = &self.read_buf[5..dl];
+                                    self.tx_status = TransactionStatus::from(db[0]);
+                                    rfq_received += 1;
+                                }
+                                self.consume_read(dl);
+                            }
+                        }
                         return Err(err);
                     }
                     BackendTag::NotificationResponse => {
