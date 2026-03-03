@@ -72,7 +72,10 @@ mod tests {
     #[test]
     fn test_encode_decode_roundtrip() {
         let mgr = JwtManager::new(b"test-secret-key");
-        let claims = TestClaims { sub: "user-42".to_string(), exp: far_future_exp() };
+        let claims = TestClaims {
+            sub: "user-42".to_string(),
+            exp: far_future_exp(),
+        };
         let token = mgr.encode(&claims).expect("encode should succeed");
         assert!(!token.is_empty());
         let decoded: TestClaims = mgr.decode(&token).expect("decode should succeed");
@@ -81,9 +84,12 @@ mod tests {
 
     #[test]
     fn test_decode_wrong_secret_fails() {
-        let mgr_sign   = JwtManager::new(b"correct-secret");
+        let mgr_sign = JwtManager::new(b"correct-secret");
         let mgr_verify = JwtManager::new(b"wrong-secret");
-        let claims = TestClaims { sub: "user-1".to_string(), exp: far_future_exp() };
+        let claims = TestClaims {
+            sub: "user-1".to_string(),
+            exp: far_future_exp(),
+        };
         let token = mgr_sign.encode(&claims).expect("encode must succeed");
         let result: Result<TestClaims, _> = mgr_verify.decode(&token);
         assert!(result.is_err(), "decode with wrong secret should fail");
@@ -99,7 +105,10 @@ mod tests {
     #[test]
     fn test_decode_mangled_token_fails() {
         let mgr = JwtManager::new(b"secret");
-        let claims = TestClaims { sub: "u".to_string(), exp: far_future_exp() };
+        let claims = TestClaims {
+            sub: "u".to_string(),
+            exp: far_future_exp(),
+        };
         let mut token = mgr.encode(&claims).expect("encode ok");
         // flip last byte of signature
         let last = token.pop().unwrap();
@@ -112,7 +121,10 @@ mod tests {
     fn test_clone_shares_key() {
         let mgr1 = JwtManager::new(b"shared-key");
         let mgr2 = mgr1.clone();
-        let claims = TestClaims { sub: "u".to_string(), exp: far_future_exp() };
+        let claims = TestClaims {
+            sub: "u".to_string(),
+            exp: far_future_exp(),
+        };
         let token = mgr1.encode(&claims).unwrap();
         // mgr2 must decode tokens signed with mgr1 (shares Arc<JwtConfig>)
         let decoded: TestClaims = mgr2.decode(&token).expect("clone should decode");

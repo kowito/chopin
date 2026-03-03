@@ -1,5 +1,5 @@
 use chopin_core::{Context, Response, Router, Server};
-use chopin_orm::Model;
+use chopin_orm::{Model, Validate};
 use chopin_pg::{PgConfig, PgPool};
 use kowito_json::KJson;
 use std::sync::Arc;
@@ -11,6 +11,8 @@ struct Todo {
     title: String,
     completed: bool,
 }
+
+impl Validate for Todo {}
 
 // Request Payload for Creating a Todo
 #[derive(KJson, Default)]

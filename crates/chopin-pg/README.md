@@ -8,35 +8,195 @@
 
 > **High-fidelity engineering for the modern virtuoso.**
 
-`chopin-pg` provides the high‑performance PostgreSQL driver used by the Chopin suite. It offers zero‑allocation query handling and per‑core connection pools.
+`chopin-pg` is a high‑performance, zero‑dependency PostgreSQL driver for the Chopin suite. Built for thread‑per‑core architectures with synchronous non‑blocking I/O, per‑worker connection pools, and zero external runtime dependencies (only `libc`).
 
-## 🛠️ Usage Example
+## Features
+
+- **Zero external dependencies** — all crypto (SCRAM-SHA-256), codec, and protocol are hand-written
+- **Thread-per-core** — each worker owns its connections and pool; no `Arc`, no `Mutex`
+- **Synchronous non-blocking I/O** — sockets in NB mode with poll-based application-level timeouts
+- **Extended Query Protocol** — prepared statements with binary parameter encoding
+- **Statement cache** — FNV-1a hash-based with LRU eviction and configurable capacity
+- **Connection pool** — `PgPool` with checkout timeout, idle/max lifetime, test-on-checkout, auto-reconnect
+- **COPY protocol** — bulk `COPY IN`/`COPY OUT` with streaming `CopyWriter`/`CopyReader`
+- **LISTEN/NOTIFY** — async notification support with buffered delivery
+- **Transactions** — `begin`/`commit`/`rollback`, savepoints, nested transactions, closure-based API
+- **22 PostgreSQL types** — Bool, Int2/4/8, Float4/8, Text, Bytes, Json, Jsonb, Uuid, Date, Time, Timestamp, Timestamptz, Interval, Inet, Numeric, MacAddr, Point, Range, Array
+- **Binary wire format** — per-parameter format codes with binary result decoding
+- **SCRAM-SHA-256 auth** — zero-dep implementation; cleartext password also supported
+- **Unix domain sockets** — `PgConfig.socket_dir` or `?host=` URL parameter
+- **Error classification** — `ErrorClass::Transient`/`Permanent`/`Client`/`Pool` with SQLSTATE mapping
+- **Retry helper** — `retry(max_retries, || { ... })` with transient error detection
+- **Production hardening** — broken connection flag, TCP_NODELAY, zero-copy writes, `Rc<ColumnDesc>` sharing
+
+## 🛠️ Quick Start
 
 ```rust
-use chopin_pg::{PgConfig, PgConnection, PgValue};
+use chopin_pg::{PgConfig, PgConnection, PgResult};
 
 fn main() -> PgResult<()> {
     let config = PgConfig::from_url("postgres://user:pass@localhost:5432/db")?;
     let mut conn = PgConnection::connect(&config)?;
 
-    // Execute simple query
+    // Simple query (no parameters)
     let rows = conn.query_simple("SELECT current_database()")?;
-    println!("Database: {}", rows[0].get(0)?);
+    println!("Database: {:?}", rows[0].get(0)?);
 
-    // Prepared statement (Extended Query Protocol)
+    // Prepared statement with binary parameters
     let rows = conn.query(
-        "SELECT username FROM users WHERE id = $1",
-        &[&42i32]
+        "SELECT id, name FROM users WHERE id = $1",
+        &[&42i32],
     )?;
-
-    if let Some(row) = rows.first() {
-        let name: String = row.get(0)?;
-        println!("User: {}", name);
+    for row in &rows {
+        let id: i32 = row.get_typed(0)?;
+        let name: String = row.get_typed(1)?;
+        println!("User {}: {}", id, name);
     }
+
+    // Execute (returns affected row count)
+    let affected = conn.execute(
+        "UPDATE users SET active = $1 WHERE id = $2",
+        &[&true, &42i32],
+    )?;
+    println!("Updated {} rows", affected);
 
     Ok(())
 }
 ```
+
+## 🔗 Connection Pool
+
+```rust
+use chopin_pg::{PgConfig, PgPool, PgPoolConfig};
+use std::time::Duration;
+
+let config = PgConfig::from_url("postgres://user:pass@localhost:5432/db")?;
+
+// Simple pool
+let mut pool = PgPool::connect(config.clone(), 10)?;
+
+// Advanced pool with configuration
+let pool_config = PgPoolConfig::new()
+    .max_size(25)
+    .min_size(5)
+    .checkout_timeout(Duration::from_secs(5))
+    .idle_timeout(Duration::from_secs(300))
+    .max_lifetime(Duration::from_secs(3600))
+    .test_on_checkout(true);
+
+let mut pool = PgPool::connect_with_config(config, pool_config)?;
+
+// Get a connection (auto-returned on drop)
+let mut conn = pool.get()?;
+conn.query_simple("SELECT 1")?;
+
+// Monitor pool health
+println!("Active: {}, Idle: {}, Total: {}",
+    pool.active_connections(), pool.idle_connections(), pool.total_connections());
+let stats = pool.stats();
+println!("Checkouts: {}, Created: {}", stats.total_checkouts, stats.total_connections_created);
+```
+
+## 📋 COPY Protocol (Bulk Operations)
+
+```rust
+// Bulk COPY IN
+let mut writer = conn.copy_in("COPY users (name, email) FROM STDIN WITH (FORMAT csv)")?;
+writer.write_row(&["Alice", "alice@example.com"])?;
+writer.write_row(&["Bob", "bob@example.com"])?;
+let rows_copied = writer.finish()?;
+println!("Copied {} rows", rows_copied);
+
+// COPY OUT
+let mut reader = conn.copy_out("COPY users TO STDOUT WITH (FORMAT csv)")?;
+let all_data = reader.read_all()?;
+println!("Export: {}", String::from_utf8_lossy(&all_data));
+```
+
+## 🔔 LISTEN/NOTIFY
+
+```rust
+conn.listen("events")?;
+conn.notify("events", "hello world")?;
+
+// Poll for notifications
+if let Some(notif) = conn.poll_notification()? {
+    println!("Channel: {}, Payload: {}", notif.channel, notif.payload);
+}
+
+// Drain all buffered notifications
+for notif in conn.drain_notifications() {
+    println!("{}: {}", notif.channel, notif.payload);
+}
+
+conn.unlisten("events")?;
+```
+
+## 🔄 Transactions
+
+```rust
+// Closure-based (auto-commit on Ok, auto-rollback on Err)
+conn.transaction(|tx| {
+    tx.execute("INSERT INTO users (name) VALUES ($1)", &[&"Alice"])?;
+    tx.execute("INSERT INTO users (name) VALUES ($1)", &[&"Bob"])?;
+    Ok(())
+})?;
+
+// Manual control
+conn.begin()?;
+conn.execute("INSERT INTO users (name) VALUES ($1)", &[&"Charlie"])?;
+conn.commit()?;
+
+// Savepoints
+conn.begin()?;
+conn.savepoint("sp1")?;
+conn.execute("INSERT INTO users (name) VALUES ($1)", &[&"Dave"])?;
+conn.rollback_to("sp1")?;  // undo Dave
+conn.commit()?;
+
+// Nested transactions
+conn.transaction(|tx| {
+    tx.execute("INSERT INTO users (name) VALUES ($1)", &[&"Eve"])?;
+    tx.transaction(|nested_tx| {
+        nested_tx.execute("INSERT INTO users (name) VALUES ($1)", &[&"Frank"])?;
+        Ok(())
+    })?;
+    Ok(())
+})?;
+```
+
+## 📊 Supported PostgreSQL Types
+
+| PgValue Variant | PostgreSQL Type | Rust ToSql/FromSql |
+|---|---|---|
+| `Bool` | BOOLEAN | `bool` |
+| `Int2` | SMALLINT | `i16` |
+| `Int4` | INTEGER | `i32` |
+| `Int8` | BIGINT | `i64` |
+| `Float4` | REAL | `f32` |
+| `Float8` | DOUBLE PRECISION | `f64` |
+| `Text` | TEXT, VARCHAR | `String`, `&str` |
+| `Bytes` | BYTEA | `Vec<u8>`, `&[u8]` |
+| `Json` | JSON | `String` |
+| `Jsonb` | JSONB | `Vec<u8>` |
+| `Uuid` | UUID | `[u8; 16]` |
+| `Date` | DATE | i32 (PG epoch days) |
+| `Time` | TIME | i64 (microseconds) |
+| `Timestamp` | TIMESTAMP | i64 (microseconds) |
+| `Timestamptz` | TIMESTAMPTZ | i64 (microseconds) |
+| `Interval` | INTERVAL | `{months, days, microseconds}` |
+| `Inet` | INET, CIDR | `IpAddr`, `Ipv4Addr`, `Ipv6Addr` |
+| `Numeric` | NUMERIC | `String` (lossless precision) |
+| `MacAddr` | MACADDR | `[u8; 6]` |
+| `Point` | POINT | `(f64, f64)` |
+| `Range` | INT4RANGE, INT8RANGE, etc. | `String` |
+| `Array` | ARRAY types | `Vec<T>` for scalar `T` |
+
+## 🔐 Authentication
+
+- **SCRAM-SHA-256** — fully implemented with zero external dependencies
+- **Cleartext password** — supported
+- **MD5** — recognized but returns an error (not implemented)
 
 ## 🔌 Connection Pool Sizing for High Concurrency
 

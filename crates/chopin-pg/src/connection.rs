@@ -160,10 +160,10 @@ impl PgConfig {
         let mut socket_dir: Option<String> = None;
         if !query_part.is_empty() {
             for param in query_part.split('&') {
-                if let Some(value) = param.strip_prefix("host=") {
-                    if value.starts_with('/') {
-                        socket_dir = Some(value.to_string());
-                    }
+                if let Some(value) = param.strip_prefix("host=")
+                    && value.starts_with('/')
+                {
+                    socket_dir = Some(value.to_string());
                 }
             }
         }
@@ -211,15 +211,13 @@ fn percent_decode(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (
-                hex_digit(bytes[i + 1]),
-                hex_digit(bytes[i + 2]),
-            ) {
-                result.push((hi << 4 | lo) as char);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2]))
+        {
+            result.push((hi << 4 | lo) as char);
+            i += 3;
+            continue;
         }
         result.push(bytes[i] as char);
         i += 1;
@@ -247,6 +245,9 @@ pub struct Notification {
     pub payload: String,
 }
 
+/// Type alias for a notice handler function pointer.
+type NoticeHandler = Box<dyn Fn(&str, &str, &str) + Send + Sync>;
+
 /// A synchronous PostgreSQL connection with poll-based non-blocking I/O.
 ///
 /// The socket is set to non-blocking mode at connect time.  I/O methods
@@ -273,7 +274,7 @@ pub struct PgConnection {
     /// Application-level I/O timeout for poll operations.
     io_timeout: Duration,
     /// Optional callback invoked when the server sends a NoticeResponse.
-    notice_handler: Option<Box<dyn Fn(&str, &str, &str) + Send + Sync>>,
+    notice_handler: Option<NoticeHandler>,
     /// Flag set on fatal I/O errors. A broken connection must not be
     /// returned to the pool; it will be discarded on drop.
     broken: bool,
@@ -393,7 +394,9 @@ impl PgConnection {
 
     /// Set non-blocking mode on the socket.
     pub fn set_nonblocking(&mut self, nonblocking: bool) -> PgResult<()> {
-        self.stream.set_nonblocking(nonblocking).map_err(PgError::Io)?;
+        self.stream
+            .set_nonblocking(nonblocking)
+            .map_err(PgError::Io)?;
         self.nonblocking = nonblocking;
         Ok(())
     }
@@ -557,11 +560,7 @@ impl PgConnection {
 
     /// Execute a parameterized query using the Extended Query Protocol.
     /// Uses implicit statement caching for performance.
-    pub fn query(
-        &mut self,
-        sql: &str,
-        params: &[&dyn ToSql],
-    ) -> PgResult<Vec<Row>> {
+    pub fn query(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Vec<Row>> {
         let stmt = self.stmt_cache.get_or_create(sql);
 
         // Conservative upper bound for write buffer
@@ -721,6 +720,7 @@ impl PgConnection {
     /// Start a COPY FROM STDIN operation.
     pub fn copy_in(&mut self, sql: &str) -> PgResult<CopyWriter<'_>> {
         let n = codec::encode_query(&mut self.write_buf, sql);
+        #[allow(clippy::unnecessary_to_owned)]
         self.write_all(&self.write_buf[..n].to_vec())?;
 
         // Read until CopyInResponse
@@ -751,6 +751,7 @@ impl PgConnection {
     /// Returns a CopyReader that yields data chunks.
     pub fn copy_out(&mut self, sql: &str) -> PgResult<CopyReader<'_>> {
         let n = codec::encode_query(&mut self.write_buf, sql);
+        #[allow(clippy::unnecessary_to_owned)]
         self.write_all(&self.write_buf[..n].to_vec())?;
 
         // Read until CopyOutResponse
@@ -837,9 +838,7 @@ impl PgConnection {
             Ok(n) => {
                 self.read_pos += n;
                 // Process any complete messages
-                while let Some(msg_len) =
-                    codec::message_complete(&self.read_buf[..self.read_pos])
-                {
+                while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
                     let header = codec::decode_header(&self.read_buf).ok_or_else(|| {
                         PgError::Protocol("Incomplete message header".to_string())
                     })?;
@@ -1121,12 +1120,12 @@ impl PgConnection {
     /// Ensure there is room in read_buf for at least one read call.
     fn ensure_read_space(&mut self) {
         if self.read_pos == self.read_buf.len() {
-            if self.read_pos >= 5 {
-                if let Some(header) = codec::decode_header(&self.read_buf) {
-                    let total = 1 + header.length as usize;
-                    self.ensure_read_capacity(total - self.read_pos);
-                    return;
-                }
+            if self.read_pos >= 5
+                && let Some(header) = codec::decode_header(&self.read_buf)
+            {
+                let total = 1 + header.length as usize;
+                self.ensure_read_capacity(total - self.read_pos);
+                return;
             }
             self.ensure_read_capacity(8192);
         }
@@ -1241,15 +1240,15 @@ impl PgConnection {
                         for col in &mut columns {
                             col.format_code = FormatCode::Binary;
                         }
-                        if is_new {
-                            if let Some(evicted) = self.stmt_cache.insert(
+                        if is_new
+                            && let Some(evicted) = self.stmt_cache.insert(
                                 sql,
                                 stmt_name.to_string(),
                                 0,
                                 Some(columns.clone()),
-                            ) {
-                                self.close_statement_on_server(&evicted.name);
-                            }
+                            )
+                        {
+                            self.close_statement_on_server(&evicted.name);
                         }
                         columns_rc = Rc::new(columns);
                     }
@@ -1326,10 +1325,10 @@ impl PgConnection {
     fn parse_error_with_context(&self, body: &[u8], query: &str) -> PgError {
         let fields = codec::parse_error_fields(body);
         let mut err = PgError::from_fields(&fields);
-        if let PgError::Server { ref mut internal_query, .. } = err {
-            if internal_query.is_none() {
-                *internal_query = Some(query.to_string());
-            }
+        if let PgError::Server(ref mut server_err) = err
+            && server_err.internal_query.is_none()
+        {
+            server_err.internal_query = Some(query.to_string());
         }
         err
     }
@@ -1357,16 +1356,12 @@ impl PgConnection {
     /// This is fire-and-forget — we don't wait for CloseComplete.
     fn close_statement_on_server(&mut self, name: &str) {
         self.ensure_write_capacity(7 + name.len());
-        let n = codec::encode_close(
-            &mut self.write_buf,
-            CloseTarget::Statement,
-            name,
-        );
+        let n = codec::encode_close(&mut self.write_buf, CloseTarget::Statement, name);
         let _ = self.flush_write_buf(n);
     }
 
-    /// Parse a CommandComplete tag to extract affected row count.
-    /// Tags look like: "INSERT 0 5", "UPDATE 3", "DELETE 1", "SELECT 10", etc.
+    // Parse a CommandComplete tag to extract affected row count.
+    // Tags look like: "INSERT 0 5", "UPDATE 3", "DELETE 1", "SELECT 10", etc.
     // parse_command_complete is now a free function: extract_command_complete()
 
     /// Parse a NotificationResponse message body.
@@ -1756,15 +1751,14 @@ mod tests {
 
     #[test]
     fn test_pgconfig_with_socket_dir_sets_field() {
-        let cfg = PgConfig::new("localhost", 5432, "u", "p", "d")
-            .with_socket_dir("/var/run/postgresql");
+        let cfg =
+            PgConfig::new("localhost", 5432, "u", "p", "d").with_socket_dir("/var/run/postgresql");
         assert_eq!(cfg.socket_dir.as_deref(), Some("/var/run/postgresql"));
     }
 
     #[test]
     fn test_pgconfig_clone_preserves_all_fields() {
-        let cfg = PgConfig::new("h", 1234, "u", "p", "db")
-            .with_socket_dir("/tmp");
+        let cfg = PgConfig::new("h", 1234, "u", "p", "db").with_socket_dir("/tmp");
         let cloned = cfg.clone();
         assert_eq!(cloned.host, "h");
         assert_eq!(cloned.port, 1234);
@@ -1913,6 +1907,10 @@ mod tests {
             payload: "p".to_string(),
         };
         let s = format!("{:?}", n);
-        assert!(s.contains("process_id"), "Debug must include process_id: {}", s);
+        assert!(
+            s.contains("process_id"),
+            "Debug must include process_id: {}",
+            s
+        );
     }
 }

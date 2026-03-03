@@ -439,7 +439,11 @@ mod tests {
         // Computed deterministically; just verify it's stable across calls
         let hash2 = sha256(&input);
         assert_eq!(hash, hash2, "SHA-256 must be deterministic");
-        assert_ne!(hash, sha256(&[0x61u8; 56]), "55-byte and 56-byte hashes must differ");
+        assert_ne!(
+            hash,
+            sha256(&[0x61u8; 56]),
+            "55-byte and 56-byte hashes must differ"
+        );
     }
 
     #[test]
@@ -462,7 +466,12 @@ mod tests {
         for len in [0, 1, 31, 32, 55, 56, 63, 64, 65, 127, 128, 200] {
             let input = vec![0xAAu8; len];
             let hash = sha256(&input);
-            assert_eq!(hash.len(), 32, "SHA-256 output must always be 32 bytes (len={})", len);
+            assert_eq!(
+                hash.len(),
+                32,
+                "SHA-256 output must always be 32 bytes (len={})",
+                len
+            );
         }
     }
 
@@ -518,7 +527,11 @@ mod tests {
     fn test_base64_one_byte_padding() {
         // 1 byte → 2 significant chars + "=="
         let encoded = base64_encode(&[0b00001111]);
-        assert!(encoded.ends_with("=="), "1-byte encoding must end with ==: {}", encoded);
+        assert!(
+            encoded.ends_with("=="),
+            "1-byte encoding must end with ==: {}",
+            encoded
+        );
         let decoded = base64_decode(&encoded).unwrap();
         assert_eq!(decoded, &[0b00001111]);
     }
@@ -527,7 +540,11 @@ mod tests {
     fn test_base64_two_bytes_padding() {
         // 2 bytes → 3 significant chars + "="
         let encoded = base64_encode(&[0x00, 0xFF]);
-        assert!(encoded.ends_with('='), "2-byte encoding must end with =: {}", encoded);
+        assert!(
+            encoded.ends_with('='),
+            "2-byte encoding must end with =: {}",
+            encoded
+        );
         let decoded = base64_decode(&encoded).unwrap();
         assert_eq!(decoded, &[0x00, 0xFF]);
     }
@@ -580,7 +597,11 @@ mod tests {
         let msg = client.client_first_message();
         let s = std::str::from_utf8(&msg).expect("client_first must be UTF-8");
         // Must start with "n,," (GS2 header: no channel binding, no authzid)
-        assert!(s.starts_with("n,,"), "client-first must start with 'n,,': {}", s);
+        assert!(
+            s.starts_with("n,,"),
+            "client-first must start with 'n,,': {}",
+            s
+        );
         // Must contain the username
         assert!(s.contains("n=testuser"), "must contain username: {}", s);
         // Must contain a nonce
@@ -593,7 +614,10 @@ mod tests {
         let msg = client.client_first_message();
         let s = std::str::from_utf8(&msg).unwrap();
         // Extract nonce value
-        let nonce_part = s.split(',').find(|p| p.starts_with("r=")).expect("must have r=");
+        let nonce_part = s
+            .split(',')
+            .find(|p| p.starts_with("r="))
+            .expect("must have r=");
         let nonce = &nonce_part["r=".len()..];
         assert!(!nonce.is_empty(), "nonce must not be empty");
     }
@@ -614,17 +638,18 @@ mod tests {
         let first_msg = client.client_first_message();
         let first_str = std::str::from_utf8(&first_msg).unwrap();
         // Extract client nonce from the first message
-        let client_nonce = first_str
-            .split(',')
-            .find(|p| p.starts_with("r="))
-            .unwrap()["r=".len()..]
-            .to_string();
+        let client_nonce =
+            first_str.split(',').find(|p| p.starts_with("r=")).unwrap()["r=".len()..].to_string();
 
         // Build a valid-looking server-first message: server_nonce starts with client_nonce
         let server_nonce = format!("{}ServerExtra", client_nonce);
         let server_first = format!("r={},s=c2FsdA==,i=4096", server_nonce);
         let result = client.process_server_first(server_first.as_bytes());
-        assert!(result.is_ok(), "Valid server-first must succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Valid server-first must succeed: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -632,21 +657,27 @@ mod tests {
         let mut client = ScramClient::new("user", "pass");
         let first_msg = client.client_first_message();
         let first_str = std::str::from_utf8(&first_msg).unwrap();
-        let client_nonce = first_str
-            .split(',')
-            .find(|p| p.starts_with("r="))
-            .unwrap()["r=".len()..]
-            .to_string();
+        let client_nonce =
+            first_str.split(',').find(|p| p.starts_with("r=")).unwrap()["r=".len()..].to_string();
 
         let server_nonce = format!("{}S", client_nonce);
         let server_first = format!("r={},s=c2FsdHlzYWx0,i=4096", server_nonce);
-        let final_msg = client.process_server_first(server_first.as_bytes()).unwrap();
+        let final_msg = client
+            .process_server_first(server_first.as_bytes())
+            .unwrap();
         let final_str = std::str::from_utf8(&final_msg).unwrap();
 
         // client-final starts with "c=biws" (base64("n,,") = "biws", channel binding)
-        assert!(final_str.starts_with("c=biws"), "client-final must start with c=biws: {}", final_str);
+        assert!(
+            final_str.starts_with("c=biws"),
+            "client-final must start with c=biws: {}",
+            final_str
+        );
         // Must contain the combined server nonce
-        assert!(final_str.contains(&format!("r={}", server_nonce)), "must echo server nonce");
+        assert!(
+            final_str.contains(&format!("r={}", server_nonce)),
+            "must echo server nonce"
+        );
         // Must contain the proof
         assert!(final_str.contains(",p="), "must contain proof field p=");
     }
@@ -656,15 +687,14 @@ mod tests {
         let mut client = ScramClient::new("user", "pass");
         let first_msg = client.client_first_message();
         let first_str = std::str::from_utf8(&first_msg).unwrap();
-        let client_nonce = first_str
-            .split(',')
-            .find(|p| p.starts_with("r="))
-            .unwrap()["r=".len()..]
-            .to_string();
+        let client_nonce =
+            first_str.split(',').find(|p| p.starts_with("r=")).unwrap()["r=".len()..].to_string();
 
         let server_nonce = format!("{}S", client_nonce);
         let server_first = format!("r={},s=c2FsdHlzYWx0,i=4096", server_nonce);
-        let _ = client.process_server_first(server_first.as_bytes()).unwrap();
+        let _ = client
+            .process_server_first(server_first.as_bytes())
+            .unwrap();
 
         // Wrong signature
         let bad_final = b"v=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
@@ -677,15 +707,14 @@ mod tests {
         let mut client = ScramClient::new("user", "pass");
         let first_msg = client.client_first_message();
         let first_str = std::str::from_utf8(&first_msg).unwrap();
-        let client_nonce = first_str
-            .split(',')
-            .find(|p| p.starts_with("r="))
-            .unwrap()["r=".len()..]
-            .to_string();
+        let client_nonce =
+            first_str.split(',').find(|p| p.starts_with("r=")).unwrap()["r=".len()..].to_string();
 
         let server_nonce = format!("{}S", client_nonce);
         let server_first = format!("r={},s=c2FsdA==,i=4096", server_nonce);
-        let _ = client.process_server_first(server_first.as_bytes()).unwrap();
+        let _ = client
+            .process_server_first(server_first.as_bytes())
+            .unwrap();
 
         // Missing v= prefix
         let result = client.verify_server_final(b"NOPREFIXHERE");

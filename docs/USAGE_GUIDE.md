@@ -381,7 +381,7 @@ router.get("/users", list_users);
 
 ## ORM (`chopin-orm`)
 
-`chopin-orm` provides an ergonomic ORM layer on top of the `chopin-pg` synchronous PostgreSQL driver.
+`chopin-orm` provides a type-safe ORM layer on top of the `chopin-pg` synchronous PostgreSQL driver, with derive-macro-driven models, a fluent query DSL, relationships, and auto-migration.
 
 **Cargo.toml:**
 ```toml
@@ -392,35 +392,31 @@ chopin-pg  = { path = "crates/chopin-pg" }
 
 ### Defining a model
 
-Derive `Model` on a struct. The field `id` is used as the primary key by default. Override with `#[model(primary_key)]`.
+Derive `Model` on a struct and implement `Validate`. The first `i32`/`i64` field marked `#[model(primary_key)]` is auto-generated (serial). Override the table name with `#[model(table_name = "...")]`.
 
 ```rust
-use chopin_orm::Model;
+use chopin_orm::{Model, Validate, builder::ColumnTrait};
 
-#[derive(Model, Default)]
+#[derive(Model, Debug, Clone)]
+#[model(table_name = "users")]
 struct User {
-    id: i32,        // auto-detected primary key
+    #[model(primary_key)]
+    id: i32,
     name: String,
     email: String,
     active: bool,
 }
 
-// Custom table name and explicit primary key:
-#[derive(Model, Default)]
-#[model(table_name = "blog_posts")]
-struct Post {
-    #[model(primary_key)]
-    post_id: i32,
-    title: String,
-    body: String,
-}
+impl Validate for User {}  // default: always passes
 ```
 
-The macro generates:
-- `Model::table_name()` — defaults to `struct_name.to_lowercase() + "s"`
-- `Model::primary_key_column()`
-- `Model::columns()`
-- `FromRow` implementation for mapping query results to the struct
+The `#[derive(Model)]` macro generates:
+- `impl Model for User` — full CRUD (`insert`, `update`, `delete`, `upsert`, `update_columns`)
+- `impl FromRow for User` — automatic row-to-struct mapping
+- `enum UserColumn` — type-safe column identifiers with `impl ColumnTrait<User>`
+- `User::find()` — returns a `QueryBuilder<User>` for fluent queries
+- `User::sync_schema()` — automatic table creation and column migration
+- `User::create_table_stmt()` — raw DDL generation
 
 ### Connecting to PostgreSQL
 
@@ -428,27 +424,24 @@ The macro generates:
 use chopin_pg::{PgConfig, PgPool};
 
 let config = PgConfig::new("localhost", 5432, "myuser", "mypassword", "mydb");
-let mut pool = PgPool::new(config, 10); // 10 connections
+let mut pool = PgPool::connect(config, 10)?; // 10 connections, eager pre-connect
 ```
 
 ### CRUD operations
 
-All operations accept any `Executor` — a `PgPool` or a `Transaction`.
+All operations accept any `Executor` — a `PgPool`, `Transaction`, or `MockExecutor`.
 
 #### Insert
 
 ```rust
-use chopin_orm::Model;
-
 let mut user = User {
-    id: 0,
+    id: 0,  // auto-populated from RETURNING
     name: "Alice".into(),
     email: "alice@example.com".into(),
     active: true,
 };
 
 user.insert(&mut pool)?;
-// user.id is now populated with the auto-generated value
 println!("New user id: {}", user.id);
 ```
 
@@ -457,6 +450,13 @@ println!("New user id: {}", user.id);
 ```rust
 user.name = "Alice Smith".into();
 user.update(&mut pool)?;
+```
+
+#### Partial Update (specific columns only)
+
+```rust
+user.name = "Alice Updated".into();
+user.update_columns(&mut pool, &["name"])?;
 ```
 
 #### Delete
@@ -471,33 +471,40 @@ user.delete(&mut pool)?;
 user.upsert(&mut pool)?;
 ```
 
-### Querying with `QueryBuilder`
+### Type-Safe Query DSL
+
+The preferred way to query is with the generated `UserColumn` enum and `ColumnTrait`:
 
 ```rust
-use chopin_orm::QueryBuilder;
-use chopin_pg::types::PgValue;
+use chopin_orm::builder::ColumnTrait;
+use UserColumn::*;
 
-// Fetch all users
-let users: Vec<User> = QueryBuilder::<User>::new()
-    .all(&mut pool)?;
-
-// Fetch with filter
-let active_users: Vec<User> = QueryBuilder::<User>::new()
-    .filter("active = $1", vec![PgValue::Bool(true)])
+// Fetch with type-safe filters
+let active_users = User::find()
+    .filter(active.eq(true))
+    .filter(name.like("Ali%"))
     .order_by("name ASC")
     .limit(20)
-    .offset(0)
     .all(&mut pool)?;
 
 // Fetch a single record
-let user: Option<User> = QueryBuilder::<User>::new()
-    .filter("email = $1", vec![PgValue::Text("alice@example.com".into())])
+let user = User::find()
+    .filter(email.eq("alice@example.com"))
     .one(&mut pool)?;
 
 // Count rows
-let count: i64 = QueryBuilder::<User>::new()
-    .filter("active = $1", vec![PgValue::Bool(true)])
+let count = User::find()
+    .filter(active.eq(true))
     .count(&mut pool)?;
+
+// Pagination
+let page = User::find()
+    .filter(active.eq(true))
+    .order_by("name ASC")
+    .paginate(20)
+    .page(1)
+    .fetch(&mut pool)?;
+println!("Page {}/{}, {} items", page.page, page.total_pages, page.items.len());
 ```
 
 ### Raw queries
@@ -506,19 +513,19 @@ Use `Executor::execute` and `Executor::query` for SQL that doesn't map to a mode
 
 ```rust
 use chopin_orm::Executor;
-use chopin_pg::types::PgValue;
 
 // Execute (INSERT / UPDATE / DELETE)
 pool.execute(
     "UPDATE users SET active = $1 WHERE id = $2",
-    &[&PgValue::Bool(false), &PgValue::Int4(42)],
+    &[&false, &42i32],
 )?;
 
 // Query rows
-let rows = pool.query("SELECT id, name FROM users WHERE active = $1", &[&PgValue::Bool(true)])?;
-for row in rows {
-    let id: i32 = row.get(0)?.try_into_i32()?;
-    let name: String = row.get(1)?.try_into_text()?;
+let rows = pool.query("SELECT id, name FROM users WHERE active = $1", &[&true])?;
+for row in &rows {
+    let id: i32 = row.get_typed(0)?;
+    let name: String = row.get_typed(1)?;
+    println!("{}: {}", id, name);
 }
 ```
 
@@ -527,30 +534,61 @@ for row in rows {
 ```rust
 use chopin_orm::Transaction;
 
-let mut conn = pool.get()?;  // borrow a connection from the pool
-let tx = Transaction::begin(&mut conn)?;
+let mut conn = pool.get()?;
+let mut tx = Transaction::begin(&mut conn)?;
 
 let mut user = User { id: 0, name: "Bob".into(), email: "bob@example.com".into(), active: true };
 user.insert(&mut tx)?;
 
-// conditional rollback
-if some_condition_fails {
-    tx.rollback()?;
-} else {
-    tx.commit()?;
+tx.commit()?;  // or tx.rollback()?;
+```
+
+### Relationships
+
+```rust
+#[derive(Model, Debug, Clone)]
+#[model(table_name = "users", has_many(Post, fk = "user_id"))]
+struct User {
+    #[model(primary_key)]
+    id: i32,
+    name: String,
 }
+impl Validate for User {}
+
+#[derive(Model, Debug, Clone)]
+#[model(table_name = "posts")]
+struct Post {
+    #[model(primary_key)]
+    id: i32,
+    title: String,
+    #[model(belongs_to(User))]
+    user_id: i32,
+}
+impl Validate for Post {}
+
+// Lazy loading
+let posts = user.fetch_posts(&mut pool)?;
+let author = post.fetch_user_id(&mut pool)?;
+
+// JOIN queries
+let users = User::find().join_child::<Post>().all(&mut pool)?;
 ```
 
 ### Supported Rust → PostgreSQL type mappings
 
 | Rust type | PostgreSQL wire type |
 |---|---|
-| `i32` | `INT4`, `INT2` |
-| `i64` | `INT8`, `INT4`, `INT2` |
-| `f64` | `FLOAT8`, `FLOAT4` |
-| `bool` | `BOOL` |
+| `i16` | `SMALLINT` |
+| `i32` | `INTEGER` |
+| `i64` | `BIGINT` |
+| `f32` | `REAL` |
+| `f64` | `DOUBLE PRECISION` |
+| `bool` | `BOOLEAN` |
 | `String` | `TEXT`, `VARCHAR` |
+| `Vec<u8>` | `BYTEA` |
 | `Option<T>` | nullable version of the inner type |
+| `Vec<T>` | `ARRAY` (scalar types) |
+| `IpAddr` | `INET` |
 
 ---
 

@@ -161,7 +161,11 @@ mod tests {
         let mut v = Vec::new();
         v.extend_from_slice(b"--testboundary\r\n");
         v.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", field_name).as_bytes(),
+            format!(
+                "Content-Disposition: form-data; name=\"{}\"\r\n\r\n",
+                field_name
+            )
+            .as_bytes(),
         );
         v.extend_from_slice(body);
         v.extend_from_slice(b"\r\n--testboundary--\r\n");
@@ -250,7 +254,9 @@ mod tests {
     fn test_content_type_parsed() {
         let mut v = Vec::new();
         v.extend_from_slice(b"--testboundary\r\n");
-        v.extend_from_slice(b"Content-Disposition: form-data; name=\"file\"; filename=\"data.json\"\r\n");
+        v.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"data.json\"\r\n",
+        );
         v.extend_from_slice(b"Content-Type: application/json\r\n");
         v.extend_from_slice(b"\r\n");
         v.extend_from_slice(b"{\"key\":\"val\"}");
@@ -273,7 +279,10 @@ mod tests {
     #[test]
     fn test_no_boundary_in_body_yields_none() {
         // Body has content but not the right boundary
-        let mut mp = Multipart::new(b"--wrongboundary\r\nsome data\r\n--wrongboundary--", boundary());
+        let mut mp = Multipart::new(
+            b"--wrongboundary\r\nsome data\r\n--wrongboundary--",
+            boundary(),
+        );
         assert!(mp.next().is_none());
     }
 
@@ -288,6 +297,9 @@ mod tests {
         v.extend_from_slice(b"truncated body with no closing boundary");
         let mut mp = Multipart::new(&v, boundary());
         let result = mp.next().unwrap();
-        assert!(result.is_err(), "truncated body should return Err(Incomplete)");
+        assert!(
+            result.is_err(),
+            "truncated body should return Err(Incomplete)"
+        );
     }
 }

@@ -14,9 +14,7 @@
 //! runs, then drops the database automatically via RAII. Tests are isolated
 //! and can run in parallel without conflict.
 
-use chopin_pg::{
-    PgConfig, PgConnection, PgError, PgPool, PgPoolConfig, PgResult,
-};
+use chopin_pg::{PgConfig, PgConnection, PgError, PgPool, PgPoolConfig, PgResult};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -73,8 +71,7 @@ impl Drop for TestDb {
         // Re-connect to admin DB to drop the test DB.
         // Ignore errors — best-effort cleanup.
         if let Ok(mut admin) = PgConnection::connect(&admin_cfg()) {
-            let _ = admin
-                .execute_batch(&format!("DROP DATABASE IF EXISTS \"{}\"", self.name));
+            let _ = admin.execute_batch(&format!("DROP DATABASE IF EXISTS \"{}\"", self.name));
         }
     }
 }
@@ -127,12 +124,12 @@ fn test_select_float_types() {
     let Some(mut db) = TestDb::open() else { return };
     let rows = db
         .conn
-        .query("SELECT $1::float4, $2::float8", &[&1.5f32, &3.14f64])
+        .query("SELECT $1::float4, $2::float8", &[&1.5f32, &2.5f64])
         .unwrap();
     let f4: f32 = rows[0].get_typed(0).unwrap();
     let f8: f64 = rows[0].get_typed(1).unwrap();
     assert!((f4 - 1.5).abs() < 1e-6);
-    assert!((f8 - 3.14).abs() < 1e-12);
+    assert!((f8 - 2.5).abs() < 1e-12);
 }
 
 #[test]
@@ -155,7 +152,9 @@ fn test_select_text_and_bool() {
 
 #[test]
 fn test_insert_and_select_round_trip() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     db.conn
         .execute(
@@ -178,7 +177,9 @@ fn test_insert_and_select_round_trip() {
 
 #[test]
 fn test_affected_rows_insert_update_delete() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     let inserted = db
         .conn
@@ -204,10 +205,15 @@ fn test_affected_rows_insert_update_delete() {
 
 #[test]
 fn test_query_one_returns_row() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     db.conn
-        .execute("INSERT INTO items (name, score) VALUES ($1, $2)", &[&"solo", &7i32])
+        .execute(
+            "INSERT INTO items (name, score) VALUES ($1, $2)",
+            &[&"solo", &7i32],
+        )
         .unwrap();
 
     let row = db
@@ -221,7 +227,9 @@ fn test_query_one_returns_row() {
 
 #[test]
 fn test_query_one_missing_row_returns_error() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
     let result = db
         .conn
         .query_one("SELECT id FROM items WHERE id = 9999", &[]);
@@ -230,7 +238,9 @@ fn test_query_one_missing_row_returns_error() {
 
 #[test]
 fn test_execute_batch_multiple_statements() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     db.conn
         .execute_batch(
@@ -249,36 +259,34 @@ fn test_execute_batch_multiple_statements() {
 fn test_null_parameter_and_result() {
     let Some(mut db) = TestDb::open() else { return };
     let null: Option<i32> = None;
-    let rows = db
-        .conn
-        .query("SELECT $1::int4 IS NULL", &[&null])
-        .unwrap();
+    let rows = db.conn.query("SELECT $1::int4 IS NULL", &[&null]).unwrap();
     let is_null: bool = rows[0].get_typed(0).unwrap();
     assert!(is_null);
 }
 
 #[test]
 fn test_query_simple_returns_rows() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     db.conn
         .execute("INSERT INTO items (name) VALUES ('simple')", &[])
         .unwrap();
 
-    let rows = db
-        .conn
-        .query_simple("SELECT name FROM items")
-        .unwrap();
+    let rows = db.conn.query_simple("SELECT name FROM items").unwrap();
     assert!(!rows.is_empty());
 }
 
 #[test]
 fn test_multiple_result_rows_ordered() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
-    db.conn.execute_batch(
-        "INSERT INTO items (name, score) VALUES ('a', 10), ('b', 20), ('c', 15);",
-    ).unwrap();
+    db.conn
+        .execute_batch("INSERT INTO items (name, score) VALUES ('a', 10), ('b', 20), ('c', 15);")
+        .unwrap();
 
     let rows = db
         .conn
@@ -304,7 +312,9 @@ fn make_pool(db_name: &str, max_size: usize) -> PgPool {
 
 #[test]
 fn test_pool_basic_checkout_and_return() {
-    let Some(db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
     let mut pool = make_pool(&db.name, 3);
 
     {
@@ -314,12 +324,18 @@ fn test_pool_basic_checkout_and_return() {
             .unwrap();
     } // guard drops → connection returned to pool
 
-    assert_eq!(pool.idle_connections(), 1, "connection should be back in pool");
+    assert_eq!(
+        pool.idle_connections(),
+        1,
+        "connection should be back in pool"
+    );
 }
 
 #[test]
 fn test_pool_stats_track_checkouts() {
-    let Some(db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
     let mut pool = make_pool(&db.name, 5);
 
     // SAFETY: single-threaded; guards dropped before pool.
@@ -376,7 +392,10 @@ fn test_pool_get_timeout_when_exhausted() {
     drop(held); // return connection before pool is destroyed
 
     assert!(result.is_err(), "get() should time out");
-    assert!(elapsed >= Duration::from_millis(40), "should have waited ~50 ms");
+    assert!(
+        elapsed >= Duration::from_millis(40),
+        "should have waited ~50 ms"
+    );
 }
 
 #[test]
@@ -401,7 +420,9 @@ fn test_pool_reap_removes_idle_connections() {
 
 #[test]
 fn test_pool_multiple_sequential_queries() {
-    let Some(db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
     let mut pool = make_pool(&db.name, 2);
 
     for i in 0..5 {
@@ -425,7 +446,9 @@ fn test_pool_multiple_sequential_queries() {
 
 #[test]
 fn test_copy_in_write_data_finish() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     // COPY IN via write_data (raw CSV bytes)
     let mut writer = db
@@ -438,17 +461,16 @@ fn test_copy_in_write_data_finish() {
     let rows_copied = writer.finish().unwrap();
     assert_eq!(rows_copied, 2);
 
-    let rows = db
-        .conn
-        .query("SELECT count(*) FROM items", &[])
-        .unwrap();
+    let rows = db.conn.query("SELECT count(*) FROM items", &[]).unwrap();
     let count: i64 = rows[0].get_typed(0).unwrap();
     assert_eq!(count, 2);
 }
 
 #[test]
 fn test_copy_in_write_row_helper() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     let mut writer = db
         .conn
@@ -468,11 +490,13 @@ fn test_copy_in_write_row_helper() {
 
 #[test]
 fn test_copy_out_read_all() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
-    db.conn.execute_batch(
-        "INSERT INTO items (name, score) VALUES ('out1', 1), ('out2', 2);",
-    ).unwrap();
+    db.conn
+        .execute_batch("INSERT INTO items (name, score) VALUES ('out1', 1), ('out2', 2);")
+        .unwrap();
 
     let mut reader = db
         .conn
@@ -488,7 +512,9 @@ fn test_copy_out_read_all() {
 
 #[test]
 fn test_copy_out_read_data_chunks() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     db.conn
         .execute("INSERT INTO items (name, score) VALUES ('chunk', 42)", &[])
@@ -509,7 +535,9 @@ fn test_copy_out_read_data_chunks() {
 
 #[test]
 fn test_copy_in_fail_aborts_transaction() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     let mut writer = db
         .conn
@@ -597,13 +625,8 @@ fn test_unlisten_stops_notifications() {
 
     let _ = db.conn.query_simple("SELECT 1");
     let notifications = db.conn.drain_notifications();
-    let received = notifications
-        .iter()
-        .any(|n| n.channel == "unsub_channel");
-    assert!(
-        !received,
-        "should not receive notifications after unlisten"
-    );
+    let received = notifications.iter().any(|n| n.channel == "unsub_channel");
+    assert!(!received, "should not receive notifications after unlisten");
 }
 
 #[test]
@@ -631,7 +654,9 @@ fn test_has_notifications_and_count() {
 
 #[test]
 fn test_begin_commit_visible() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     db.conn.begin().unwrap();
     db.conn
@@ -649,7 +674,9 @@ fn test_begin_commit_visible() {
 
 #[test]
 fn test_begin_rollback_not_visible() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     db.conn.begin().unwrap();
     db.conn
@@ -667,7 +694,9 @@ fn test_begin_rollback_not_visible() {
 
 #[test]
 fn test_transaction_closure_commits_on_ok() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     db.conn
         .transaction(|tx| {
@@ -686,7 +715,9 @@ fn test_transaction_closure_commits_on_ok() {
 
 #[test]
 fn test_transaction_closure_rolls_back_on_err() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     let result = db.conn.transaction(|tx| {
         tx.execute(
@@ -706,7 +737,9 @@ fn test_transaction_closure_rolls_back_on_err() {
 
 #[test]
 fn test_savepoint_partial_rollback() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     db.conn.begin().unwrap();
 
@@ -735,27 +768,27 @@ fn test_savepoint_partial_rollback() {
         .conn
         .query("SELECT name FROM items ORDER BY id", &[])
         .unwrap();
-    assert_eq!(rows.len(), 1, "only the row before the savepoint should remain");
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the row before the savepoint should remain"
+    );
     let name: String = rows[0].get_typed(0).unwrap();
     assert_eq!(name, "before_sp");
 }
 
 #[test]
 fn test_nested_transaction_via_savepoint() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
 
     let result: PgResult<()> = db.conn.transaction(|outer| {
-        outer.execute(
-            "INSERT INTO items (name, score) VALUES ('outer', 1)",
-            &[],
-        )?;
+        outer.execute("INSERT INTO items (name, score) VALUES ('outer', 1)", &[])?;
 
         // Nested transaction: creates auto-savepoint
         let inner_result: PgResult<()> = outer.transaction(|inner| {
-            inner.execute(
-                "INSERT INTO items (name, score) VALUES ('inner', 2)",
-                &[],
-            )?;
+            inner.execute("INSERT INTO items (name, score) VALUES ('inner', 2)", &[])?;
             // fail the inner transaction
             inner.execute("SELECT 1/0", &[])?;
             Ok(())
@@ -796,9 +829,8 @@ fn test_wrong_type_cast_returns_error() {
 
 #[test]
 fn test_unique_constraint_violation() {
-    let Some(mut db) = TestDb::with_schema(
-        "CREATE TABLE uniqs (id INT PRIMARY KEY, val TEXT);",
-    ) else {
+    let Some(mut db) = TestDb::with_schema("CREATE TABLE uniqs (id INT PRIMARY KEY, val TEXT);")
+    else {
         return;
     };
 
@@ -814,7 +846,9 @@ fn test_unique_constraint_violation() {
 
 #[test]
 fn test_not_null_constraint_violation() {
-    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else { return };
+    let Some(mut db) = TestDb::with_schema(ITEMS_DDL) else {
+        return;
+    };
     let result = db
         .conn
         .execute("INSERT INTO items (name, score) VALUES (NULL, 1)", &[]);
@@ -839,11 +873,14 @@ fn test_foreign_key_violation() {
 #[test]
 fn test_error_is_server_variant() {
     let Some(mut db) = TestDb::open() else { return };
-    let err = db.conn.query("SELECT bad_column FROM nonexistent_table", &[])
+    let err = db
+        .conn
+        .query("SELECT bad_column FROM nonexistent_table", &[])
         .unwrap_err();
     assert!(
         matches!(err, PgError::Server { .. }),
-        "should return PgError::Server, got: {:?}", err
+        "should return PgError::Server, got: {:?}",
+        err
     );
 }
 
@@ -855,7 +892,8 @@ fn test_error_classification_permanent() {
     assert_eq!(
         err.classify(),
         chopin_pg::ErrorClass::Permanent,
-        "syntax error should be Permanent, got: {:?}", err.classify()
+        "syntax error should be Permanent, got: {:?}",
+        err.classify()
     );
 }
 
@@ -872,7 +910,10 @@ fn test_connection_is_still_usable_after_error() {
     // Second query: should succeed
     let rows = db.conn.query("SELECT 42", &[]).unwrap();
     let v: i32 = rows[0].get_typed(0).unwrap();
-    assert_eq!(v, 42, "connection should be reusable after error + rollback");
+    assert_eq!(
+        v, 42,
+        "connection should be reusable after error + rollback"
+    );
 }
 
 #[test]
@@ -888,7 +929,10 @@ fn test_transaction_status_after_begin() {
 
     assert_eq!(db.conn.transaction_status(), TransactionStatus::Idle);
     db.conn.begin().unwrap();
-    assert_eq!(db.conn.transaction_status(), TransactionStatus::InTransaction);
+    assert_eq!(
+        db.conn.transaction_status(),
+        TransactionStatus::InTransaction
+    );
     db.conn.rollback().unwrap();
     assert_eq!(db.conn.transaction_status(), TransactionStatus::Idle);
 }

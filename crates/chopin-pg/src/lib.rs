@@ -67,4 +67,4 @@ pub use error::{ErrorClass, PgError, PgResult};
 pub use pool::{ConnectionGuard, PgPool, PgPoolConfig, PoolStats};
 pub use row::Row;
 pub use statement::Statement;
-pub use types::{encode_inet_binary, FromSql, PgValue, ToParam, ToSql};
+pub use types::{FromSql, PgValue, ToParam, ToSql, encode_inet_binary};

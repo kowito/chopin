@@ -1,4 +1,5 @@
-use chopin_orm::{Model, QueryBuilder, PgPool, PgConfig, Validate};
+use chopin_orm::{Model, PgPool, Validate, builder::ColumnTrait};
+use chopin_pg::PgConfig;
 
 #[derive(Model, Debug, Clone)]
 #[model(table_name = "users")]
@@ -16,12 +17,16 @@ impl Validate for User {
         if self.email.is_empty() {
             errors.push("Email cannot be empty".to_string());
         }
-        if let Some(age) = self.age {
-            if age < 0 {
-                errors.push("Age cannot be negative".to_string());
-            }
+        if let Some(age) = self.age
+            && age < 0
+        {
+            errors.push("Age cannot be negative".to_string());
         }
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
@@ -63,23 +68,28 @@ fn main() {
     };
     post.insert(&mut pool).expect("Post insert failed");
 
-    let author = post.fetch_user_id(&mut pool).unwrap().expect("Author not found");
+    let author = post
+        .fetch_user_id(&mut pool)
+        .unwrap()
+        .expect("Author not found");
     println!("Post author: {}", author.name);
 
     // 4. Fluent DSL with Type-Safe Columns
     use UserColumn::*;
     let users = User::find()
-        .filter(Name.eq("Alice"))
-        .filter(Age.gt(25))
+        .filter(name.eq("Alice"))
+        .filter(age.gt(25))
         .all(&mut pool)
         .expect("Query failed");
-    
+
     println!("Found {} users", users.len());
 
     // 5. Partial Updates (No ActiveModel needed)
     let mut to_update = users[0].clone();
     to_update.name = "Alice Updated".to_string();
-    to_update.update_columns(&mut pool, &["name"]).expect("Partial update failed");
+    to_update
+        .update_columns(&mut pool, &["name"])
+        .expect("Partial update failed");
 
     // 6. Aggregations
     let count = User::find().count(&mut pool).expect("Count failed");

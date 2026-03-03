@@ -316,8 +316,12 @@ mod tests {
         assert!(stmt.columns.is_none());
         // Update columns
         let cols = vec![ColumnDesc {
-            name: "id".to_string(), table_oid: 0, col_attr: 0,
-            type_oid: 23, type_size: 4, type_modifier: -1,
+            name: "id".to_string(),
+            table_oid: 0,
+            col_attr: 0,
+            type_oid: 23,
+            type_size: 4,
+            type_modifier: -1,
             format_code: FormatCode::Text,
         }];
         cache.update_columns("SELECT 1", cols);
@@ -375,7 +379,11 @@ mod tests {
         assert!(stmt.is_new);
         // Name should be s3 or higher — never s0 again after clears
         let counter: u32 = stmt.name.trim_start_matches('s').parse().unwrap();
-        assert!(counter >= 3, "Counter should not reset to 0 after clear — got {}", stmt.name);
+        assert!(
+            counter >= 3,
+            "Counter should not reset to 0 after clear — got {}",
+            stmt.name
+        );
     }
 
     #[test]
@@ -429,7 +437,10 @@ mod tests {
         let a = cache.get_or_create("SELECT 1");
         cache.insert("SELECT 1", a.name.clone(), 0, None);
         let b = cache.get_or_create("SELECT  1");
-        assert!(b.is_new, "SQL with different whitespace should be a new statement");
+        assert!(
+            b.is_new,
+            "SQL with different whitespace should be a new statement"
+        );
         assert_ne!(a.name, b.name);
     }
 
@@ -447,7 +458,11 @@ mod tests {
         // Insert D — should evict B (LRU)
         let evicted = cache.insert("D", "s3".to_string(), 0, None);
         assert!(evicted.is_some());
-        assert_eq!(evicted.unwrap().name, "s1", "B (s1) should be evicted as LRU");
+        assert_eq!(
+            evicted.unwrap().name,
+            "s1",
+            "B (s1) should be evicted as LRU"
+        );
         // A and C still accessible
         assert!(!cache.get_or_create("A").is_new);
         assert!(!cache.get_or_create("C").is_new);
@@ -462,7 +477,10 @@ mod tests {
         cache.insert("SELECT 2", "s1".to_string(), 0, None);
         // Re-inserting existing key should not trigger eviction
         let evicted = cache.insert("SELECT 1", "s0".to_string(), 1, None);
-        assert!(evicted.is_none(), "Re-inserting an existing key should not evict");
+        assert!(
+            evicted.is_none(),
+            "Re-inserting an existing key should not evict"
+        );
         assert_eq!(cache.len(), 2);
     }
 
@@ -478,7 +496,11 @@ mod tests {
             let name = format!("s{}", i);
             cache.insert(&sql, name, 0, None);
         }
-        assert!(cache.len() <= capacity, "Cache exceeded capacity: {}", cache.len());
+        assert!(
+            cache.len() <= capacity,
+            "Cache exceeded capacity: {}",
+            cache.len()
+        );
     }
 
     #[test]

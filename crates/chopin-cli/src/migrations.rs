@@ -33,7 +33,10 @@ fn ensure_migration_table(pool: &mut PgPool) -> Result<()> {
 
 fn get_applied_migrations(pool: &mut PgPool) -> Result<Vec<String>> {
     let mut conn = pool.get()?;
-    let rows = conn.query("SELECT name FROM chopin_orm_migrations ORDER BY id ASC", &[])?;
+    let rows = conn.query(
+        "SELECT name FROM chopin_orm_migrations ORDER BY id ASC",
+        &[],
+    )?;
     let mut names = Vec::new();
     for row in rows {
         let val = row.get(0)?;
@@ -50,7 +53,7 @@ fn show_status(project_dir: &Path, pool: &mut PgPool) -> Result<()> {
     ensure_migration_table(pool)?;
     let applied = get_applied_migrations(pool)?;
     let migrations_dir = project_dir.join("migrations");
-    
+
     if !migrations_dir.exists() {
         println!("{} No migrations directory found.", "ℹ".blue());
         return Ok(());
@@ -60,12 +63,20 @@ fn show_status(project_dir: &Path, pool: &mut PgPool) -> Result<()> {
     let mut files: Vec<_> = fs::read_dir(migrations_dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "sql") && p.file_name().unwrap().to_str().unwrap().contains(".up"))
+        .filter(|p| {
+            p.extension().is_some_and(|ext| ext == "sql")
+                && p.file_name().unwrap().to_str().unwrap().contains(".up")
+        })
         .collect();
     files.sort();
 
     for file in files {
-        let full_name = file.file_stem().unwrap().to_str().unwrap().replace(".up", "");
+        let full_name = file
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .replace(".up", "");
         let status = if applied.contains(&full_name) {
             "Applied".green()
         } else {
@@ -89,29 +100,44 @@ fn run_up(project_dir: &Path, pool: &mut PgPool) -> Result<()> {
     let mut files: Vec<_> = fs::read_dir(migrations_dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "sql") && p.file_name().unwrap().to_str().unwrap().contains(".up"))
+        .filter(|p| {
+            p.extension().is_some_and(|ext| ext == "sql")
+                && p.file_name().unwrap().to_str().unwrap().contains(".up")
+        })
         .collect();
     files.sort();
 
     let mut count = 0;
     for file in files {
-        let full_name = file.file_stem().unwrap().to_str().unwrap().replace(".up", "");
+        let full_name = file
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .replace(".up", "");
         if !applied.contains(&full_name) {
             println!("{} Applying migration: {}", "↑".green(), full_name);
             let sql = fs::read_to_string(&file)?;
             let mut conn = pool.get()?;
-            
+
             // Execute in transaction
             conn.execute("BEGIN", &[])?;
             match conn.execute(&sql, &[]) {
                 Ok(_) => {
-                    conn.execute("INSERT INTO chopin_orm_migrations (name) VALUES ($1)", &[&full_name])?;
+                    conn.execute(
+                        "INSERT INTO chopin_orm_migrations (name) VALUES ($1)",
+                        &[&full_name],
+                    )?;
                     conn.execute("COMMIT", &[])?;
                     count += 1;
                 }
                 Err(e) => {
                     conn.execute("ROLLBACK", &[])?;
-                    return Err(anyhow::anyhow!("Failed to apply migration {}: {}", full_name, e));
+                    return Err(anyhow::anyhow!(
+                        "Failed to apply migration {}: {}",
+                        full_name,
+                        e
+                    ));
                 }
             }
         }
@@ -142,7 +168,10 @@ fn run_down(project_dir: &Path, pool: &mut PgPool, steps: u32) -> Result<()> {
     for name in to_rollback {
         let down_file = migrations_dir.join(format!("{}.down.sql", name));
         if !down_file.exists() {
-            return Err(anyhow::anyhow!("Down migration file not found for {}", name));
+            return Err(anyhow::anyhow!(
+                "Down migration file not found for {}",
+                name
+            ));
         }
 
         println!("{} Rolling back migration: {}", "↓".red(), name);
@@ -152,18 +181,29 @@ fn run_down(project_dir: &Path, pool: &mut PgPool, steps: u32) -> Result<()> {
         conn.execute("BEGIN", &[])?;
         match conn.execute(&sql, &[]) {
             Ok(_) => {
-                conn.execute("DELETE FROM chopin_orm_migrations WHERE name = $1", &[&name])?;
+                conn.execute(
+                    "DELETE FROM chopin_orm_migrations WHERE name = $1",
+                    &[&name],
+                )?;
                 conn.execute("COMMIT", &[])?;
                 count += 1;
             }
             Err(e) => {
                 conn.execute("ROLLBACK", &[])?;
-                return Err(anyhow::anyhow!("Failed to rollback migration {}: {}", name, e));
+                return Err(anyhow::anyhow!(
+                    "Failed to rollback migration {}: {}",
+                    name,
+                    e
+                ));
             }
         }
     }
 
-    println!("{} Successfully rolled back {} migrations.", "✓".green(), count);
+    println!(
+        "{} Successfully rolled back {} migrations.",
+        "✓".green(),
+        count
+    );
     Ok(())
 }
 
@@ -175,7 +215,7 @@ fn generate_migration(project_dir: &Path, name: &str) -> Result<()> {
 
     let timestamp = Local::now().format("%Y%m%d%H%M%S");
     let base_name = format!("{}_{}", timestamp, name);
-    
+
     let up_file = migrations_dir.join(format!("{}.up.sql", base_name));
     let down_file = migrations_dir.join(format!("{}.down.sql", base_name));
 

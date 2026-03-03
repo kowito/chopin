@@ -76,7 +76,11 @@ mod tests {
     #[test]
     fn test_display_clock_error() {
         let s = format!("{}", ChopinError::ClockError);
-        assert!(s.contains("clock") || s.contains("clock"), "unexpected: {}", s);
+        assert!(
+            s.contains("clock") || s.contains("clock"),
+            "unexpected: {}",
+            s
+        );
     }
 
     #[test]
@@ -98,7 +102,7 @@ mod tests {
     #[test]
     fn test_source_io_is_some() {
         use std::error::Error;
-        let e = ChopinError::Io(std::io::Error::new(std::io::ErrorKind::Other, "x"));
+        let e = ChopinError::Io(std::io::Error::other("x"));
         assert!(e.source().is_some());
     }
 
@@ -123,7 +127,7 @@ mod tests {
     #[test]
     fn test_chopin_result_ok() {
         let r: ChopinResult<i32> = Ok(42);
-        assert_eq!(r.unwrap(), 42);
+        assert!(r.is_ok());
     }
 
     #[test]

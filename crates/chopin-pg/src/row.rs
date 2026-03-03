@@ -27,6 +27,37 @@ impl Row {
         Self { columns, values }
     }
 
+    /// Safely create a mock row for testing, bypassing wire protocols.
+    pub fn mock(names: &[&str], values: &[PgValue]) -> Self {
+        let mut cols = Vec::new();
+        let mut raw_values = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            let (type_oid, data) = match &values[i] {
+                PgValue::Null => (25, None), // default to text
+                PgValue::Int4(v) => (23, Some(v.to_string().into_bytes())),
+                PgValue::Int8(v) => (20, Some(v.to_string().into_bytes())),
+                PgValue::Text(s) => (25, Some(s.clone().into_bytes())),
+                PgValue::Bool(b) => (16, Some(if *b { b"t".to_vec() } else { b"f".to_vec() })),
+                // A complete map isn't necessary for a lightweight mock just matching basic fields
+                _ => (25, values[i].to_text_bytes()),
+            };
+            cols.push(ColumnDesc {
+                name: name.to_string(),
+                table_oid: 0,
+                col_attr: 0,
+                type_oid,
+                type_size: -1,
+                type_modifier: -1,
+                format_code: FormatCode::Text,
+            });
+            raw_values.push(data);
+        }
+        Self {
+            columns: Rc::new(cols),
+            values: raw_values,
+        }
+    }
+
     /// Get the number of columns.
     pub fn len(&self) -> usize {
         self.columns.len()
@@ -185,11 +216,11 @@ impl Row {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::rc::Rc;
     use crate::codec::ColumnDesc;
     use crate::error::{PgError, PgResult};
     use crate::protocol::FormatCode;
     use crate::types::PgValue;
+    use std::rc::Rc;
 
     // OID constants (text format values are parsed the same as DB text protocol)
     const OID_TEXT: u32 = 25;
@@ -219,7 +250,10 @@ mod tests {
 
     #[test]
     fn test_row_len_two_columns() {
-        let row = make_row(&[("name", OID_TEXT), ("age", OID_INT4)], &[Some(b"alice"), Some(b"30")]);
+        let row = make_row(
+            &[("name", OID_TEXT), ("age", OID_INT4)],
+            &[Some(b"alice"), Some(b"30")],
+        );
         assert_eq!(row.len(), 2);
         assert!(!row.is_empty());
     }
@@ -290,8 +324,11 @@ mod tests {
         let err = row.get(99);
         assert!(err.is_err());
         if let Err(PgError::TypeConversion(msg)) = err {
-            assert!(msg.contains("out of range") || msg.contains("index"),
-                "Error should mention out-of-range: {}", msg);
+            assert!(
+                msg.contains("out of range") || msg.contains("index"),
+                "Error should mention out-of-range: {}",
+                msg
+            );
         } else {
             panic!("Expected TypeConversion error");
         }
@@ -317,8 +354,11 @@ mod tests {
         let err = row.get_by_name("nonexistent");
         assert!(err.is_err());
         if let Err(PgError::TypeConversion(msg)) = err {
-            assert!(msg.contains("not found") || msg.contains("nonexistent"),
-                "Error should mention missing column: {}", msg);
+            assert!(
+                msg.contains("not found") || msg.contains("nonexistent"),
+                "Error should mention missing column: {}",
+                msg
+            );
         } else {
             panic!("Expected TypeConversion error");
         }
@@ -376,9 +416,11 @@ mod tests {
 
     #[test]
     fn test_get_f64_value() {
-        let row = make_row(&[("score", OID_FLOAT8)], &[Some(b"3.14")]);
+        let pi = std::f64::consts::PI;
+        let text = pi.to_string();
+        let row = make_row(&[("score", OID_FLOAT8)], &[Some(text.as_bytes())]);
         let v = row.get_f64(0).unwrap().unwrap();
-        assert!((v - 3.14).abs() < 1e-9);
+        assert!((v - pi).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -413,7 +455,10 @@ mod tests {
 
     #[test]
     fn test_columns_slice() {
-        let row = make_row(&[("a", OID_TEXT), ("b", OID_INT4)], &[Some(b"x"), Some(b"1")]);
+        let row = make_row(
+            &[("a", OID_TEXT), ("b", OID_INT4)],
+            &[Some(b"x"), Some(b"1")],
+        );
         let cols = row.columns();
         assert_eq!(cols.len(), 2);
         assert_eq!(cols[0].name, "a");
@@ -515,7 +560,11 @@ mod tests {
     #[test]
     fn test_get_first_and_last_column() {
         let row = make_row(
-            &[("first", OID_INT4), ("middle", OID_TEXT), ("last", OID_BOOL)],
+            &[
+                ("first", OID_INT4),
+                ("middle", OID_TEXT),
+                ("last", OID_BOOL),
+            ],
             &[Some(b"1"), Some(b"mid"), Some(b"t")],
         );
         assert!(matches!(row.get(0).unwrap(), PgValue::Int4(1)));

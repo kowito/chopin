@@ -1,4 +1,4 @@
-# Chopin Release Notes: v0.5.0 – v0.5.9 (Codename: Nocturne)
+# Chopin Release Notes: v0.5.0 – v0.5.12 (Codename: Nocturne)
 
 The 0.5.x series, codenamed **Nocturne**, marks the most significant evolution of Chopin to date. We've transitioned from a proof-of-concept networking engine to a production-hardened web framework with industry-leading performance and modern ergonomics.
 
@@ -25,6 +25,47 @@ The release of `chopin-orm` brings type-safe database interactions to the ecosys
 - **Zero-Overhead Driver**: Built on `chopin-pg`, our raw syscall-based PostgreSQL driver.
 - **Type-Safe Query Builder**: Compile-time checked queries without the performance penalty of traditional ORMs.
 - **Linear Scaling**: The ORM matches the raw driver performance across 1k, 100k, and 1M row benchmarks.
+
+## v0.5.12 — chopin-pg & chopin-orm Maturity
+
+### 🔧 chopin-pg: Production-Grade PostgreSQL Driver
+The `chopin-pg` crate has reached **91% completion** (145/160 items) with major additions:
+
+- **22 PostgreSQL types** — Bool, Int2/4/8, Float4/8, Text, Bytes, Json, Jsonb, Uuid, Date, Time, Timestamp, Timestamptz, Interval, Inet, Numeric, MacAddr, Point, Range, Array
+- **Binary wire format** — per-parameter format codes with binary encoding/decoding for all supported types
+- **SCRAM-SHA-256 auth** — zero-external-dependency implementation
+- **Connection pool** — `PgPool` with `PgPoolConfig` builder (max_size, min_size, checkout_timeout, idle_timeout, max_lifetime, test_on_checkout, auto-reconnect)
+- **COPY protocol** — streaming `CopyWriter`/`CopyReader` for bulk data operations
+- **LISTEN/NOTIFY** — async notification with buffered delivery and `poll_notification()`
+- **Transactions** — savepoints, nested transactions, closure-based API with auto-rollback
+- **Statement cache** — LRU eviction with configurable capacity
+- **Unix domain sockets** — `PgConfig.socket_dir` and `?host=` URL parameter
+- **Production hardening** — broken connection flag, TCP_NODELAY, zero-copy writes, `Rc<ColumnDesc>` sharing, MAX_MESSAGE_SIZE enforcement
+- **362 unit tests + 44 integration tests** against real PostgreSQL
+
+### 🔧 chopin-orm: Type-Safe ORM with Column DSL
+The `chopin-orm` crate now provides a comprehensive type-safe ORM:
+
+- **`#[derive(Model)]` macro** — generates `FromRow`, column enum (`UserColumn`), CRUD methods, and relationship accessors
+- **`Validate` trait** — supertrait of `Model` with default pass-through; custom validation rules supported
+- **Type-safe column DSL** — `UserColumn::name.eq("Alice")`, `.gt()`, `.lt()`, `.like()`, `.is_in()`, `.is_null()`, etc.
+- **Condition combinators** — `.and()` / `.or()` for complex filter trees
+- **Relationships** — `has_many(Target, fk = "col")` and `#[model(belongs_to(Parent))]` with lazy loading and JOIN queries
+- **Auto-migration** — `sync_schema()` diffs and creates/alters tables automatically
+- **Pagination** — `QueryBuilder::paginate(size).page(n).fetch()` returns `Page<M>` with totals
+- **ActiveModel** — `ActiveModel::from_model()` / `.new_insert()` with `.set()` for partial updates
+- **Upsert** — `INSERT ... ON CONFLICT` support
+- **Aggregations** — `select_only`, `group_by`, `having` for aggregate queries
+- **Mock executor** — `MockExecutor` + `mock_row!` for unit testing
+- **Migration system** — `MigrationManager` with `up`/`down` for production migrations
+
+### 📖 Documentation Overhaul
+- Updated all examples and benchmarks to use current API (`Validate` trait, type-safe column DSL, correct `ActiveModel` constructors)
+- Rewrote `chopin-pg/README.md` with comprehensive feature list and code examples for every feature
+- Rewrote `chopin-orm/README.md` with relationships, pagination, ActiveModel, and MockExecutor examples
+- Rewrote `chopin-orm/docs/advanced_guide.md` to use correct `#[model(...)]` syntax (not `#[derive(Relation)]`)
+- Updated `docs/USAGE_GUIDE.md` ORM section with type-safe DSL, relationships, and correct row accessor methods
+- Updated `docs/DEVELOPER_GUIDE.md` ORM integration section
 
 ## v0.5.9 — Documentation & Website Update
 
@@ -70,6 +111,8 @@ Every HTTP response now carries a compliant RFC 7231 `Date` header computed fres
 - **v0.5.7**: Major Naming Convention Overhaul (`Response::text`, `ctx.param`, `router.layer`).
 - **v0.5.8**: Zero-copy I/O (writev + sendfile), pre-composed middleware chains, mimalloc integration.
 - **v0.5.9**: Comprehensive website update — full user manual with accurate extractors, file serving reference, Response API table, and expanded developer guide.
+- **v0.5.10 - v0.5.11**: chopin-pg type system expansion (MacAddr, Point, Range, binary codecs), production hardening (broken conn flag, TCP_NODELAY, zero-copy writes), 362 unit tests.
+- **v0.5.12**: chopin-orm DSL maturity (Validate trait, type-safe column DSL, relationships, pagination, ActiveModel), documentation overhaul.
 
 ---
 "Simple as a melody, fast as a nocturne."

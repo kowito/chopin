@@ -60,7 +60,7 @@ impl Default for PgPoolConfig {
             max_size: 10,
             min_size: 1,
             max_lifetime: Some(Duration::from_secs(30 * 60)), // 30 min
-            idle_timeout: Some(Duration::from_secs(10 * 60)),  // 10 min
+            idle_timeout: Some(Duration::from_secs(10 * 60)), // 10 min
             checkout_timeout: Some(Duration::from_secs(5)),
             connection_timeout: Some(Duration::from_secs(5)),
             test_on_checkout: false,
@@ -265,22 +265,25 @@ impl PgPool {
             }
 
             // Optionally validate
-            if self.pool_config.test_on_checkout {
-                if pooled.conn.query_simple(&self.pool_config.validation_query).is_err() {
-                    self.stats.validation_failures += 1;
-                    self.stats.total_connections_closed += 1;
-                    if self.pool_config.auto_reconnect {
-                        // Replace with a fresh connection
-                        match PgConnection::connect(&self.config) {
-                            Ok(new_conn) => {
-                                pooled = PooledConn::new(new_conn);
-                                self.stats.total_connections_created += 1;
-                            }
-                            Err(e) => return Err(e),
+            if self.pool_config.test_on_checkout
+                && pooled
+                    .conn
+                    .query_simple(&self.pool_config.validation_query)
+                    .is_err()
+            {
+                self.stats.validation_failures += 1;
+                self.stats.total_connections_closed += 1;
+                if self.pool_config.auto_reconnect {
+                    // Replace with a fresh connection
+                    match PgConnection::connect(&self.config) {
+                        Ok(new_conn) => {
+                            pooled = PooledConn::new(new_conn);
+                            self.stats.total_connections_created += 1;
                         }
-                    } else {
-                        return Err(PgError::PoolValidationFailed);
+                        Err(e) => return Err(e),
                     }
+                } else {
+                    return Err(PgError::PoolValidationFailed);
                 }
             }
 
@@ -498,20 +501,32 @@ impl<'a> ConnectionGuard<'a> {
     /// Get a mutable reference to the underlying connection.
     #[inline]
     pub fn conn(&mut self) -> &mut PgConnection {
-        &mut self.conn.as_mut().expect("ConnectionGuard used after take").conn
+        &mut self
+            .conn
+            .as_mut()
+            .expect("ConnectionGuard used after take")
+            .conn
     }
 }
 
 impl<'a> std::ops::Deref for ConnectionGuard<'a> {
     type Target = PgConnection;
     fn deref(&self) -> &PgConnection {
-        &self.conn.as_ref().expect("ConnectionGuard used after take").conn
+        &self
+            .conn
+            .as_ref()
+            .expect("ConnectionGuard used after take")
+            .conn
     }
 }
 
 impl<'a> std::ops::DerefMut for ConnectionGuard<'a> {
     fn deref_mut(&mut self) -> &mut PgConnection {
-        &mut self.conn.as_mut().expect("ConnectionGuard used after take").conn
+        &mut self
+            .conn
+            .as_mut()
+            .expect("ConnectionGuard used after take")
+            .conn
     }
 }
 
@@ -544,11 +559,23 @@ mod tests {
         let cfg = PgPoolConfig::default();
         assert_eq!(cfg.max_size, 10);
         assert_eq!(cfg.min_size, 1);
-        assert!(cfg.max_lifetime.is_some(), "default max_lifetime should be set");
-        assert!(cfg.idle_timeout.is_some(), "default idle_timeout should be set");
-        assert!(cfg.checkout_timeout.is_some(), "default checkout_timeout should be set");
+        assert!(
+            cfg.max_lifetime.is_some(),
+            "default max_lifetime should be set"
+        );
+        assert!(
+            cfg.idle_timeout.is_some(),
+            "default idle_timeout should be set"
+        );
+        assert!(
+            cfg.checkout_timeout.is_some(),
+            "default checkout_timeout should be set"
+        );
         assert!(cfg.connection_timeout.is_some());
-        assert!(!cfg.test_on_checkout, "test_on_checkout should default to false");
+        assert!(
+            !cfg.test_on_checkout,
+            "test_on_checkout should default to false"
+        );
         assert!(cfg.auto_reconnect, "auto_reconnect should default to true");
         assert_eq!(cfg.validation_query, "SELECT 1");
     }

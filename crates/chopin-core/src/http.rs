@@ -515,23 +515,41 @@ mod tests {
     // ─── Method::from_bytes ───────────────────────────────────────────────────
 
     #[test]
-    fn test_method_get()     { assert_eq!(Method::from_bytes(b"GET"),     Method::Get);     }
+    fn test_method_get() {
+        assert_eq!(Method::from_bytes(b"GET"), Method::Get);
+    }
     #[test]
-    fn test_method_post()    { assert_eq!(Method::from_bytes(b"POST"),    Method::Post);    }
+    fn test_method_post() {
+        assert_eq!(Method::from_bytes(b"POST"), Method::Post);
+    }
     #[test]
-    fn test_method_put()     { assert_eq!(Method::from_bytes(b"PUT"),     Method::Put);     }
+    fn test_method_put() {
+        assert_eq!(Method::from_bytes(b"PUT"), Method::Put);
+    }
     #[test]
-    fn test_method_delete()  { assert_eq!(Method::from_bytes(b"DELETE"),  Method::Delete);  }
+    fn test_method_delete() {
+        assert_eq!(Method::from_bytes(b"DELETE"), Method::Delete);
+    }
     #[test]
-    fn test_method_patch()   { assert_eq!(Method::from_bytes(b"PATCH"),   Method::Patch);   }
+    fn test_method_patch() {
+        assert_eq!(Method::from_bytes(b"PATCH"), Method::Patch);
+    }
     #[test]
-    fn test_method_head()    { assert_eq!(Method::from_bytes(b"HEAD"),    Method::Head);    }
+    fn test_method_head() {
+        assert_eq!(Method::from_bytes(b"HEAD"), Method::Head);
+    }
     #[test]
-    fn test_method_options() { assert_eq!(Method::from_bytes(b"OPTIONS"), Method::Options); }
+    fn test_method_options() {
+        assert_eq!(Method::from_bytes(b"OPTIONS"), Method::Options);
+    }
     #[test]
-    fn test_method_trace()   { assert_eq!(Method::from_bytes(b"TRACE"),   Method::Trace);   }
+    fn test_method_trace() {
+        assert_eq!(Method::from_bytes(b"TRACE"), Method::Trace);
+    }
     #[test]
-    fn test_method_connect() { assert_eq!(Method::from_bytes(b"CONNECT"), Method::Connect); }
+    fn test_method_connect() {
+        assert_eq!(Method::from_bytes(b"CONNECT"), Method::Connect);
+    }
 
     #[test]
     fn test_method_empty_is_unknown() {
@@ -540,20 +558,20 @@ mod tests {
 
     #[test]
     fn test_method_lowercase_is_unknown() {
-        assert_eq!(Method::from_bytes(b"get"),  Method::Unknown);
+        assert_eq!(Method::from_bytes(b"get"), Method::Unknown);
         assert_eq!(Method::from_bytes(b"post"), Method::Unknown);
     }
 
     #[test]
     fn test_method_truncated_is_unknown() {
-        assert_eq!(Method::from_bytes(b"GE"),   Method::Unknown);
-        assert_eq!(Method::from_bytes(b"POS"),  Method::Unknown);
-        assert_eq!(Method::from_bytes(b"DEL"),  Method::Unknown);
+        assert_eq!(Method::from_bytes(b"GE"), Method::Unknown);
+        assert_eq!(Method::from_bytes(b"POS"), Method::Unknown);
+        assert_eq!(Method::from_bytes(b"DEL"), Method::Unknown);
     }
 
     #[test]
     fn test_method_junk_is_unknown() {
-        assert_eq!(Method::from_bytes(b"GETX"),  Method::Unknown);
+        assert_eq!(Method::from_bytes(b"GETX"), Method::Unknown);
         assert_eq!(Method::from_bytes(b"XPOST"), Method::Unknown);
     }
 
@@ -633,7 +651,10 @@ mod tests {
         let r = Response::new(200).with_header("x-custom", "value");
         assert_eq!(r.status, 200);
         // Headers should contain the custom header
-        let found = r.headers.iter().any(|h| h.name == "x-custom" && h.value.as_str() == "value");
+        let found = r
+            .headers
+            .iter()
+            .any(|h| h.name == "x-custom" && h.value.as_str() == "value");
         assert!(found, "header x-custom: value not found");
     }
 

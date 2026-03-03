@@ -123,6 +123,10 @@ fn interpolate_env_vars(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Mutex to serialize tests that depend on environment variables.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_default_config() {
@@ -192,12 +196,17 @@ pool_size = 10
     #[test]
     fn test_database_config_default_fields() {
         let d = DatabaseConfig::default();
-        assert!(d.url.contains("5432"), "default url should include PG port 5432");
+        assert!(
+            d.url.contains("5432"),
+            "default url should include PG port 5432"
+        );
         assert_eq!(d.pool_size, 5);
     }
 
     #[test]
     fn test_load_defaults_when_no_toml_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("PORT") };
         let dir = tempfile::tempdir().unwrap();
         // No Chopin.toml in this directory
         let config = ChopinConfig::load(dir.path()).unwrap();
@@ -217,6 +226,7 @@ pool_size = 10
 
     #[test]
     fn test_env_var_overrides_port() {
+        let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("PORT", "7777") };
         let dir = tempfile::tempdir().unwrap();
         let config = ChopinConfig::load(dir.path()).unwrap();

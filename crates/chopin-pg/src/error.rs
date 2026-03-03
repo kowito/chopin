@@ -8,25 +8,7 @@ pub enum PgError {
     /// Authentication failure.
     Auth(String),
     /// Server-sent error response with rich diagnostic fields.
-    Server {
-        severity: String,
-        code: String,
-        message: String,
-        detail: Option<String>,
-        hint: Option<String>,
-        position: Option<i32>,
-        internal_position: Option<i32>,
-        internal_query: Option<String>,
-        where_: Option<String>,
-        schema_name: Option<String>,
-        table_name: Option<String>,
-        column_name: Option<String>,
-        data_type_name: Option<String>,
-        constraint_name: Option<String>,
-        file: Option<String>,
-        line: Option<String>,
-        routine: Option<String>,
-    },
+    Server(Box<ServerError>),
     /// Connection is closed or in an invalid state.
     ConnectionClosed,
     /// Query returned no rows when one was expected.
@@ -49,6 +31,28 @@ pub enum PgError {
     PoolValidationFailed,
 }
 
+/// Server-sent error response with rich diagnostic fields.
+#[derive(Debug)]
+pub struct ServerError {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    pub detail: Option<String>,
+    pub hint: Option<String>,
+    pub position: Option<i32>,
+    pub internal_position: Option<i32>,
+    pub internal_query: Option<String>,
+    pub where_: Option<String>,
+    pub schema_name: Option<String>,
+    pub table_name: Option<String>,
+    pub column_name: Option<String>,
+    pub data_type_name: Option<String>,
+    pub constraint_name: Option<String>,
+    pub file: Option<String>,
+    pub line: Option<String>,
+    pub routine: Option<String>,
+}
+
 /// Error classification for retry logic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorClass {
@@ -66,13 +70,11 @@ impl PgError {
     /// Classify this error for retry decisions.
     pub fn classify(&self) -> ErrorClass {
         match self {
-            PgError::Io(_) | PgError::ConnectionClosed | PgError::Timeout => {
-                ErrorClass::Transient
-            }
+            PgError::Io(_) | PgError::ConnectionClosed | PgError::Timeout => ErrorClass::Transient,
             // WouldBlock is a flow-control signal, not a transient failure.
             // It should not trigger retry with backoff.
             PgError::WouldBlock => ErrorClass::Client,
-            PgError::Server { code, .. } => classify_sql_state(code),
+            PgError::Server(err) => classify_sql_state(&err.code),
             PgError::PoolTimeout | PgError::PoolExhausted | PgError::PoolValidationFailed => {
                 ErrorClass::Pool
             }
@@ -92,7 +94,7 @@ impl PgError {
     /// Get the SQLSTATE code, if this is a server error.
     pub fn sql_state(&self) -> Option<&str> {
         match self {
-            PgError::Server { code, .. } => Some(code),
+            PgError::Server(err) => Some(&err.code),
             _ => None,
         }
     }
@@ -100,7 +102,7 @@ impl PgError {
     /// Get the hint from the server, if available.
     pub fn hint(&self) -> Option<&str> {
         match self {
-            PgError::Server { hint, .. } => hint.as_deref(),
+            PgError::Server(err) => err.hint.as_deref(),
             _ => None,
         }
     }
@@ -108,7 +110,7 @@ impl PgError {
     /// Get the detail from the server, if available.
     pub fn detail(&self) -> Option<&str> {
         match self {
-            PgError::Server { detail, .. } => detail.as_deref(),
+            PgError::Server(err) => err.detail.as_deref(),
             _ => None,
         }
     }
@@ -156,7 +158,7 @@ impl PgError {
             }
         }
 
-        PgError::Server {
+        PgError::Server(Box::new(ServerError {
             severity,
             code,
             message,
@@ -174,7 +176,7 @@ impl PgError {
             file,
             line,
             routine,
-        }
+        }))
     }
 }
 
@@ -216,19 +218,12 @@ impl std::fmt::Display for PgError {
             PgError::Io(e) => write!(f, "I/O error: {}", e),
             PgError::Protocol(msg) => write!(f, "Protocol error: {}", msg),
             PgError::Auth(msg) => write!(f, "Auth error: {}", msg),
-            PgError::Server {
-                severity,
-                code,
-                message,
-                detail,
-                hint,
-                ..
-            } => {
-                write!(f, "PG {}: {} ({})", severity, message, code)?;
-                if let Some(d) = detail {
+            PgError::Server(err) => {
+                write!(f, "PG {}: {} ({})", err.severity, err.message, err.code)?;
+                if let Some(d) = &err.detail {
                     write!(f, "\n  Detail: {}", d)?;
                 }
-                if let Some(h) = hint {
+                if let Some(h) = &err.hint {
                     write!(f, "\n  Hint: {}", h)?;
                 }
                 Ok(())
@@ -251,6 +246,26 @@ impl std::error::Error for PgError {}
 
 pub type PgResult<T> = Result<T, PgError>;
 
+/// Retry helper: executes an operation with exponential backoff on transient errors.
+pub fn retry<F, T>(max_retries: u32, mut f: F) -> PgResult<T>
+where
+    F: FnMut() -> PgResult<T>,
+{
+    let mut attempts = 0;
+    loop {
+        match f() {
+            Ok(val) => return Ok(val),
+            Err(e) if e.is_transient() && attempts < max_retries => {
+                attempts += 1;
+                // Exponential backoff: 1ms, 2ms, 4ms, 8ms, ...
+                let delay = std::time::Duration::from_millis(1 << attempts.min(10));
+                std::thread::sleep(delay);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,7 +274,10 @@ mod tests {
 
     #[test]
     fn test_io_error_is_transient() {
-        let e = PgError::Io(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "broken pipe"));
+        let e = PgError::Io(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "broken pipe",
+        ));
         assert_eq!(e.classify(), ErrorClass::Transient);
         assert!(e.is_transient());
     }
@@ -287,7 +305,10 @@ mod tests {
 
     #[test]
     fn test_type_conversion_is_client() {
-        assert_eq!(PgError::TypeConversion("bad".to_string()).classify(), ErrorClass::Client);
+        assert_eq!(
+            PgError::TypeConversion("bad".to_string()).classify(),
+            ErrorClass::Client
+        );
         assert!(!PgError::TypeConversion("bad".to_string()).is_transient());
     }
 
@@ -326,28 +347,44 @@ mod tests {
 
     #[test]
     fn test_protocol_error_is_permanent() {
-        assert_eq!(PgError::Protocol("bad".to_string()).classify(), ErrorClass::Permanent);
+        assert_eq!(
+            PgError::Protocol("bad".to_string()).classify(),
+            ErrorClass::Permanent
+        );
         assert!(!PgError::Protocol("bad".to_string()).is_transient());
     }
 
     #[test]
     fn test_auth_error_is_permanent() {
-        assert_eq!(PgError::Auth("denied".to_string()).classify(), ErrorClass::Permanent);
+        assert_eq!(
+            PgError::Auth("denied".to_string()).classify(),
+            ErrorClass::Permanent
+        );
         assert!(!PgError::Auth("denied".to_string()).is_transient());
     }
 
     // ─── SQLSTATE Classification ──────────────────────────────────────────────
 
     fn server_err(code: &str) -> PgError {
-        PgError::Server {
+        PgError::Server(Box::new(ServerError {
             severity: "ERROR".to_string(),
             code: code.to_string(),
             message: "test".to_string(),
-            detail: None, hint: None, position: None, internal_position: None,
-            internal_query: None, where_: None, schema_name: None,
-            table_name: None, column_name: None, data_type_name: None,
-            constraint_name: None, file: None, line: None, routine: None,
-        }
+            detail: None,
+            hint: None,
+            position: None,
+            internal_position: None,
+            internal_query: None,
+            where_: None,
+            schema_name: None,
+            table_name: None,
+            column_name: None,
+            data_type_name: None,
+            constraint_name: None,
+            file: None,
+            line: None,
+            routine: None,
+        }))
     }
 
     #[test]
@@ -430,19 +467,16 @@ mod tests {
             (b'n', "users_pkey".to_string()),
         ];
         let e = PgError::from_fields(&fields);
-        if let PgError::Server {
-            severity, code, message, detail, hint,
-            position, schema_name, table_name, constraint_name, ..
-        } = e {
-            assert_eq!(severity, "ERROR");
-            assert_eq!(code, "42601");
-            assert_eq!(message, "syntax error at position 5");
-            assert_eq!(detail, Some("near SELECT".to_string()));
-            assert_eq!(hint, Some("check your query".to_string()));
-            assert_eq!(position, Some(5));
-            assert_eq!(schema_name, Some("public".to_string()));
-            assert_eq!(table_name, Some("users".to_string()));
-            assert_eq!(constraint_name, Some("users_pkey".to_string()));
+        if let PgError::Server(err) = e {
+            assert_eq!(err.severity, "ERROR");
+            assert_eq!(err.code, "42601");
+            assert_eq!(err.message, "syntax error at position 5");
+            assert_eq!(err.detail, Some("near SELECT".to_string()));
+            assert_eq!(err.hint, Some("check your query".to_string()));
+            assert_eq!(err.position, Some(5));
+            assert_eq!(err.schema_name, Some("public".to_string()));
+            assert_eq!(err.table_name, Some("users".to_string()));
+            assert_eq!(err.constraint_name, Some("users_pkey".to_string()));
         } else {
             panic!("Expected Server variant");
         }
@@ -456,10 +490,10 @@ mod tests {
             (b'M', "unknown error".to_string()),
         ];
         let e = PgError::from_fields(&fields);
-        if let PgError::Server { detail, hint, position, .. } = e {
-            assert!(detail.is_none());
-            assert!(hint.is_none());
-            assert!(position.is_none());
+        if let PgError::Server(err) = e {
+            assert!(err.detail.is_none());
+            assert!(err.hint.is_none());
+            assert!(err.position.is_none());
         } else {
             panic!("Expected Server variant");
         }
@@ -475,23 +509,32 @@ mod tests {
             (b'Z', "ignored".to_string()),
         ];
         let e = PgError::from_fields(&fields);
-        assert!(matches!(e, PgError::Server { .. }));
+        assert!(matches!(e, PgError::Server(_)));
     }
 
     // ─── Display Format ───────────────────────────────────────────────────────
 
     #[test]
     fn test_display_server_includes_message_code_detail() {
-        let e = PgError::Server {
+        let e = PgError::Server(Box::new(ServerError {
             severity: "ERROR".to_string(),
             code: "42601".to_string(),
             message: "syntax error here".to_string(),
             detail: Some("bad token".to_string()),
-            hint: None, position: None, internal_position: None,
-            internal_query: None, where_: None, schema_name: None,
-            table_name: None, column_name: None, data_type_name: None,
-            constraint_name: None, file: None, line: None, routine: None,
-        };
+            hint: None,
+            position: None,
+            internal_position: None,
+            internal_query: None,
+            where_: None,
+            schema_name: None,
+            table_name: None,
+            column_name: None,
+            data_type_name: None,
+            constraint_name: None,
+            file: None,
+            line: None,
+            routine: None,
+        }));
         let s = format!("{}", e);
         assert!(s.contains("syntax error here"), "missing message: {}", s);
         assert!(s.contains("42601"), "missing code: {}", s);
@@ -503,7 +546,7 @@ mod tests {
         let e = server_err("42601");
         let s = format!("{}", e);
         // Just confirms Display works without panicking
-        assert!(s.len() > 0);
+        assert!(!s.is_empty());
     }
 
     #[test]
@@ -557,7 +600,10 @@ mod tests {
     #[test]
     fn test_retry_no_retries_on_success() {
         let mut calls = 0;
-        let result = retry(3, || { calls += 1; Ok::<i32, PgError>(1) });
+        let result = retry(3, || {
+            calls += 1;
+            Ok::<i32, PgError>(1)
+        });
         assert_eq!(result.unwrap(), 1);
         assert_eq!(calls, 1);
     }
@@ -592,7 +638,8 @@ mod tests {
         let result = retry(0, || {
             calls += 1;
             Err::<i32, PgError>(PgError::Io(std::io::Error::new(
-                std::io::ErrorKind::ConnectionReset, "reset",
+                std::io::ErrorKind::ConnectionReset,
+                "reset",
             )))
         });
         assert!(result.is_err());
@@ -605,7 +652,8 @@ mod tests {
         let result = retry(2, || {
             calls += 1;
             Err::<i32, PgError>(PgError::Io(std::io::Error::new(
-                std::io::ErrorKind::ConnectionReset, "reset",
+                std::io::ErrorKind::ConnectionReset,
+                "reset",
             )))
         });
         assert!(result.is_err());
@@ -620,7 +668,8 @@ mod tests {
             calls += 1;
             if calls < 2 {
                 Err(PgError::Io(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionReset, "reset",
+                    std::io::ErrorKind::ConnectionReset,
+                    "reset",
                 )))
             } else {
                 Ok::<i32, PgError>(99)
@@ -633,35 +682,24 @@ mod tests {
     #[test]
     fn test_pool_errors_not_retried() {
         let mut calls = 0;
-        let _ = retry(5, || { calls += 1; Err::<(), PgError>(PgError::PoolTimeout) });
+        let _ = retry(5, || {
+            calls += 1;
+            Err::<(), PgError>(PgError::PoolTimeout)
+        });
         assert_eq!(calls, 1, "PoolTimeout must not be retried");
 
         calls = 0;
-        let _ = retry(5, || { calls += 1; Err::<(), PgError>(PgError::PoolExhausted) });
+        let _ = retry(5, || {
+            calls += 1;
+            Err::<(), PgError>(PgError::PoolExhausted)
+        });
         assert_eq!(calls, 1, "PoolExhausted must not be retried");
 
         calls = 0;
-        let _ = retry(5, || { calls += 1; Err::<(), PgError>(PgError::PoolValidationFailed) });
+        let _ = retry(5, || {
+            calls += 1;
+            Err::<(), PgError>(PgError::PoolValidationFailed)
+        });
         assert_eq!(calls, 1, "PoolValidationFailed must not be retried");
-    }
-}
-
-/// Retry helper: executes an operation with exponential backoff on transient errors.
-pub fn retry<F, T>(max_retries: u32, mut f: F) -> PgResult<T>
-where
-    F: FnMut() -> PgResult<T>,
-{
-    let mut attempts = 0;
-    loop {
-        match f() {
-            Ok(val) => return Ok(val),
-            Err(e) if e.is_transient() && attempts < max_retries => {
-                attempts += 1;
-                // Exponential backoff: 1ms, 2ms, 4ms, 8ms, ...
-                let delay = std::time::Duration::from_millis(1 << attempts.min(10));
-                std::thread::sleep(delay);
-            }
-            Err(e) => return Err(e),
-        }
     }
 }

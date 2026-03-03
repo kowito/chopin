@@ -14,11 +14,14 @@ pub use builder::QueryBuilder;
 pub mod error;
 pub use error::{OrmError, OrmResult};
 pub mod active_model;
-pub use active_model::{ActiveModelTrait, ActiveValue};
+pub use active_model::ActiveModel;
+pub mod migrations;
+pub use migrations::{Index, Migration, MigrationManager};
+pub mod mock;
+pub use mock::MockExecutor;
 
 pub trait Executor {
-    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToSql])
-    -> OrmResult<u64>;
+    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToSql]) -> OrmResult<u64>;
     fn query(
         &mut self,
         query: &str,
@@ -27,11 +30,7 @@ pub trait Executor {
 }
 
 impl Executor for PgPool {
-    fn execute(
-        &mut self,
-        query: &str,
-        params: &[&dyn chopin_pg::types::ToSql],
-    ) -> OrmResult<u64> {
+    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToSql]) -> OrmResult<u64> {
         self.get()
             .map_err(OrmError::from)?
             .execute(query, params)
@@ -72,11 +71,7 @@ impl<'a> Transaction<'a> {
 }
 
 impl<'a> Executor for Transaction<'a> {
-    fn execute(
-        &mut self,
-        query: &str,
-        params: &[&dyn chopin_pg::types::ToSql],
-    ) -> OrmResult<u64> {
+    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToSql]) -> OrmResult<u64> {
         self.conn.execute(query, params).map_err(OrmError::from)
     }
 
@@ -111,10 +106,20 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
     /// Returns the literal raw SQL column definitions (name, type) for auto-migrations
     fn column_definitions() -> Vec<(&'static str, &'static str)>;
 
+    /// Returns the list of indexes to natively enforce during migrations
+    fn indexes() -> Vec<Index> {
+        vec![]
+    }
+
     /// Execute the CREATE TABLE statement against the database
     fn create_table(executor: &mut impl Executor) -> OrmResult<()> {
         executor.execute(&Self::create_table_stmt(), &[])?;
         Ok(())
+    }
+
+    /// Instantiate a `QueryBuilder` for this model dynamically.
+    fn find() -> QueryBuilder<Self> {
+        QueryBuilder::new()
     }
 
     /// Automatically diffs and migrates the table schema based on structural column metadata
@@ -122,7 +127,8 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
         Self::create_table(executor)?;
 
         // check existing columns
-        let db_cols_query = "SELECT column_name FROM information_schema.columns WHERE table_name = $1";
+        let db_cols_query =
+            "SELECT column_name FROM information_schema.columns WHERE table_name = $1";
         let table_name = Self::table_name();
         let params: Vec<&dyn chopin_pg::types::ToSql> = vec![&table_name];
         let rows = executor.query(db_cols_query, &params)?;
@@ -137,10 +143,31 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
         let definitions = Self::column_definitions();
         for (col_name, col_def) in definitions {
             if !existing_cols.contains(&col_name.to_string()) {
-                let alter_stmt = format!("ALTER TABLE {} ADD COLUMN {} {}", Self::table_name(), col_name, col_def);
+                let alter_stmt = format!(
+                    "ALTER TABLE {} ADD COLUMN {} {}",
+                    Self::table_name(),
+                    col_name,
+                    col_def
+                );
                 executor.execute(&alter_stmt, &[])?;
-                println!("Auto-Migrated {}: added column {}", Self::table_name(), col_name);
+                println!(
+                    "Auto-Migrated {}: added column {}",
+                    Self::table_name(),
+                    col_name
+                );
             }
+        }
+
+        for idx in Self::indexes() {
+            let unique = if idx.unique { "UNIQUE " } else { "" };
+            let create_idx = format!(
+                "CREATE {}INDEX IF NOT EXISTS {} ON {} ({})",
+                unique,
+                idx.name,
+                Self::table_name(),
+                idx.columns.join(", ")
+            );
+            executor.execute(&create_idx, &[])?;
         }
 
         Ok(())
@@ -149,7 +176,10 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
     /// Insert the model into the database. Retrieves generated columns.
     fn insert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
         if let Err(errors) = self.validate() {
-            return Err(OrmError::ModelError(format!("Validation failed: {}", errors.join(", "))));
+            return Err(OrmError::ModelError(format!(
+                "Validation failed: {}",
+                errors.join(", ")
+            )));
         }
         let all_cols = Self::columns();
         let gen_cols = Self::generated_columns();
@@ -167,9 +197,9 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
 
         let bindings: Vec<String> = (1..=cols.len()).map(|i| format!("${}", i)).collect();
         let returning = if gen_cols.is_empty() {
-             "".to_string()
+            "".to_string()
         } else {
-             format!(" RETURNING {}", gen_cols.join(", "))
+            format!(" RETURNING {}", gen_cols.join(", "))
         };
 
         let query = format!(
@@ -201,14 +231,19 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
     /// Insert the model or update it if the primary key conflicts
     fn upsert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
         if let Err(errors) = self.validate() {
-            return Err(OrmError::ModelError(format!("Validation failed: {}", errors.join(", "))));
+            return Err(OrmError::ModelError(format!(
+                "Validation failed: {}",
+                errors.join(", ")
+            )));
         }
         let all_cols = Self::columns();
         let pk_cols = Self::primary_key_columns();
         let gen_cols = Self::generated_columns();
 
         if pk_cols.is_empty() {
-            return Err(OrmError::ModelError("Cannot upsert without primary keys".to_string()));
+            return Err(OrmError::ModelError(
+                "Cannot upsert without primary keys".to_string(),
+            ));
         }
 
         let mut cols = Vec::new();
@@ -225,7 +260,7 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
         }
 
         let bindings: Vec<String> = (1..=cols.len()).map(|i| format!("${}", i)).collect();
-        
+
         // EXCLUDED is a postgres keyword referring to the row proposed for insertion
         let on_conflict = if set_clauses.is_empty() {
             "DO NOTHING".to_string()
@@ -234,9 +269,9 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
         };
 
         let returning = if gen_cols.is_empty() {
-             "".to_string()
+            "".to_string()
         } else {
-             format!(" RETURNING {}", gen_cols.join(", "))
+            format!(" RETURNING {}", gen_cols.join(", "))
         };
 
         let query = format!(
@@ -268,17 +303,24 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
     }
 
     /// Partially update the model, persisting only the specified columns to the database.
-    fn update_columns(&self, executor: &mut impl Executor, update_columns: &[&str]) -> OrmResult<Self> {
+    fn update_columns(
+        &self,
+        executor: &mut impl Executor,
+        update_columns: &[&str],
+    ) -> OrmResult<Self> {
         if let Err(errors) = self.validate() {
-            return Err(OrmError::ModelError(format!("Validation failed: {}", errors.join(", "))));
+            return Err(OrmError::ModelError(format!(
+                "Validation failed: {}",
+                errors.join(", ")
+            )));
         }
         let all_columns = Self::columns();
         let all_values = self.get_values();
-        
+
         let mut set_clauses = Vec::new();
         let mut query_values = Vec::new();
         let mut param_idx = 1;
-        
+
         for col in update_columns {
             if let Some(pos) = all_columns.iter().position(|c| c == col) {
                 set_clauses.push(format!("{} = ${}", col, param_idx));
@@ -288,22 +330,24 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
                 return Err(OrmError::ModelError(format!("Column not found: {}", col)));
             }
         }
-        
+
         if set_clauses.is_empty() {
-             return Err(OrmError::ModelError("No valid columns provided for partial update".into()));
+            return Err(OrmError::ModelError(
+                "No valid columns provided for partial update".into(),
+            ));
         }
-        
+
         // Add primary key to WHERE clause
         let pk_cols = Self::primary_key_columns();
         let pk_vals = self.primary_key_values();
-        
+
         let mut where_clauses = Vec::new();
         for (i, pk_col) in pk_cols.iter().enumerate() {
             where_clauses.push(format!("{} = ${}", pk_col, param_idx));
             query_values.push(pk_vals[i].clone());
             param_idx += 1;
         }
-        
+
         let query = format!(
             "UPDATE {} SET {} WHERE {} RETURNING {}",
             Self::table_name(),
@@ -311,27 +355,35 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
             where_clauses.join(" AND "),
             Self::columns().join(", ")
         );
-        
-        let params_ref: Vec<&dyn chopin_pg::types::ToSql> = query_values.iter().map(|v| v as _).collect();
+
+        let params_ref: Vec<&dyn chopin_pg::types::ToSql> =
+            query_values.iter().map(|v| v as _).collect();
         let rows = executor.query(&query, &params_ref)?;
-        
+
         if let Some(row) = rows.first() {
-            Self::from_row(&row)
+            Self::from_row(row)
         } else {
-            Err(OrmError::ModelError("Update failed, no rows returned".into()))
+            Err(OrmError::ModelError(
+                "Update failed, no rows returned".into(),
+            ))
         }
     }
 
     /// Update the model in the database matching its primary key.
     fn update(&self, executor: &mut impl Executor) -> OrmResult<()> {
         if let Err(errors) = self.validate() {
-            return Err(OrmError::ModelError(format!("Validation failed: {}", errors.join(", "))));
+            return Err(OrmError::ModelError(format!(
+                "Validation failed: {}",
+                errors.join(", ")
+            )));
         }
         let cols = Self::columns();
         let pk_cols = Self::primary_key_columns();
 
         if pk_cols.is_empty() {
-            return Err(OrmError::ModelError("Cannot update without primary keys".to_string()));
+            return Err(OrmError::ModelError(
+                "Cannot update without primary keys".to_string(),
+            ));
         }
 
         let mut set_clauses = Vec::new();
@@ -366,7 +418,8 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
             where_clauses.join(" AND ")
         );
 
-        let params: Vec<&dyn chopin_pg::types::ToSql> = query_values.iter().map(|v| v as _).collect();
+        let params: Vec<&dyn chopin_pg::types::ToSql> =
+            query_values.iter().map(|v| v as _).collect();
         executor.execute(&query, &params)?;
         Ok(())
     }
@@ -375,14 +428,14 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
     fn delete(&self, executor: &mut impl Executor) -> OrmResult<()> {
         let pk_cols = Self::primary_key_columns();
         if pk_cols.is_empty() {
-            return Err(OrmError::ModelError("Cannot delete without primary keys".to_string()));
+            return Err(OrmError::ModelError(
+                "Cannot delete without primary keys".to_string(),
+            ));
         }
 
         let mut where_clauses = Vec::new();
-        let mut idx = 1;
-        for pk_col in pk_cols {
+        for (idx, pk_col) in (1..).zip(pk_cols.iter()) {
             where_clauses.push(format!("{} = ${}", pk_col, idx));
-            idx += 1;
         }
 
         let query = format!(
@@ -502,5 +555,62 @@ impl<T: ExtractValue> ExtractValue for Option<T> {
             return Ok(None);
         }
         T::from_pg_value(val).map(Some)
+    }
+}
+
+pub trait HasForeignKey<M: Model> {
+    fn foreign_key_info() -> (&'static str, &'static str);
+}
+
+/// A transparent middleware executor that intercepts queries and parameters.
+///
+/// Under the `log` feature flag, this emits `tracing` debug logs containing executed SQL,
+/// elapsed execution time, and parameter payload metrics.
+pub struct LoggedExecutor<'a, E: Executor> {
+    pub inner: &'a mut E,
+}
+
+impl<'a, E: Executor> LoggedExecutor<'a, E> {
+    /// Wraps an existing `Executor` (like `PgConnection` or `PgPool`) in logging telemetry.
+    pub fn new(executor: &'a mut E) -> Self {
+        Self { inner: executor }
+    }
+}
+
+impl<'a, E: Executor> Executor for LoggedExecutor<'a, E> {
+    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToSql]) -> OrmResult<u64> {
+        let start = std::time::Instant::now();
+        let res = self.inner.execute(query, params);
+        let elapsed = start.elapsed();
+        #[cfg(feature = "log")]
+        log::debug!(
+            "execute ({}ms): {} | params: {:?}",
+            elapsed.as_millis(),
+            query,
+            params.len()
+        );
+        #[cfg(not(feature = "log"))]
+        let _ = elapsed;
+        res
+    }
+
+    fn query(
+        &mut self,
+        query: &str,
+        params: &[&dyn chopin_pg::types::ToSql],
+    ) -> OrmResult<Vec<chopin_pg::Row>> {
+        let start = std::time::Instant::now();
+        let res = self.inner.query(query, params);
+        let elapsed = start.elapsed();
+        #[cfg(feature = "log")]
+        log::debug!(
+            "query ({}ms): {} | params: {:?}",
+            elapsed.as_millis(),
+            query,
+            params.len()
+        );
+        #[cfg(not(feature = "log"))]
+        let _ = elapsed;
+        res
     }
 }

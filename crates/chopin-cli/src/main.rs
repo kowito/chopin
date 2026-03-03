@@ -6,8 +6,8 @@ mod check;
 mod config;
 mod deploy;
 mod generate;
-mod openapi;
 mod migrations;
+mod openapi;
 
 #[derive(Parser)]
 #[command(name = "chopin")]

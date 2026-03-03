@@ -228,22 +228,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         generate_app(dir.path(), "widget").unwrap();
         let app_dir = dir.path().join("src/apps/widget");
-        assert!(app_dir.join("mod.rs").exists(),     "mod.rs missing");
-        assert!(app_dir.join("models.rs").exists(),  "models.rs missing");
-        assert!(app_dir.join("services.rs").exists(),"services.rs missing");
-        assert!(app_dir.join("errors.rs").exists(),  "errors.rs missing");
-        assert!(app_dir.join("handlers.rs").exists(),"handlers.rs missing");
-        assert!(app_dir.join("tests.rs").exists(),   "tests.rs missing");
+        assert!(app_dir.join("mod.rs").exists(), "mod.rs missing");
+        assert!(app_dir.join("models.rs").exists(), "models.rs missing");
+        assert!(app_dir.join("services.rs").exists(), "services.rs missing");
+        assert!(app_dir.join("errors.rs").exists(), "errors.rs missing");
+        assert!(app_dir.join("handlers.rs").exists(), "handlers.rs missing");
+        assert!(app_dir.join("tests.rs").exists(), "tests.rs missing");
     }
 
     #[test]
     fn test_generate_app_model_contains_pascal_name() {
         let dir = tempfile::tempdir().unwrap();
         generate_app(dir.path(), "order_item").unwrap();
-        let models = std::fs::read_to_string(
-            dir.path().join("src/apps/order_item/models.rs")
-        ).unwrap();
-        assert!(models.contains("OrderItem"), "model struct should be PascalCase");
+        let models =
+            std::fs::read_to_string(dir.path().join("src/apps/order_item/models.rs")).unwrap();
+        assert!(
+            models.contains("OrderItem"),
+            "model struct should be PascalCase"
+        );
     }
 
     #[test]

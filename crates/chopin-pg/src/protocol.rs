@@ -326,7 +326,10 @@ mod tests {
 
     #[test]
     fn test_tx_status_in_transaction() {
-        assert_eq!(TransactionStatus::from(b'T'), TransactionStatus::InTransaction);
+        assert_eq!(
+            TransactionStatus::from(b'T'),
+            TransactionStatus::InTransaction
+        );
     }
 
     #[test]
@@ -344,7 +347,10 @@ mod tests {
     #[test]
     fn test_tx_status_debug() {
         assert_eq!(format!("{:?}", TransactionStatus::Idle), "Idle");
-        assert_eq!(format!("{:?}", TransactionStatus::InTransaction), "InTransaction");
+        assert_eq!(
+            format!("{:?}", TransactionStatus::InTransaction),
+            "InTransaction"
+        );
         assert_eq!(format!("{:?}", TransactionStatus::Failed), "Failed");
     }
 
@@ -454,7 +460,11 @@ mod tests {
         ];
         for &(byte, ref expected) in pairs {
             let got = BackendTag::from(byte);
-            assert_eq!(&got, expected, "byte {:#04x} should map to {:?}", byte, expected);
+            assert_eq!(
+                &got, expected,
+                "byte {:#04x} should map to {:?}",
+                byte, expected
+            );
         }
     }
 }

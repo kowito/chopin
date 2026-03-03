@@ -39,7 +39,11 @@ mod tests {
         assert!(result.is_ok(), "hash_password should return Ok");
         let hash = result.unwrap();
         // Argon2id PHC string format starts with $argon2
-        assert!(hash.starts_with("$argon2"), "unexpected hash format: {}", hash);
+        assert!(
+            hash.starts_with("$argon2"),
+            "unexpected hash format: {}",
+            hash
+        );
     }
 
     #[test]
@@ -67,7 +71,10 @@ mod tests {
         // Each call uses a fresh random salt
         let h1 = hash_password(b"same-pass").unwrap();
         let h2 = hash_password(b"same-pass").unwrap();
-        assert_ne!(h1, h2, "two hashes of the same password must differ (random salt)");
+        assert_ne!(
+            h1, h2,
+            "two hashes of the same password must differ (random salt)"
+        );
     }
 
     #[test]

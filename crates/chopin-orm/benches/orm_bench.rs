@@ -1,4 +1,4 @@
-use chopin_orm::Model;
+use chopin_orm::{Model, Validate};
 use chopin_pg::{PgConfig, PgPool};
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
@@ -11,40 +11,41 @@ pub struct BenchUser {
     pub age: i32,
 }
 
+impl Validate for BenchUser {}
+
 fn setup_db(count: i32) -> PgPool {
     let config = PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
     let mut pool = PgPool::connect(config, 1).unwrap();
 
-    let conn = pool.get().unwrap();
-    conn.execute("DROP TABLE IF EXISTS bench_users", &[])
+    {
+        let mut conn = pool.get().unwrap();
+        conn.execute("DROP TABLE IF EXISTS bench_users", &[])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE bench_users (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                age INT NOT NULL
+            )",
+            &[],
+        )
         .unwrap();
-    conn.execute(
-        "CREATE TABLE bench_users (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            age INT NOT NULL
-        )",
-        &[],
-    )
-    .unwrap();
 
-    // Batch insert for speed
-    if count > 0 {
-        // Simple batch insert logic for benchmarking setup
-        // For 1M rows, we might want to use COPY or multiple large batches
-        // But for benchmark setup consistency, we'll do reasonably sized batches
-        let batch_size = 5000;
-        for i in (0..count).step_by(batch_size) {
-            let end = (i + batch_size as i32).min(count);
-            let mut query = String::from("INSERT INTO bench_users (name, age) VALUES ");
-            let mut val_strings = Vec::new();
-            for j in i..end {
-                val_strings.push(format!("('User {}', {})", j, j));
+        // Batch insert for speed
+        if count > 0 {
+            let batch_size = 5000;
+            for i in (0..count).step_by(batch_size) {
+                let end = (i + batch_size as i32).min(count);
+                let mut query = String::from("INSERT INTO bench_users (name, age) VALUES ");
+                let mut val_strings = Vec::new();
+                for j in i..end {
+                    val_strings.push(format!("('User {}', {})", j, j));
+                }
+                query.push_str(&val_strings.join(", "));
+                conn.execute(&query, &[]).unwrap();
             }
-            query.push_str(&val_strings.join(", "));
-            conn.execute(&query, &[]).unwrap();
         }
-    }
+    } // conn dropped here, returned to pool
     pool
 }
 
@@ -59,7 +60,7 @@ fn bench_scale(c: &mut Criterion) {
 
         group.bench_function("raw_pg", |b| {
             b.iter(|| {
-                let conn = pool.get().unwrap();
+                let mut conn = pool.get().unwrap();
                 let rows = conn
                     .query("SELECT id, name, age FROM bench_users", &[])
                     .unwrap();
@@ -95,7 +96,7 @@ fn bench_1m(c: &mut Criterion) {
 
     group.bench_function("raw_pg", |b| {
         b.iter(|| {
-            let conn = pool.get().unwrap();
+            let mut conn = pool.get().unwrap();
             let rows = conn
                 .query("SELECT id, name, age FROM bench_users", &[])
                 .unwrap();

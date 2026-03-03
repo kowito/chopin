@@ -42,7 +42,7 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 - **Zero-Copy File Serving**: `Response::file(path)` uses platform `sendfile` (Linux/macOS) with automatic MIME detection (~30 types).
 - **writev Body Flush**: Headers and response body are flushed in a single `writev` syscall, eliminating the memcpy into the write buffer.
 - **Pre-Composed Middleware**: Middleware chains are composed once at startup; zero `Arc::new` allocations on the hot request path.
-- **Database (PostgreSQL)**: `chopin-pg` (low-level driver) and `chopin-orm` (zero-allocation ORM) with per-worker connection pooling.
+- **Database (PostgreSQL)**: `chopin-pg` — zero-dependency PostgreSQL driver with SCRAM-SHA-256 auth, 22 types, binary wire format, COPY protocol, LISTEN/NOTIFY, connection pooling, and 362 unit tests. `chopin-orm` — type-safe ORM with derive-macro models, column DSL, relationships, auto-migration, pagination, and ActiveModel partial updates.
 - **Authentication**: `chopin-auth` provides JWT, password hashing, and role-based access control.
 - **Panic Resilience**: `catch_unwind` protection ensures a handler panic doesn't crash the worker thread.
 - **Production-Ready**: Default HTTP/1.1 keep-alive, graceful shutdown, and O(1) connection pruning.

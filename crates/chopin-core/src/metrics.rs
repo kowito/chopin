@@ -109,8 +109,11 @@ mod tests {
 
     #[test]
     fn test_struct_align_is_64() {
-        assert_eq!(std::mem::align_of::<WorkerMetrics>(), 64,
-            "WorkerMetrics must be 64-byte aligned (one full cache line)");
+        assert_eq!(
+            std::mem::align_of::<WorkerMetrics>(),
+            64,
+            "WorkerMetrics must be 64-byte aligned (one full cache line)"
+        );
     }
 
     // ─── multi-threaded correctness ───────────────────────────────────────────
@@ -128,7 +131,9 @@ mod tests {
                 }
             }));
         }
-        for h in handles { h.join().unwrap(); }
+        for h in handles {
+            h.join().unwrap();
+        }
         assert_eq!(m.req_count.load(Ordering::Relaxed), 8_000);
     }
 }

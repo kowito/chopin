@@ -342,8 +342,7 @@ fn test_active_model_partial_update() {
     }
     impl chopin_orm::Validate for ActiveTest {}
 
-    use chopin_orm::ActiveModelTrait;
-    use chopin_orm::ActiveValue;
+    use chopin_orm::active_model::ActiveModel;
 
     // 1. Insert initial record
     let mut model = ActiveTest {
@@ -354,27 +353,24 @@ fn test_active_model_partial_update() {
     model.insert(&mut pool).unwrap();
 
     // 2. Convert to ActiveModel and perform partial update
-    let mut active_model: ActiveTestActiveModel = model.clone().into();
-    
+    let mut active_model: ActiveModel<ActiveTest> = model.clone().into();
+
     // Only set 'age'
-    active_model.age = ActiveValue::Set(25);
-    // Mark 'name' as NotSet (should not be included in UPDATE)
-    active_model.name = ActiveValue::NotSet;
+    active_model.set("age", 25);
 
-    let updated_model = active_model.update(&mut pool).unwrap();
+    active_model.update(&mut pool).unwrap();
+    let updated_model = active_model.inner;
 
-    // Verify 'age' was updated but 'name' stayed the same (since it was NotSet but was Unchanged initially?)
-    // Wait, if I set it to NotSet, it won't be in the UPDATE clause.
-    // If it was already in the DB, it stays as is.
+    // Verify 'age' was updated but 'name' stayed the same
     assert_eq!(updated_model.age, 25);
     assert_eq!(updated_model.name, "Initial");
 
     // 3. Test with another partial update
-    let mut active_model2: ActiveTestActiveModel = updated_model.into();
-    active_model2.name = ActiveValue::Set("Updated Name".to_string());
-    active_model2.age = ActiveValue::NotSet;
+    let mut active_model2: ActiveModel<ActiveTest> = updated_model.into();
+    active_model2.set("name", "Updated Name".to_string());
 
-    let final_model = active_model2.update(&mut pool).unwrap();
+    active_model2.update(&mut pool).unwrap();
+    let final_model = active_model2.inner;
     assert_eq!(final_model.name, "Updated Name");
     assert_eq!(final_model.age, 25);
 }
@@ -405,7 +401,8 @@ fn test_schema_introspection() {
     {
         let mut conn = pool.get().unwrap();
         // Drop it first to ensure clean state
-        conn.execute("DROP TABLE IF EXISTS orm_introspection_test", &[]).unwrap();
+        conn.execute("DROP TABLE IF EXISTS orm_introspection_test", &[])
+            .unwrap();
     }
 
     // Now create it natively using the ORM's trait method
@@ -441,19 +438,29 @@ fn test_aggregations() {
 
     {
         let mut conn = pool.get().unwrap();
-        conn.execute("DROP TABLE IF EXISTS orm_agg_test", &[]).unwrap();
+        conn.execute("DROP TABLE IF EXISTS orm_agg_test", &[])
+            .unwrap();
     }
     AggTest::create_table(&mut pool).unwrap();
 
     // Insert data
     let data = vec![
-        (1, 10), (1, 20), (1, 30), // Group 1, sum: 60, count: 3, max: 30
-        (2, 5), (2, 5),          // Group 2, sum: 10, count: 2, max: 5
-        (3, 100)                 // Group 3, sum: 100, count: 1, max: 100
+        (1, 10),
+        (1, 20),
+        (1, 30), // Group 1, sum: 60, count: 3, max: 30
+        (2, 5),
+        (2, 5),   // Group 2, sum: 10, count: 2, max: 5
+        (3, 100), // Group 3, sum: 100, count: 1, max: 100
     ];
 
     for (g, s) in data {
-        AggTest { id: 0, group_id: g, score: s }.insert(&mut pool).unwrap();
+        AggTest {
+            id: 0,
+            group_id: g,
+            score: s,
+        }
+        .insert(&mut pool)
+        .unwrap();
     }
 
     // Test specific aggregation: SELECT group_id, SUM(score) FROM table GROUP BY group_id HAVING SUM(score) > 50 ORDER BY group_id ASC
@@ -463,7 +470,10 @@ fn test_aggregations() {
             AggTestColumn::score.sum(),
         ])
         .group_by("group_id")
-        .having(chopin_orm::builder::Expr::new("SUM(score) > {}", vec![50i64.to_param()]))
+        .having(chopin_orm::builder::Expr::new(
+            "SUM(score) > {}",
+            vec![50i64.to_param()],
+        ))
         .order_by("group_id ASC")
         .into_raw(&mut pool)
         .unwrap();
@@ -471,13 +481,29 @@ fn test_aggregations() {
     // Expecting Group 1 (sum 60) and Group 3 (sum 100)
     assert_eq!(raw_rows.len(), 2);
 
-    let g1 = if let chopin_pg::PgValue::Int4(v) = raw_rows[0].get(0).unwrap() { v } else { panic!("Wrong type") };
-    let s1 = if let chopin_pg::PgValue::Int8(v) = raw_rows[0].get(1).unwrap() { v } else { panic!("Wrong type") };
+    let g1 = if let chopin_pg::PgValue::Int4(v) = raw_rows[0].get(0).unwrap() {
+        v
+    } else {
+        panic!("Wrong type")
+    };
+    let s1 = if let chopin_pg::PgValue::Int8(v) = raw_rows[0].get(1).unwrap() {
+        v
+    } else {
+        panic!("Wrong type")
+    };
     assert_eq!(g1, 1);
     assert_eq!(s1, 60);
 
-    let g3 = if let chopin_pg::PgValue::Int4(v) = raw_rows[1].get(0).unwrap() { v } else { panic!("Wrong type") };
-    let s3 = if let chopin_pg::PgValue::Int8(v) = raw_rows[1].get(1).unwrap() { v } else { panic!("Wrong type") };
+    let g3 = if let chopin_pg::PgValue::Int4(v) = raw_rows[1].get(0).unwrap() {
+        v
+    } else {
+        panic!("Wrong type")
+    };
+    let s3 = if let chopin_pg::PgValue::Int8(v) = raw_rows[1].get(1).unwrap() {
+        v
+    } else {
+        panic!("Wrong type")
+    };
     assert_eq!(g3, 3);
     assert_eq!(s3, 100);
 }
@@ -511,7 +537,8 @@ fn test_relationships() {
     {
         let mut conn = pool.get().unwrap();
         conn.execute("DROP TABLE IF EXISTS orm_posts", &[]).unwrap();
-        conn.execute("DROP TABLE IF EXISTS orm_authors", &[]).unwrap();
+        conn.execute("DROP TABLE IF EXISTS orm_authors", &[])
+            .unwrap();
     }
 
     let author_stmt = Author::create_table_stmt();
@@ -524,10 +551,17 @@ fn test_relationships() {
     Author::create_table(&mut pool).unwrap();
     RelPost::create_table(&mut pool).unwrap();
 
-    let mut a1 = Author { id: 0, name: "Alice".to_string() };
+    let mut a1 = Author {
+        id: 0,
+        name: "Alice".to_string(),
+    };
     a1.insert(&mut pool).unwrap();
-    
-    let mut p1 = RelPost { id: 0, title: "Alice First Post".to_string(), author_id: a1.id };
+
+    let mut p1 = RelPost {
+        id: 0,
+        title: "Alice First Post".to_string(),
+        author_id: a1.id,
+    };
     p1.insert(&mut pool).unwrap();
 
     // Custom JOIN Test
@@ -541,10 +575,18 @@ fn test_relationships() {
         .unwrap();
 
     assert_eq!(raw.len(), 1);
-    
-    let post_title = if let chopin_pg::PgValue::Text(ref s) = raw[0].get(0).unwrap() { s.clone() } else { panic!() };
-    let author_name = if let chopin_pg::PgValue::Text(ref s) = raw[0].get(1).unwrap() { s.clone() } else { panic!() };
-    
+
+    let post_title = if let chopin_pg::PgValue::Text(ref s) = raw[0].get(0).unwrap() {
+        s.clone()
+    } else {
+        panic!()
+    };
+    let author_name = if let chopin_pg::PgValue::Text(ref s) = raw[0].get(1).unwrap() {
+        s.clone()
+    } else {
+        panic!()
+    };
+
     assert_eq!(post_title, "Alice First Post");
     assert_eq!(author_name, "Alice");
 
@@ -584,14 +626,18 @@ fn test_auto_migrate_and_partial_updates() {
 
     {
         let mut conn = pool.get().unwrap();
-        conn.execute("DROP TABLE IF EXISTS orm_automigrate_test", &[]).unwrap();
+        conn.execute("DROP TABLE IF EXISTS orm_automigrate_test", &[])
+            .unwrap();
     }
 
     // Step 1: Create V1 table
     AutoMigrateV1::sync_schema(&mut pool).unwrap();
-    
+
     // Insert V1 data
-    let mut item1 = AutoMigrateV1 { id: 0, name: "V1 Item".to_string() };
+    let mut item1 = AutoMigrateV1 {
+        id: 0,
+        name: "V1 Item".to_string(),
+    };
     item1.insert(&mut pool).unwrap();
 
     // Step 2: Auto Migrate to V2 (adds 'age' column)
@@ -606,18 +652,18 @@ fn test_auto_migrate_and_partial_updates() {
     let mut item_to_update = found_v2.clone();
     item_to_update.age = Some(42);
     item_to_update.name = "Updated Name".to_string();
-    
-    // Only update 'age', name should remain unchanged in DB if we were using a raw query, 
+
+    // Only update 'age', name should remain unchanged in DB if we were using a raw query,
     // but update_columns uses the current values in the struct.
     // Wait, update_columns takes a list of columns to update.
     let updated = item_to_update.update_columns(&mut pool, &["age"]).unwrap();
-    
+
     assert_eq!(updated.age, Some(42));
     assert_eq!(updated.name, "V1 Item"); // Struct had "Updated Name", but we only pushed "age" literal to DB. 
-    // Wait, our update_columns implementation takes values from the struct. 
-    // So if item_to_update.name was "Updated Name", but we only updated "age", 
+    // Wait, our update_columns implementation takes values from the struct.
+    // So if item_to_update.name was "Updated Name", but we only updated "age",
     // the DB still has "V1 Item". The returned struct from `update_columns` should reflect the DB state.
-    
+
     let final_check = AutoMigrateV2::find().one(&mut pool).unwrap().unwrap();
     assert_eq!(final_check.age, Some(42));
     assert_eq!(final_check.name, "V1 Item");

@@ -79,7 +79,11 @@ pub enum PgValue {
     /// Timestamptz: microseconds since 2000-01-01 00:00:00 UTC.
     Timestamptz(i64),
     /// Interval: months, days, microseconds.
-    Interval { months: i32, days: i32, microseconds: i64 },
+    Interval {
+        months: i32,
+        days: i32,
+        microseconds: i64,
+    },
     /// Network address (stored as text representation).
     Inet(String),
     /// Numeric (stored as text representation for lossless precision).
@@ -87,7 +91,10 @@ pub enum PgValue {
     /// MAC address stored as 6 bytes.
     MacAddr([u8; 6]),
     /// 2D point: (x, y).
-    Point { x: f64, y: f64 },
+    Point {
+        x: f64,
+        y: f64,
+    },
     /// Range value (stored as text representation).
     /// Examples: `"[1,10)"`, `"[2024-01-01,2024-12-31]"`, `"empty"`.
     Range(String),
@@ -115,17 +122,20 @@ impl PgValue {
             PgValue::Time(us) => Some(format_time(*us).into_bytes()),
             PgValue::Timestamp(us) => Some(format_timestamp(*us).into_bytes()),
             PgValue::Timestamptz(us) => Some(format_timestamp_tz(*us).into_bytes()),
-            PgValue::Interval { months, days, microseconds } => {
-                Some(format_interval(*months, *days, *microseconds).into_bytes())
-            }
+            PgValue::Interval {
+                months,
+                days,
+                microseconds,
+            } => Some(format_interval(*months, *days, *microseconds).into_bytes()),
             PgValue::Inet(s) => Some(s.as_bytes().to_vec()),
             PgValue::Numeric(s) => Some(s.as_bytes().to_vec()),
-            PgValue::MacAddr(bytes) => {
-                Some(format!(
+            PgValue::MacAddr(bytes) => Some(
+                format!(
                     "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                     bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]
-                ).into_bytes())
-            }
+                )
+                .into_bytes(),
+            ),
             PgValue::Point { x, y } => Some(format!("({},{})", x, y).into_bytes()),
             PgValue::Range(s) => Some(s.as_bytes().to_vec()),
             PgValue::Array(values) => {
@@ -175,7 +185,11 @@ impl PgValue {
             PgValue::Date(days) => Some(days.to_be_bytes().to_vec()),
             PgValue::Time(us) => Some(us.to_be_bytes().to_vec()),
             PgValue::Timestamp(us) | PgValue::Timestamptz(us) => Some(us.to_be_bytes().to_vec()),
-            PgValue::Interval { months, days, microseconds } => {
+            PgValue::Interval {
+                months,
+                days,
+                microseconds,
+            } => {
                 let mut buf = Vec::with_capacity(16);
                 buf.extend_from_slice(&microseconds.to_be_bytes());
                 buf.extend_from_slice(&days.to_be_bytes());
@@ -288,7 +302,11 @@ impl PgValue {
             oid::TIMESTAMPTZ => Ok(PgValue::Timestamptz(parse_timestamp_text(s)?)),
             oid::INTERVAL => {
                 let (months, days, us) = parse_interval_text(s)?;
-                Ok(PgValue::Interval { months, days, microseconds: us })
+                Ok(PgValue::Interval {
+                    months,
+                    days,
+                    microseconds: us,
+                })
             }
             oid::INET | oid::CIDR => Ok(PgValue::Inet(s.to_string())),
             oid::MACADDR => {
@@ -301,10 +319,12 @@ impl PgValue {
                 let (x, y) = parse_point_text(s)?;
                 Ok(PgValue::Point { x, y })
             }
-            oid::INT4RANGE | oid::INT8RANGE | oid::NUMRANGE
-            | oid::TSRANGE | oid::TSTZRANGE | oid::DATERANGE => {
-                Ok(PgValue::Range(s.to_string()))
-            }
+            oid::INT4RANGE
+            | oid::INT8RANGE
+            | oid::NUMRANGE
+            | oid::TSRANGE
+            | oid::TSTZRANGE
+            | oid::DATERANGE => Ok(PgValue::Range(s.to_string())),
             _ => Ok(PgValue::Text(s.to_string())),
         }
     }
@@ -333,14 +353,12 @@ impl PgValue {
                 bytes.copy_from_slice(&data[..16]);
                 Ok(PgValue::Uuid(bytes))
             }
-            oid::DATE if data.len() >= 4 => {
-                Ok(PgValue::Date(i32::from_be_bytes([data[0], data[1], data[2], data[3]])))
-            }
-            oid::TIME if data.len() >= 8 => {
-                Ok(PgValue::Time(i64::from_be_bytes([
-                    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-                ])))
-            }
+            oid::DATE if data.len() >= 4 => Ok(PgValue::Date(i32::from_be_bytes([
+                data[0], data[1], data[2], data[3],
+            ]))),
+            oid::TIME if data.len() >= 8 => Ok(PgValue::Time(i64::from_be_bytes([
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+            ]))),
             oid::TIMESTAMP | oid::TIMESTAMPTZ if data.len() >= 8 => {
                 let us = i64::from_be_bytes([
                     data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
@@ -357,7 +375,11 @@ impl PgValue {
                 ]);
                 let days = i32::from_be_bytes([data[8], data[9], data[10], data[11]]);
                 let months = i32::from_be_bytes([data[12], data[13], data[14], data[15]]);
-                Ok(PgValue::Interval { months, days, microseconds })
+                Ok(PgValue::Interval {
+                    months,
+                    days,
+                    microseconds,
+                })
             }
             oid::JSONB => {
                 // First byte is version (1), rest is JSON
@@ -378,21 +400,25 @@ impl PgValue {
                 // data[2] = is_cidr flag (0 = INET, 1 = CIDR)
                 let addr_len = data[3] as usize;
                 if data.len() < 4 + addr_len {
-                    return Err(PgError::TypeConversion("INET/CIDR address truncated".into()));
+                    return Err(PgError::TypeConversion(
+                        "INET/CIDR address truncated".into(),
+                    ));
                 }
                 let addr_bytes = &data[4..4 + addr_len];
                 let addr_str = match family {
                     // AF_INET
                     2 if addr_len == 4 => {
-                        format!("{}.{}.{}.{}", addr_bytes[0], addr_bytes[1], addr_bytes[2], addr_bytes[3])
+                        format!(
+                            "{}.{}.{}.{}",
+                            addr_bytes[0], addr_bytes[1], addr_bytes[2], addr_bytes[3]
+                        )
                     }
                     // AF_INET6
-                    3 if addr_len == 16 => {
-                        format_ipv6(addr_bytes)
-                    }
+                    3 if addr_len == 16 => format_ipv6(addr_bytes),
                     _ => {
                         return Err(PgError::TypeConversion(format!(
-                            "Unknown INET family: {}", family
+                            "Unknown INET family: {}",
+                            family
                         )));
                     }
                 };
@@ -426,7 +452,9 @@ impl PgValue {
                     digits.push(u16::from_be_bytes([data[off], data[off + 1]]));
                 }
 
-                Ok(PgValue::Numeric(format_numeric_binary(weight, sign, dscale, &digits)))
+                Ok(PgValue::Numeric(format_numeric_binary(
+                    weight, sign, dscale, &digits,
+                )))
             }
             oid::MACADDR if data.len() >= 6 => {
                 let mut bytes = [0u8; 6];
@@ -442,10 +470,14 @@ impl PgValue {
                 ]);
                 Ok(PgValue::Point { x, y })
             }
-            oid::BOOL_ARRAY | oid::INT2_ARRAY | oid::INT4_ARRAY | oid::INT8_ARRAY
-            | oid::FLOAT4_ARRAY | oid::FLOAT8_ARRAY | oid::TEXT_ARRAY | oid::VARCHAR_ARRAY => {
-                parse_binary_array(data)
-            }
+            oid::BOOL_ARRAY
+            | oid::INT2_ARRAY
+            | oid::INT4_ARRAY
+            | oid::INT8_ARRAY
+            | oid::FLOAT4_ARRAY
+            | oid::FLOAT8_ARRAY
+            | oid::TEXT_ARRAY
+            | oid::VARCHAR_ARRAY => parse_binary_array(data),
             _ => {
                 // Fallback: treat as text
                 Ok(PgValue::Text(String::from_utf8_lossy(data).to_string()))
@@ -532,53 +564,93 @@ pub trait FromSql: Sized {
 // ─── ToSql Implementations ───────────────────────────────────
 
 impl ToSql for i16 {
-    fn to_sql(&self) -> PgValue { PgValue::Int2(*self) }
-    fn type_oid(&self) -> u32 { oid::INT2 }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Int2(*self)
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INT2
+    }
 }
 
 impl ToSql for i32 {
-    fn to_sql(&self) -> PgValue { PgValue::Int4(*self) }
-    fn type_oid(&self) -> u32 { oid::INT4 }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Int4(*self)
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INT4
+    }
 }
 
 impl ToSql for i64 {
-    fn to_sql(&self) -> PgValue { PgValue::Int8(*self) }
-    fn type_oid(&self) -> u32 { oid::INT8 }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Int8(*self)
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INT8
+    }
 }
 
 impl ToSql for f32 {
-    fn to_sql(&self) -> PgValue { PgValue::Float4(*self) }
-    fn type_oid(&self) -> u32 { oid::FLOAT4 }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Float4(*self)
+    }
+    fn type_oid(&self) -> u32 {
+        oid::FLOAT4
+    }
 }
 
 impl ToSql for f64 {
-    fn to_sql(&self) -> PgValue { PgValue::Float8(*self) }
-    fn type_oid(&self) -> u32 { oid::FLOAT8 }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Float8(*self)
+    }
+    fn type_oid(&self) -> u32 {
+        oid::FLOAT8
+    }
 }
 
 impl ToSql for bool {
-    fn to_sql(&self) -> PgValue { PgValue::Bool(*self) }
-    fn type_oid(&self) -> u32 { oid::BOOL }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Bool(*self)
+    }
+    fn type_oid(&self) -> u32 {
+        oid::BOOL
+    }
 }
 
 impl ToSql for &str {
-    fn to_sql(&self) -> PgValue { PgValue::Text(self.to_string()) }
-    fn type_oid(&self) -> u32 { oid::TEXT }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Text(self.to_string())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::TEXT
+    }
 }
 
 impl ToSql for String {
-    fn to_sql(&self) -> PgValue { PgValue::Text(self.clone()) }
-    fn type_oid(&self) -> u32 { oid::TEXT }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Text(self.clone())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::TEXT
+    }
 }
 
 impl ToSql for &[u8] {
-    fn to_sql(&self) -> PgValue { PgValue::Bytes(self.to_vec()) }
-    fn type_oid(&self) -> u32 { oid::BYTEA }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Bytes(self.to_vec())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::BYTEA
+    }
 }
 
 impl ToSql for Vec<u8> {
-    fn to_sql(&self) -> PgValue { PgValue::Bytes(self.clone()) }
-    fn type_oid(&self) -> u32 { oid::BYTEA }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Bytes(self.clone())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::BYTEA
+    }
 }
 
 impl<T: ToSql> ToSql for Option<T> {
@@ -599,97 +671,172 @@ impl ToSql for PgValue {
 // ─── Array ToSql Implementations ──────────────────────────────
 
 impl ToSql for Vec<i16> {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::INT2_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INT2_ARRAY
+    }
 }
 
 impl ToSql for Vec<i32> {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::INT4_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INT4_ARRAY
+    }
 }
 
 impl ToSql for Vec<i64> {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::INT8_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INT8_ARRAY
+    }
 }
 
 impl ToSql for Vec<f32> {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::FLOAT4_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::FLOAT4_ARRAY
+    }
 }
 
 impl ToSql for Vec<f64> {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::FLOAT8_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::FLOAT8_ARRAY
+    }
 }
 
 impl ToSql for Vec<bool> {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::BOOL_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::BOOL_ARRAY
+    }
 }
 
 impl ToSql for Vec<String> {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::TEXT_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::TEXT_ARRAY
+    }
 }
 
 impl ToSql for &[i16] {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::INT2_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INT2_ARRAY
+    }
 }
 
 impl ToSql for &[i32] {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::INT4_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INT4_ARRAY
+    }
 }
 
 impl ToSql for &[i64] {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::INT8_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INT8_ARRAY
+    }
 }
 
 impl ToSql for &[f32] {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::FLOAT4_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::FLOAT4_ARRAY
+    }
 }
 
 impl ToSql for &[f64] {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::FLOAT8_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::FLOAT8_ARRAY
+    }
 }
 
 impl ToSql for &[bool] {
-    fn to_sql(&self) -> PgValue { PgValue::Array(self.iter().map(|v| v.to_sql()).collect()) }
-    fn type_oid(&self) -> u32 { oid::BOOL_ARRAY }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Array(self.iter().map(|v| v.to_sql()).collect())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::BOOL_ARRAY
+    }
 }
 
 // ─── Network Type ToSql Implementations ───────────────────────
 
 impl ToSql for std::net::IpAddr {
-    fn to_sql(&self) -> PgValue { PgValue::Inet(self.to_string()) }
-    fn type_oid(&self) -> u32 { oid::INET }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Inet(self.to_string())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INET
+    }
 }
 
 impl ToSql for std::net::Ipv4Addr {
-    fn to_sql(&self) -> PgValue { PgValue::Inet(self.to_string()) }
-    fn type_oid(&self) -> u32 { oid::INET }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Inet(self.to_string())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INET
+    }
 }
 
 impl ToSql for std::net::Ipv6Addr {
-    fn to_sql(&self) -> PgValue { PgValue::Inet(self.to_string()) }
-    fn type_oid(&self) -> u32 { oid::INET }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Inet(self.to_string())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::INET
+    }
 }
 
 // ─── MacAddr / Point ToSql Implementations ────────────────────
 
 impl ToSql for [u8; 6] {
-    fn to_sql(&self) -> PgValue { PgValue::MacAddr(*self) }
-    fn type_oid(&self) -> u32 { oid::MACADDR }
+    fn to_sql(&self) -> PgValue {
+        PgValue::MacAddr(*self)
+    }
+    fn type_oid(&self) -> u32 {
+        oid::MACADDR
+    }
 }
 
 impl ToSql for (f64, f64) {
-    fn to_sql(&self) -> PgValue { PgValue::Point { x: self.0, y: self.1 } }
-    fn type_oid(&self) -> u32 { oid::POINT }
+    fn to_sql(&self) -> PgValue {
+        PgValue::Point {
+            x: self.0,
+            y: self.1,
+        }
+    }
+    fn type_oid(&self) -> u32 {
+        oid::POINT
+    }
 }
 
 // ─── FromSql Implementations ─────────────────────────────────
@@ -698,7 +845,9 @@ impl FromSql for i16 {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
             PgValue::Int2(v) => Ok(*v),
-            PgValue::Text(s) => s.parse().map_err(|_| PgError::TypeConversion("Not an i16".into())),
+            PgValue::Text(s) => s
+                .parse()
+                .map_err(|_| PgError::TypeConversion("Not an i16".into())),
             _ => Err(PgError::TypeConversion("Cannot convert to i16".into())),
         }
     }
@@ -709,7 +858,9 @@ impl FromSql for i32 {
         match value {
             PgValue::Int4(v) => Ok(*v),
             PgValue::Int2(v) => Ok(*v as i32),
-            PgValue::Text(s) => s.parse().map_err(|_| PgError::TypeConversion("Not an i32".into())),
+            PgValue::Text(s) => s
+                .parse()
+                .map_err(|_| PgError::TypeConversion("Not an i32".into())),
             _ => Err(PgError::TypeConversion("Cannot convert to i32".into())),
         }
     }
@@ -721,7 +872,9 @@ impl FromSql for i64 {
             PgValue::Int8(v) => Ok(*v),
             PgValue::Int4(v) => Ok(*v as i64),
             PgValue::Int2(v) => Ok(*v as i64),
-            PgValue::Text(s) => s.parse().map_err(|_| PgError::TypeConversion("Not an i64".into())),
+            PgValue::Text(s) => s
+                .parse()
+                .map_err(|_| PgError::TypeConversion("Not an i64".into())),
             _ => Err(PgError::TypeConversion("Cannot convert to i64".into())),
         }
     }
@@ -731,7 +884,9 @@ impl FromSql for f32 {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
             PgValue::Float4(v) => Ok(*v),
-            PgValue::Text(s) => s.parse().map_err(|_| PgError::TypeConversion("Not an f32".into())),
+            PgValue::Text(s) => s
+                .parse()
+                .map_err(|_| PgError::TypeConversion("Not an f32".into())),
             _ => Err(PgError::TypeConversion("Cannot convert to f32".into())),
         }
     }
@@ -744,7 +899,9 @@ impl FromSql for f64 {
             PgValue::Float4(v) => Ok(*v as f64),
             PgValue::Int4(v) => Ok(*v as f64),
             PgValue::Int8(v) => Ok(*v as f64),
-            PgValue::Text(s) => s.parse().map_err(|_| PgError::TypeConversion("Not an f64".into())),
+            PgValue::Text(s) => s
+                .parse()
+                .map_err(|_| PgError::TypeConversion("Not an f64".into())),
             _ => Err(PgError::TypeConversion("Cannot convert to f64".into())),
         }
     }
@@ -774,7 +931,9 @@ impl FromSql for String {
             PgValue::Float8(v) => Ok(v.to_string()),
             PgValue::Bool(v) => Ok(v.to_string()),
             PgValue::Uuid(b) => Ok(format_uuid(b)),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to String".into())),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to String".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to String".into())),
         }
     }
@@ -794,7 +953,9 @@ impl FromSql for Vec<u8> {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
             PgValue::Bytes(b) => Ok(b.clone()),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to Vec<u8>".into())),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to Vec<u8>".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to Vec<u8>".into())),
         }
     }
@@ -804,7 +965,9 @@ impl FromSql for [u8; 16] {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
             PgValue::Uuid(b) => Ok(*b),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to [u8; 16]".into())),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to [u8; 16]".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to [u8; 16]".into())),
         }
     }
@@ -815,8 +978,10 @@ impl FromSql for [u8; 16] {
 impl FromSql for Vec<i16> {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
-            PgValue::Array(arr) => arr.iter().map(|v| i16::from_sql(v)).collect(),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to Vec<i16>".into())),
+            PgValue::Array(arr) => arr.iter().map(i16::from_sql).collect(),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to Vec<i16>".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to Vec<i16>".into())),
         }
     }
@@ -825,8 +990,10 @@ impl FromSql for Vec<i16> {
 impl FromSql for Vec<i32> {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
-            PgValue::Array(arr) => arr.iter().map(|v| i32::from_sql(v)).collect(),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to Vec<i32>".into())),
+            PgValue::Array(arr) => arr.iter().map(i32::from_sql).collect(),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to Vec<i32>".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to Vec<i32>".into())),
         }
     }
@@ -835,8 +1002,10 @@ impl FromSql for Vec<i32> {
 impl FromSql for Vec<i64> {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
-            PgValue::Array(arr) => arr.iter().map(|v| i64::from_sql(v)).collect(),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to Vec<i64>".into())),
+            PgValue::Array(arr) => arr.iter().map(i64::from_sql).collect(),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to Vec<i64>".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to Vec<i64>".into())),
         }
     }
@@ -845,8 +1014,10 @@ impl FromSql for Vec<i64> {
 impl FromSql for Vec<f32> {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
-            PgValue::Array(arr) => arr.iter().map(|v| f32::from_sql(v)).collect(),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to Vec<f32>".into())),
+            PgValue::Array(arr) => arr.iter().map(f32::from_sql).collect(),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to Vec<f32>".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to Vec<f32>".into())),
         }
     }
@@ -855,8 +1026,10 @@ impl FromSql for Vec<f32> {
 impl FromSql for Vec<f64> {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
-            PgValue::Array(arr) => arr.iter().map(|v| f64::from_sql(v)).collect(),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to Vec<f64>".into())),
+            PgValue::Array(arr) => arr.iter().map(f64::from_sql).collect(),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to Vec<f64>".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to Vec<f64>".into())),
         }
     }
@@ -865,9 +1038,13 @@ impl FromSql for Vec<f64> {
 impl FromSql for Vec<bool> {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
-            PgValue::Array(arr) => arr.iter().map(|v| bool::from_sql(v)).collect(),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to Vec<bool>".into())),
-            _ => Err(PgError::TypeConversion("Cannot convert to Vec<bool>".into())),
+            PgValue::Array(arr) => arr.iter().map(bool::from_sql).collect(),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to Vec<bool>".into(),
+            )),
+            _ => Err(PgError::TypeConversion(
+                "Cannot convert to Vec<bool>".into(),
+            )),
         }
     }
 }
@@ -875,9 +1052,13 @@ impl FromSql for Vec<bool> {
 impl FromSql for Vec<String> {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
-            PgValue::Array(arr) => arr.iter().map(|v| String::from_sql(v)).collect(),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to Vec<String>".into())),
-            _ => Err(PgError::TypeConversion("Cannot convert to Vec<String>".into())),
+            PgValue::Array(arr) => arr.iter().map(String::from_sql).collect(),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to Vec<String>".into(),
+            )),
+            _ => Err(PgError::TypeConversion(
+                "Cannot convert to Vec<String>".into(),
+            )),
         }
     }
 }
@@ -889,9 +1070,13 @@ impl FromSql for std::net::IpAddr {
         match value {
             PgValue::Inet(s) => {
                 let addr_str = s.split('/').next().unwrap_or(s);
-                addr_str.parse().map_err(|_| PgError::TypeConversion(format!("Invalid IP address: {}", s)))
+                addr_str
+                    .parse()
+                    .map_err(|_| PgError::TypeConversion(format!("Invalid IP address: {}", s)))
             }
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to IpAddr".into())),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to IpAddr".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to IpAddr".into())),
         }
     }
@@ -902,9 +1087,13 @@ impl FromSql for std::net::Ipv4Addr {
         match value {
             PgValue::Inet(s) => {
                 let addr_str = s.split('/').next().unwrap_or(s);
-                addr_str.parse().map_err(|_| PgError::TypeConversion(format!("Invalid IPv4 address: {}", s)))
+                addr_str
+                    .parse()
+                    .map_err(|_| PgError::TypeConversion(format!("Invalid IPv4 address: {}", s)))
             }
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to Ipv4Addr".into())),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to Ipv4Addr".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to Ipv4Addr".into())),
         }
     }
@@ -915,9 +1104,13 @@ impl FromSql for std::net::Ipv6Addr {
         match value {
             PgValue::Inet(s) => {
                 let addr_str = s.split('/').next().unwrap_or(s);
-                addr_str.parse().map_err(|_| PgError::TypeConversion(format!("Invalid IPv6 address: {}", s)))
+                addr_str
+                    .parse()
+                    .map_err(|_| PgError::TypeConversion(format!("Invalid IPv6 address: {}", s)))
             }
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to Ipv6Addr".into())),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to Ipv6Addr".into(),
+            )),
             _ => Err(PgError::TypeConversion("Cannot convert to Ipv6Addr".into())),
         }
     }
@@ -929,8 +1122,12 @@ impl FromSql for [u8; 6] {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
             PgValue::MacAddr(bytes) => Ok(*bytes),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to [u8; 6]".into())),
-            _ => Err(PgError::TypeConversion("Cannot convert to [u8; 6] (MacAddr)".into())),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to [u8; 6]".into(),
+            )),
+            _ => Err(PgError::TypeConversion(
+                "Cannot convert to [u8; 6] (MacAddr)".into(),
+            )),
         }
     }
 }
@@ -939,8 +1136,12 @@ impl FromSql for (f64, f64) {
     fn from_sql(value: &PgValue) -> PgResult<Self> {
         match value {
             PgValue::Point { x, y } => Ok((*x, *y)),
-            PgValue::Null => Err(PgError::TypeConversion("Cannot convert NULL to (f64, f64)".into())),
-            _ => Err(PgError::TypeConversion("Cannot convert to (f64, f64) (Point)".into())),
+            PgValue::Null => Err(PgError::TypeConversion(
+                "Cannot convert NULL to (f64, f64)".into(),
+            )),
+            _ => Err(PgError::TypeConversion(
+                "Cannot convert to (f64, f64) (Point)".into(),
+            )),
         }
     }
 }
@@ -968,10 +1169,16 @@ fn parse_macaddr_text(s: &str) -> PgResult<[u8; 6]> {
     } else if s.contains('-') {
         s.split('-').collect()
     } else {
-        return Err(PgError::TypeConversion(format!("Invalid MAC address format: {}", s)));
+        return Err(PgError::TypeConversion(format!(
+            "Invalid MAC address format: {}",
+            s
+        )));
     };
     if parts.len() != 6 {
-        return Err(PgError::TypeConversion(format!("Invalid MAC address: {}", s)));
+        return Err(PgError::TypeConversion(format!(
+            "Invalid MAC address: {}",
+            s
+        )));
     }
     let mut bytes = [0u8; 6];
     for (i, part) in parts.iter().enumerate() {
@@ -989,12 +1196,16 @@ fn parse_point_text(s: &str) -> PgResult<(f64, f64)> {
     } else {
         trimmed
     };
-    let comma = inner.find(',')
+    let comma = inner
+        .find(',')
         .ok_or_else(|| PgError::TypeConversion(format!("Invalid point format: {}", s)))?;
-    let x: f64 = inner[..comma].trim().parse()
+    let x: f64 = inner[..comma]
+        .trim()
+        .parse()
         .map_err(|_| PgError::TypeConversion(format!("Invalid point x: {}", &inner[..comma])))?;
-    let y: f64 = inner[comma + 1..].trim().parse()
-        .map_err(|_| PgError::TypeConversion(format!("Invalid point y: {}", &inner[comma + 1..])))?;
+    let y: f64 = inner[comma + 1..].trim().parse().map_err(|_| {
+        PgError::TypeConversion(format!("Invalid point y: {}", &inner[comma + 1..]))
+    })?;
     Ok((x, y))
 }
 
@@ -1101,17 +1312,21 @@ fn parse_binary_array(data: &[u8]) -> PgResult<PgValue> {
     }
     if ndim != 1 {
         // We only support 1-dimensional arrays
-        return Err(PgError::TypeConversion(
-            format!("Unsupported array dimensions: {}", ndim),
-        ));
+        return Err(PgError::TypeConversion(format!(
+            "Unsupported array dimensions: {}",
+            ndim
+        )));
     }
 
     let mut pos = 12;
     // Dimension length and lower bound
     if data.len() < pos + 8 {
-        return Err(PgError::TypeConversion("Binary array dimension truncated".into()));
+        return Err(PgError::TypeConversion(
+            "Binary array dimension truncated".into(),
+        ));
     }
-    let num_elements = i32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+    let num_elements =
+        i32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
     pos += 4;
     let _lower_bound = i32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
     pos += 4;
@@ -1119,7 +1334,9 @@ fn parse_binary_array(data: &[u8]) -> PgResult<PgValue> {
     let mut values = Vec::with_capacity(num_elements);
     for _ in 0..num_elements {
         if data.len() < pos + 4 {
-            return Err(PgError::TypeConversion("Binary array element truncated".into()));
+            return Err(PgError::TypeConversion(
+                "Binary array element truncated".into(),
+            ));
         }
         let elem_len = i32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
         pos += 4;
@@ -1129,7 +1346,9 @@ fn parse_binary_array(data: &[u8]) -> PgResult<PgValue> {
         } else {
             let elem_len = elem_len as usize;
             if data.len() < pos + elem_len {
-                return Err(PgError::TypeConversion("Binary array element data truncated".into()));
+                return Err(PgError::TypeConversion(
+                    "Binary array element data truncated".into(),
+                ));
             }
             let elem_data = &data[pos..pos + elem_len];
             values.push(PgValue::from_binary(element_oid, elem_data)?);
@@ -1146,7 +1365,10 @@ fn parse_binary_array(data: &[u8]) -> PgResult<PgValue> {
 fn format_uuid(bytes: &[u8; 16]) -> String {
     fn hex(b: u8) -> (char, char) {
         const HEX: &[u8; 16] = b"0123456789abcdef";
-        (HEX[(b >> 4) as usize] as char, HEX[(b & 0xf) as usize] as char)
+        (
+            HEX[(b >> 4) as usize] as char,
+            HEX[(b & 0xf) as usize] as char,
+        )
     }
     let mut s = String::with_capacity(36);
     for (i, &b) in bytes.iter().enumerate() {
@@ -1225,14 +1447,26 @@ fn format_interval(months: i32, days: i32, us: i64) -> String {
         let years = months / 12;
         let mons = months % 12;
         if years != 0 {
-            parts.push(format!("{} year{}", years, if years.abs() != 1 { "s" } else { "" }));
+            parts.push(format!(
+                "{} year{}",
+                years,
+                if years.abs() != 1 { "s" } else { "" }
+            ));
         }
         if mons != 0 {
-            parts.push(format!("{} mon{}", mons, if mons.abs() != 1 { "s" } else { "" }));
+            parts.push(format!(
+                "{} mon{}",
+                mons,
+                if mons.abs() != 1 { "s" } else { "" }
+            ));
         }
     }
     if days != 0 {
-        parts.push(format!("{} day{}", days, if days.abs() != 1 { "s" } else { "" }));
+        parts.push(format!(
+            "{} day{}",
+            days,
+            if days.abs() != 1 { "s" } else { "" }
+        ));
     }
     if us != 0 || parts.is_empty() {
         parts.push(format_time(us));
@@ -1246,9 +1480,15 @@ fn parse_date_text(s: &str) -> PgResult<i32> {
     if parts.len() != 3 {
         return Err(PgError::TypeConversion(format!("Invalid date: {}", s)));
     }
-    let y: i32 = parts[0].parse().map_err(|_| PgError::TypeConversion("Bad year".into()))?;
-    let m: u32 = parts[1].parse().map_err(|_| PgError::TypeConversion("Bad month".into()))?;
-    let d: u32 = parts[2].parse().map_err(|_| PgError::TypeConversion("Bad day".into()))?;
+    let y: i32 = parts[0]
+        .parse()
+        .map_err(|_| PgError::TypeConversion("Bad year".into()))?;
+    let m: u32 = parts[1]
+        .parse()
+        .map_err(|_| PgError::TypeConversion("Bad month".into()))?;
+    let d: u32 = parts[2]
+        .parse()
+        .map_err(|_| PgError::TypeConversion("Bad day".into()))?;
     Ok(ymd_to_days(y, m, d) - PG_EPOCH_DAYS)
 }
 
@@ -1258,8 +1498,12 @@ fn parse_time_text(s: &str) -> PgResult<i64> {
     if parts.len() < 2 {
         return Err(PgError::TypeConversion(format!("Invalid time: {}", s)));
     }
-    let h: i64 = parts[0].parse().map_err(|_| PgError::TypeConversion("Bad hour".into()))?;
-    let m: i64 = parts[1].parse().map_err(|_| PgError::TypeConversion("Bad minute".into()))?;
+    let h: i64 = parts[0]
+        .parse()
+        .map_err(|_| PgError::TypeConversion("Bad hour".into()))?;
+    let m: i64 = parts[1]
+        .parse()
+        .map_err(|_| PgError::TypeConversion("Bad minute".into()))?;
     let (s_int, frac) = if parts.len() > 2 {
         parse_secs_frac(parts[2])?
     } else {
@@ -1325,16 +1569,24 @@ fn parse_interval_text(s: &str) -> PgResult<(i32, i32, i64)> {
 /// Parse seconds with optional fractional part.
 fn parse_secs_frac(s: &str) -> PgResult<(i64, i64)> {
     if let Some((int_s, frac_s)) = s.split_once('.') {
-        let int_val: i64 = int_s.parse().map_err(|_| PgError::TypeConversion("Bad seconds".into()))?;
+        let int_val: i64 = int_s
+            .parse()
+            .map_err(|_| PgError::TypeConversion("Bad seconds".into()))?;
         // Pad or truncate fractional part to 6 digits
-        let frac_str = if frac_s.len() >= 6 { &frac_s[..6] } else { frac_s };
+        let frac_str = if frac_s.len() >= 6 {
+            &frac_s[..6]
+        } else {
+            frac_s
+        };
         let frac_val: i64 = frac_str
             .parse()
             .map_err(|_| PgError::TypeConversion("Bad fractional seconds".into()))?;
         let padding = 10i64.pow(6 - frac_str.len() as u32);
         Ok((int_val, frac_val * padding))
     } else {
-        let int_val: i64 = s.parse().map_err(|_| PgError::TypeConversion("Bad seconds".into()))?;
+        let int_val: i64 = s
+            .parse()
+            .map_err(|_| PgError::TypeConversion("Bad seconds".into()))?;
         Ok((int_val, 0))
     }
 }
@@ -1380,7 +1632,10 @@ pub fn encode_inet_binary(s: &str) -> PgResult<Vec<u8>> {
         buf.extend_from_slice(&bytes);
         Ok(buf)
     } else {
-        Err(PgError::TypeConversion(format!("Invalid IP address: {}", s)))
+        Err(PgError::TypeConversion(format!(
+            "Invalid IP address: {}",
+            s
+        )))
     }
 }
 
@@ -1480,7 +1735,8 @@ fn escape_array_element(s: &str) -> String {
 
 /// Returns true if the string needs quoting inside a PG array literal.
 fn needs_array_quoting(s: &str) -> bool {
-    s.chars().any(|c| matches!(c, '{' | '}' | ',' | '"' | '\\') || c.is_whitespace())
+    s.chars()
+        .any(|c| matches!(c, '{' | '}' | ',' | '"' | '\\') || c.is_whitespace())
 }
 
 // ─── Calendar Helpers ────────────────────────────────────────
@@ -1493,7 +1749,7 @@ fn ymd_to_days(y: i32, m: u32, d: u32) -> i32 {
     let yoe = (y - era * 400) as u32;
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    (era * 146097 + doe as i32 - 719468) as i32
+    era * 146097 + doe as i32 - 719468
 }
 
 /// Convert days since Unix epoch to year/month/day.
@@ -1644,20 +1900,16 @@ mod tests {
     fn test_encode_inet_binary_ipv6_loopback() {
         let encoded = encode_inet_binary("::1").unwrap();
         assert_eq!(encoded.len(), 20); // 4 header + 16 addr
-        assert_eq!(encoded[0], 3);   // AF_INET6
+        assert_eq!(encoded[0], 3); // AF_INET6
         assert_eq!(encoded[1], 128); // /128
-        assert_eq!(encoded[19], 1);  // last byte = 1
+        assert_eq!(encoded[19], 1); // last byte = 1
     }
 
     // ─── Array escaping tests ─────────────────────────────────
 
     #[test]
     fn test_array_simple() {
-        let arr = PgValue::Array(vec![
-            PgValue::Int4(1),
-            PgValue::Int4(2),
-            PgValue::Int4(3),
-        ]);
+        let arr = PgValue::Array(vec![PgValue::Int4(1), PgValue::Int4(2), PgValue::Int4(3)]);
         let bytes = arr.to_text_bytes().unwrap();
         assert_eq!(String::from_utf8(bytes).unwrap(), "{1,2,3}");
     }
@@ -1676,9 +1928,9 @@ mod tests {
     #[test]
     fn test_array_escaping_special_chars() {
         let arr = PgValue::Array(vec![
-            PgValue::Text("hello world".to_string()),   // contains space
-            PgValue::Text("a,b".to_string()),            // contains comma
-            PgValue::Text("say \"hi\"".to_string()),     // contains quotes
+            PgValue::Text("hello world".to_string()), // contains space
+            PgValue::Text("a,b".to_string()),         // contains comma
+            PgValue::Text("say \"hi\"".to_string()),  // contains quotes
         ]);
         let bytes = arr.to_text_bytes().unwrap();
         let s = String::from_utf8(bytes).unwrap();
@@ -1807,7 +2059,11 @@ mod tests {
         let arr = vec![true, false, true];
         assert_eq!(
             arr.to_sql(),
-            PgValue::Array(vec![PgValue::Bool(true), PgValue::Bool(false), PgValue::Bool(true)])
+            PgValue::Array(vec![
+                PgValue::Bool(true),
+                PgValue::Bool(false),
+                PgValue::Bool(true)
+            ])
         );
     }
 
@@ -1837,7 +2093,11 @@ mod tests {
         let arr: &[i32] = &[10, 20, 30];
         assert_eq!(
             arr.to_sql(),
-            PgValue::Array(vec![PgValue::Int4(10), PgValue::Int4(20), PgValue::Int4(30)])
+            PgValue::Array(vec![
+                PgValue::Int4(10),
+                PgValue::Int4(20),
+                PgValue::Int4(30)
+            ])
         );
     }
 
@@ -1958,8 +2218,11 @@ mod tests {
 
     #[test]
     fn test_to_binary_bytes_float8() {
-        let val = PgValue::Float8(3.14);
-        assert_eq!(val.to_binary_bytes(), Some(3.14_f64.to_be_bytes().to_vec()));
+        let val = PgValue::Float8(std::f64::consts::PI);
+        assert_eq!(
+            val.to_binary_bytes(),
+            Some(std::f64::consts::PI.to_be_bytes().to_vec())
+        );
     }
 
     #[test]
@@ -1978,7 +2241,11 @@ mod tests {
 
     #[test]
     fn test_to_binary_bytes_interval() {
-        let val = PgValue::Interval { months: 1, days: 2, microseconds: 3_000_000 };
+        let val = PgValue::Interval {
+            months: 1,
+            days: 2,
+            microseconds: 3_000_000,
+        };
         let mut expected = Vec::new();
         expected.extend_from_slice(&3_000_000_i64.to_be_bytes());
         expected.extend_from_slice(&2_i32.to_be_bytes());
@@ -2043,11 +2310,11 @@ mod tests {
         // Value: -42
         // ndigits=1, weight=0, sign=0x4000(neg), dscale=0, digit=42
         let data = [
-            0, 1,       // ndigits = 1
-            0, 0,       // weight = 0
+            0, 1, // ndigits = 1
+            0, 0, // weight = 0
             0x40, 0x00, // sign = NUMERIC_NEG
-            0, 0,       // dscale = 0
-            0, 42,      // digit[0] = 42
+            0, 0, // dscale = 0
+            0, 42, // digit[0] = 42
         ];
         let val = PgValue::from_binary(oid::NUMERIC, &data).unwrap();
         assert_eq!(val, PgValue::Numeric("-42".to_string()));
@@ -2059,11 +2326,11 @@ mod tests {
         // ndigits=2, weight=0, sign=0(pos), dscale=2
         // digit[0]=1 (integer part), digit[1]=2300 (.2300 → 2 decimal places)
         let data = [
-            0, 2,    // ndigits = 2
-            0, 0,    // weight = 0
-            0, 0,    // sign = positive
-            0, 2,    // dscale = 2
-            0, 1,    // digit[0] = 1
+            0, 2, // ndigits = 2
+            0, 0, // weight = 0
+            0, 0, // sign = positive
+            0, 2, // dscale = 2
+            0, 1, // digit[0] = 1
             0x08, 0xFC, // digit[1] = 2300
         ];
         let val = PgValue::from_binary(oid::NUMERIC, &data).unwrap();
@@ -2092,11 +2359,11 @@ mod tests {
         // Actually: weight=1 means 2 digit groups before decimal
         // digit[0]=1 → "1" then pad 4 zeros for next group = "10000"
         let data = [
-            0, 1,    // ndigits = 1
-            0, 1,    // weight = 1
-            0, 0,    // sign = positive
-            0, 0,    // dscale = 0
-            0, 1,    // digit[0] = 1
+            0, 1, // ndigits = 1
+            0, 1, // weight = 1
+            0, 0, // sign = positive
+            0, 0, // dscale = 0
+            0, 1, // digit[0] = 1
         ];
         let val = PgValue::from_binary(oid::NUMERIC, &data).unwrap();
         assert_eq!(val, PgValue::Numeric("10000".to_string()));
@@ -2108,14 +2375,14 @@ mod tests {
         // dimension: len=3, lower_bound=1
         // elements: 10, 20, 30
         let mut data = Vec::new();
-        data.extend_from_slice(&1_i32.to_be_bytes());   // ndim = 1
-        data.extend_from_slice(&0_i32.to_be_bytes());   // flags = 0
-        data.extend_from_slice(&23_u32.to_be_bytes());  // element OID = INT4
-        data.extend_from_slice(&3_i32.to_be_bytes());   // dim length = 3
-        data.extend_from_slice(&1_i32.to_be_bytes());   // lower bound = 1
+        data.extend_from_slice(&1_i32.to_be_bytes()); // ndim = 1
+        data.extend_from_slice(&0_i32.to_be_bytes()); // flags = 0
+        data.extend_from_slice(&23_u32.to_be_bytes()); // element OID = INT4
+        data.extend_from_slice(&3_i32.to_be_bytes()); // dim length = 3
+        data.extend_from_slice(&1_i32.to_be_bytes()); // lower bound = 1
         // element 0: 10
-        data.extend_from_slice(&4_i32.to_be_bytes());   // len = 4
-        data.extend_from_slice(&10_i32.to_be_bytes());  // value = 10
+        data.extend_from_slice(&4_i32.to_be_bytes()); // len = 4
+        data.extend_from_slice(&10_i32.to_be_bytes()); // value = 10
         // element 1: 20
         data.extend_from_slice(&4_i32.to_be_bytes());
         data.extend_from_slice(&20_i32.to_be_bytes());
@@ -2124,22 +2391,25 @@ mod tests {
         data.extend_from_slice(&30_i32.to_be_bytes());
 
         let val = PgValue::from_binary(oid::INT4_ARRAY, &data).unwrap();
-        assert_eq!(val, PgValue::Array(vec![
-            PgValue::Int4(10),
-            PgValue::Int4(20),
-            PgValue::Int4(30),
-        ]));
+        assert_eq!(
+            val,
+            PgValue::Array(vec![
+                PgValue::Int4(10),
+                PgValue::Int4(20),
+                PgValue::Int4(30),
+            ])
+        );
     }
 
     #[test]
     fn test_from_binary_array_with_null() {
         // Binary array with a NULL element
         let mut data = Vec::new();
-        data.extend_from_slice(&1_i32.to_be_bytes());   // ndim = 1
-        data.extend_from_slice(&1_i32.to_be_bytes());   // flags = has_null
-        data.extend_from_slice(&23_u32.to_be_bytes());  // element OID = INT4
-        data.extend_from_slice(&2_i32.to_be_bytes());   // dim length = 2
-        data.extend_from_slice(&1_i32.to_be_bytes());   // lower bound = 1
+        data.extend_from_slice(&1_i32.to_be_bytes()); // ndim = 1
+        data.extend_from_slice(&1_i32.to_be_bytes()); // flags = has_null
+        data.extend_from_slice(&23_u32.to_be_bytes()); // element OID = INT4
+        data.extend_from_slice(&2_i32.to_be_bytes()); // dim length = 2
+        data.extend_from_slice(&1_i32.to_be_bytes()); // lower bound = 1
         // element 0: 42
         data.extend_from_slice(&4_i32.to_be_bytes());
         data.extend_from_slice(&42_i32.to_be_bytes());
@@ -2147,19 +2417,16 @@ mod tests {
         data.extend_from_slice(&(-1_i32).to_be_bytes());
 
         let val = PgValue::from_binary(oid::INT4_ARRAY, &data).unwrap();
-        assert_eq!(val, PgValue::Array(vec![
-            PgValue::Int4(42),
-            PgValue::Null,
-        ]));
+        assert_eq!(val, PgValue::Array(vec![PgValue::Int4(42), PgValue::Null,]));
     }
 
     #[test]
     fn test_from_binary_array_empty() {
         // ndim=0 → empty array
         let mut data = Vec::new();
-        data.extend_from_slice(&0_i32.to_be_bytes());   // ndim = 0
-        data.extend_from_slice(&0_i32.to_be_bytes());   // flags = 0
-        data.extend_from_slice(&23_u32.to_be_bytes());  // element OID
+        data.extend_from_slice(&0_i32.to_be_bytes()); // ndim = 0
+        data.extend_from_slice(&0_i32.to_be_bytes()); // flags = 0
+        data.extend_from_slice(&23_u32.to_be_bytes()); // element OID
 
         let val = PgValue::from_binary(oid::INT4_ARRAY, &data).unwrap();
         assert_eq!(val, PgValue::Array(Vec::new()));
@@ -2168,20 +2435,23 @@ mod tests {
     #[test]
     fn test_from_binary_array_bool() {
         let mut data = Vec::new();
-        data.extend_from_slice(&1_i32.to_be_bytes());   // ndim = 1
-        data.extend_from_slice(&0_i32.to_be_bytes());   // flags
-        data.extend_from_slice(&16_u32.to_be_bytes());  // element OID = BOOL
-        data.extend_from_slice(&2_i32.to_be_bytes());   // dim length = 2
-        data.extend_from_slice(&1_i32.to_be_bytes());   // lower bound
+        data.extend_from_slice(&1_i32.to_be_bytes()); // ndim = 1
+        data.extend_from_slice(&0_i32.to_be_bytes()); // flags
+        data.extend_from_slice(&16_u32.to_be_bytes()); // element OID = BOOL
+        data.extend_from_slice(&2_i32.to_be_bytes()); // dim length = 2
+        data.extend_from_slice(&1_i32.to_be_bytes()); // lower bound
         // true
-        data.extend_from_slice(&1_i32.to_be_bytes());   // len = 1
+        data.extend_from_slice(&1_i32.to_be_bytes()); // len = 1
         data.push(1);
         // false
         data.extend_from_slice(&1_i32.to_be_bytes());
         data.push(0);
 
         let val = PgValue::from_binary(oid::BOOL_ARRAY, &data).unwrap();
-        assert_eq!(val, PgValue::Array(vec![PgValue::Bool(true), PgValue::Bool(false)]));
+        assert_eq!(
+            val,
+            PgValue::Array(vec![PgValue::Bool(true), PgValue::Bool(false)])
+        );
     }
 
     #[test]
@@ -2200,7 +2470,10 @@ mod tests {
         data.extend_from_slice(&2.5_f64.to_be_bytes());
 
         let val = PgValue::from_binary(oid::FLOAT8_ARRAY, &data).unwrap();
-        assert_eq!(val, PgValue::Array(vec![PgValue::Float8(1.5), PgValue::Float8(2.5)]));
+        assert_eq!(
+            val,
+            PgValue::Array(vec![PgValue::Float8(1.5), PgValue::Float8(2.5)])
+        );
     }
 
     #[test]
@@ -2221,7 +2494,9 @@ mod tests {
 
     #[test]
     fn test_binary_roundtrip_uuid() {
-        let original = PgValue::Uuid([0xDE, 0xAD, 0xBE, 0xEF, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        let original = PgValue::Uuid([
+            0xDE, 0xAD, 0xBE, 0xEF, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+        ]);
         let bytes = original.to_binary_bytes().unwrap();
         let decoded = PgValue::from_binary(oid::UUID, &bytes).unwrap();
         assert_eq!(original, decoded);
@@ -2229,7 +2504,11 @@ mod tests {
 
     #[test]
     fn test_binary_roundtrip_interval() {
-        let original = PgValue::Interval { months: 13, days: 5, microseconds: 7_200_000_000 };
+        let original = PgValue::Interval {
+            months: 13,
+            days: 5,
+            microseconds: 7_200_000_000,
+        };
         let bytes = original.to_binary_bytes().unwrap();
         let decoded = PgValue::from_binary(oid::INTERVAL, &bytes).unwrap();
         assert_eq!(original, decoded);
@@ -2310,14 +2589,17 @@ mod tests {
 
     #[test]
     fn test_point_binary_roundtrip() {
-        let val = PgValue::Point { x: 3.14, y: 2.72 };
+        let val = PgValue::Point {
+            x: std::f64::consts::PI,
+            y: std::f64::consts::E,
+        };
         let bytes = val.to_binary_bytes().unwrap();
         assert_eq!(bytes.len(), 16);
         let decoded = PgValue::from_binary(oid::POINT, &bytes).unwrap();
         match decoded {
             PgValue::Point { x, y } => {
-                assert!((x - 3.14).abs() < f64::EPSILON);
-                assert!((y - 2.72).abs() < f64::EPSILON);
+                assert!((x - std::f64::consts::PI).abs() < f64::EPSILON);
+                assert!((y - std::f64::consts::E).abs() < f64::EPSILON);
             }
             _ => panic!("Expected Point"),
         }
@@ -2372,7 +2654,10 @@ mod tests {
     #[test]
     fn test_range_from_text_tsrange() {
         let decoded = PgValue::from_text(oid::TSRANGE, b"[2024-01-01,2024-12-31]").unwrap();
-        assert_eq!(decoded, PgValue::Range("[2024-01-01,2024-12-31]".to_string()));
+        assert_eq!(
+            decoded,
+            PgValue::Range("[2024-01-01,2024-12-31]".to_string())
+        );
     }
 
     #[test]
@@ -2383,7 +2668,14 @@ mod tests {
 
     #[test]
     fn test_range_all_oid_variants() {
-        for oid_val in [oid::INT4RANGE, oid::INT8RANGE, oid::NUMRANGE, oid::TSRANGE, oid::TSTZRANGE, oid::DATERANGE] {
+        for oid_val in [
+            oid::INT4RANGE,
+            oid::INT8RANGE,
+            oid::NUMRANGE,
+            oid::TSRANGE,
+            oid::TSTZRANGE,
+            oid::DATERANGE,
+        ] {
             let decoded = PgValue::from_text(oid_val, b"[1,10)").unwrap();
             assert!(matches!(decoded, PgValue::Range(_)));
         }
@@ -2402,7 +2694,8 @@ mod tests {
     #[test]
     fn test_pgconfig_from_url_unix_query_param() {
         use crate::connection::PgConfig;
-        let config = PgConfig::from_url("postgres://user:pass@/mydb?host=/var/run/postgresql").unwrap();
+        let config =
+            PgConfig::from_url("postgres://user:pass@/mydb?host=/var/run/postgresql").unwrap();
         assert_eq!(config.socket_dir, Some("/var/run/postgresql".to_string()));
         assert_eq!(config.database, "mydb");
         assert_eq!(config.user, "user");
@@ -2411,7 +2704,8 @@ mod tests {
     #[test]
     fn test_pgconfig_from_url_percent_encoded() {
         use crate::connection::PgConfig;
-        let config = PgConfig::from_url("postgres://user:pass@%2Fvar%2Frun%2Fpostgresql/mydb").unwrap();
+        let config =
+            PgConfig::from_url("postgres://user:pass@%2Fvar%2Frun%2Fpostgresql/mydb").unwrap();
         assert_eq!(config.socket_dir, Some("/var/run/postgresql".to_string()));
         assert_eq!(config.database, "mydb");
     }

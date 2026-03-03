@@ -159,13 +159,12 @@ thread_local! {
 ```
 
 ### ORM Integration
-Declaring models and interacting with the database is completely type-safe with the `Model` macro.
+Declaring models and interacting with the database is completely type-safe with the `Model` derive macro. All models must implement `Validate` (with a default pass-through available).
 
 ```rust
-use chopin_orm::{Model, QueryBuilder};
-use chopin_pg::types::PgValue;
+use chopin_orm::{Model, Validate, builder::ColumnTrait};
 
-#[derive(Model, Debug)]
+#[derive(Model, Debug, Clone)]
 #[model(table_name = "products")]
 struct Product {
     #[model(primary_key)]
@@ -174,22 +173,24 @@ struct Product {
     price: i32,
 }
 
+impl Validate for Product {}
+
 #[get("/products")]
 fn list_products(ctx: Context) -> Response {
     DB.with(|db| {
         let mut pool = db.borrow_mut();
-        
-        // 1. Fetching using QueryBuilder
-        let products = QueryBuilder::<Product>::new()
-            .filter("price > $1", vec![100.to_param()])
+
+        // 1. Type-safe query with column DSL
+        let products = Product::find()
+            .filter(ProductColumn::price.gt(100))
             .limit(10)
             .all(&mut *pool).unwrap();
-            
-        // 2. Modifying
+
+        // 2. Inserting
         let mut new_prod = Product { id: 0, name: String::from("Piano"), price: 3000 };
         new_prod.insert(&mut *pool).unwrap();
     });
-    
+
     Response::new(200)
 }
 ```

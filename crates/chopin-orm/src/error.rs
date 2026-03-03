@@ -54,13 +54,21 @@ mod tests {
     #[test]
     fn test_display_record_not_found() {
         let s = OrmError::RecordNotFound.to_string();
-        assert!(s.contains("not found") || s.contains("Record"), "unexpected: {}", s);
+        assert!(
+            s.contains("not found") || s.contains("Record"),
+            "unexpected: {}",
+            s
+        );
     }
 
     #[test]
     fn test_display_multiple_records_found() {
         let s = OrmError::MultipleRecordsFound.to_string();
-        assert!(s.contains("Multiple") || s.contains("multiple"), "unexpected: {}", s);
+        assert!(
+            s.contains("Multiple") || s.contains("multiple"),
+            "unexpected: {}",
+            s
+        );
     }
 
     #[test]
@@ -79,7 +87,11 @@ mod tests {
     fn test_display_database() {
         let pg_err = PgError::Protocol("test error".to_string());
         let s = OrmError::Database(pg_err).to_string();
-        assert!(s.contains("Database") || s.contains("test error"), "unexpected: {}", s);
+        assert!(
+            s.contains("Database") || s.contains("test error"),
+            "unexpected: {}",
+            s
+        );
     }
 
     // ─── Error::source() ─────────────────────────────────────────────────────
@@ -125,7 +137,7 @@ mod tests {
     #[test]
     fn test_orm_result_ok() {
         let r: OrmResult<i32> = Ok(7);
-        assert_eq!(r.unwrap(), 7);
+        assert!(matches!(r, Ok(7)));
     }
 
     #[test]
