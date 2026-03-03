@@ -29,32 +29,52 @@
 - **Retry helper** — `retry(max_retries, || { ... })` with transient error detection
 - **Production hardening** — broken connection flag, TCP_NODELAY, zero-copy writes, `Rc<ColumnDesc>` sharing
 
-## � Benchmarks
+## 🚀 Benchmarks
 
-`chopin-pg` is **3-3.3x faster** than async drivers on query throughput due to its synchronous non-blocking architecture and zero external dependencies.
+`chopin-pg` is **1.5–3x faster** than async drivers on query throughput due to its synchronous non-blocking architecture and zero external dependencies.
 
 ### Real-World Performance (localhost PostgreSQL, 100K iterations for simple queries, 10K for CRUD)
 
-Benchmark results from `bench_compare` comparing chopin-pg (sync) vs sqlx (async tokio) vs tokio-postgres (async tokio):
+Benchmark results from `bench_compare` — actual run, single connection per driver:
 
-| Workload | chopin-pg | sqlx (tokio) | tokio-postgres | Speedup |
-|----------|-----------|--------------|----------------|---------|
-| **SELECT 1** | 53,113 req/s | 16,156 req/s | ~14,000 | **3.29x** |
-| **Parameterized Query** | 52,454 req/s | 16,259 req/s | ~14,100 | **3.22x** |
-| **CRUD SELECT** | 44,954 req/s | 16,666 req/s | ~15,200 | **2.70x** |
-| **CRUD UPDATE** | 42,300 req/s | 15,100 req/s | ~14,800 | **2.80x** |
-| **CRUD INSERT** | 40,100 req/s | 14,200 req/s | ~13,900 | **2.82x** |
-| **TFB Multi-Query (N=20)** | 2,397 req/s | 888 req/s | ~850 | **2.70x** |
-| **TFB Database Updates (N=20)** | 1,524 req/s | 892 req/s | ~878 | **1.71x** |
+**Traditional CRUD**
+
+| Workload | chopin-pg | sqlx (tokio) | tokio-postgres | vs sqlx | vs tokio-pg |
+|----------|-----------|--------------|----------------|---------|-------------|
+| **SELECT 1** | 50,044 req/s | 17,902 req/s | 22,105 req/s | **2.80x** | **2.26x** |
+| **Parameterized Query** | 53,405 req/s | 17,840 req/s | 20,283 req/s | **2.99x** | **2.63x** |
+| **CRUD SELECT** | 47,026 req/s | 17,315 req/s | 18,780 req/s | **2.72x** | **2.50x** |
+| **CRUD UPDATE** | 15,230 req/s | 9,579 req/s | 9,583 req/s | **1.59x** | **1.59x** |
+| **CRUD INSERT** | 14,083 req/s | 9,394 req/s | 10,254 req/s | **1.50x** | **1.37x** |
+
+**TFB Multi-Query** (500 requests per N)
+
+| N | chopin-pg | sqlx | tokio-postgres | vs sqlx | vs tokio-pg |
+|---|-----------|------|----------------|---------|-------------|
+| 1 | 45,616 req/s | 17,564 req/s | 18,105 req/s | 2.60x | 2.52x |
+| 5 | 9,506 req/s | 3,514 req/s | 3,725 req/s | 2.71x | 2.55x |
+| 10 | 4,475 req/s | 1,763 req/s | 1,769 req/s | 2.54x | 2.53x |
+| 15 | 3,317 req/s | 1,140 req/s | 1,243 req/s | 2.91x | 2.67x |
+| 20 | 2,325 req/s | 869 req/s | 918 req/s | **2.68x** | **2.53x** |
+
+**TFB Database Updates** (500 requests per N, SELECT+UPDATE each row)
+
+| N | chopin-pg | sqlx | tokio-postgres | vs sqlx | vs tokio-pg |
+|---|-----------|------|----------------|---------|-------------|
+| 1 | 12,068 req/s | 6,443 req/s | 6,370 req/s | 1.87x | 1.89x |
+| 5 | 2,137 req/s | 1,272 req/s | 1,228 req/s | 1.68x | 1.74x |
+| 10 | 1,047 req/s | 605 req/s | 654 req/s | 1.73x | 1.60x |
+| 15 | 624 req/s | 410 req/s | 398 req/s | 1.52x | 1.57x |
+| 20 | 525 req/s | 286 req/s | 318 req/s | **1.84x** | **1.65x** |
 
 **Benchmark Configuration:**
 - **100K iterations** for simple queries (SELECT 1, parameterized queries)
 - **10K iterations** for CRUD operations (SELECT, UPDATE, INSERT)
 - **500 requests** per TFB Multi-Query count (N=1,5,10,15,20)
 - **Single connection** per driver (no connection pooling overhead)
-- **Localhost PostgreSQL 16** on port 5432 with TechEmpower Framework compliance
+- **Localhost PostgreSQL** on port 5432
 
-### Why 3-3.3x Faster?
+### Why Faster?
 
 1. **No async runtime overhead** — Synchronous `poll()`-based I/O eliminates Tokio task scheduler, Future polling, and context switching
 2. **Shared-nothing per-worker pools** — No lock contention; each worker owns its connections
