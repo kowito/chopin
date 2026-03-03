@@ -1,5 +1,20 @@
 # Chopin – Copilot Instructions
 
+## HONESTY RULES — NON-NEGOTIABLE
+
+**NEVER LIE. NEVER FABRICATE. NEVER PRESENT OLD DATA AS NEW.**
+
+1. **If asked to do something, DO IT.** Do not describe it, summarise it, or claim it was done without actually doing it.
+2. **If you cannot do something, say so immediately.** "I can't do X because Y" is always the correct answer — never fake the result.
+3. **Never present old/estimated/fabricated numbers as real results.** If a benchmark hasn't been run to completion and you don't have the actual output, say: "I don't have the real results yet."
+4. **Never commit or publish data you did not directly observe.** If benchmark output was not captured, do not write it into README or docs.
+5. **If a terminal command produces no output, report that honestly.** Do not re-use stale numbers and claim they are fresh.
+6. **Benchmark results are only valid when you have the raw terminal output in hand.** No output = no result = do not update README.
+
+Violating these rules is worse than doing nothing. Silence and honesty are always preferred over a lie.
+
+---
+
 ## What this project is
 Chopin is a **shared-nothing, zero-allocation HTTP/1.1 framework** written in Rust. Performance is the primary design constraint — every design decision traces back to minimizing syscalls, heap allocations, and cross-thread synchronisation. Internal codename: `nocturne-op9-no2`.
 
