@@ -324,8 +324,8 @@ impl PgPool {
     /// Get a connection, waiting up to the configured `checkout_timeout`.
     ///
     /// Internally calls `try_checkout` in a loop with a short sleep between
-    /// attempts.  In a real event-loop integration the sleep would be
-    /// replaced by registering a waker and yielding.
+    /// attempts.  In a production event-loop the sleep would be replaced
+    /// by yielding to the scheduler.
     pub fn get(&mut self) -> PgResult<ConnectionGuard<'_>> {
         let timeout = self
             .pool_config
@@ -333,7 +333,33 @@ impl PgPool {
             .unwrap_or(Duration::from_secs(5));
         let start = Instant::now();
 
+        // First attempt — fast path.
+        match self.try_checkout() {
+            Ok(pooled) => {
+                self.active += 1;
+                return Ok(ConnectionGuard {
+                    pool: self as *mut PgPool,
+                    conn: Some(pooled),
+                    _marker: std::marker::PhantomData,
+                });
+            }
+            Err(PgError::PoolExhausted) => { /* fall through to retry loop */ }
+            Err(e) => return Err(e),
+        }
+
+        // Retry loop with back-off: 100µs → 500µs → 1ms (capped).
+        let backoff_us = [100u64, 250, 500, 1000];
+        let mut attempt = 0usize;
         loop {
+            if start.elapsed() >= timeout {
+                self.stats.checkout_timeouts += 1;
+                return Err(PgError::PoolTimeout);
+            }
+
+            let sleep_us = backoff_us[attempt.min(backoff_us.len() - 1)];
+            std::thread::sleep(Duration::from_micros(sleep_us));
+            attempt += 1;
+
             match self.try_checkout() {
                 Ok(pooled) => {
                     self.active += 1;
@@ -343,14 +369,7 @@ impl PgPool {
                         _marker: std::marker::PhantomData,
                     });
                 }
-                Err(PgError::PoolExhausted) => {
-                    if start.elapsed() >= timeout {
-                        self.stats.checkout_timeouts += 1;
-                        return Err(PgError::PoolTimeout);
-                    }
-                    // Short sleep — in a real event-loop this would yield
-                    std::thread::sleep(Duration::from_micros(100));
-                }
+                Err(PgError::PoolExhausted) => continue,
                 Err(e) => return Err(e),
             }
         }

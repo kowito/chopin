@@ -280,19 +280,6 @@ pub struct PgConnection {
     broken: bool,
 }
 
-/// Metadata for a single query slot in a [`PgConnection::pipeline_query`] batch.
-struct PipelineEntry {
-    /// Whether this statement was freshly parsed (needs Parse+Describe messages).
-    is_new: bool,
-    /// Original SQL text — used to finalize the statement cache on RowDescription.
-    sql: String,
-    /// Server-side prepared statement name.
-    stmt_name: String,
-    /// Pre-fetched column descriptors for already-cached statements.
-    /// `None` for new statements (columns arrive via RowDescription).
-    columns: Option<Rc<Vec<codec::ColumnDesc>>>,
-}
-
 impl PgConnection {
     /// Connect to PostgreSQL (blocking during handshake, then switches to
     /// non-blocking mode once authentication completes).
@@ -640,9 +627,127 @@ impl PgConnection {
     }
 
     /// Execute a query expecting exactly one row.
+    ///
+    /// Optimised path: reads the Extended Query Protocol response stream and
+    /// returns the **first** `DataRow` directly, without collecting into a
+    /// `Vec<Row>`.  Subsequent rows (if any) are still drained so the
+    /// connection is left in a clean state.
     pub fn query_one(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Row> {
-        let rows = self.query(sql, params)?;
-        rows.into_iter().next().ok_or(PgError::NoRows)
+        let stmt = self.stmt_cache.get_or_create(sql);
+
+        let estimated = 10 + sql.len() + (params.len() * 256);
+        self.ensure_write_capacity(estimated);
+
+        let mut pos = 0;
+
+        if stmt.is_new {
+            let n = codec::encode_parse(&mut self.write_buf[pos..], &stmt.name, sql, &[]);
+            pos += n;
+            let n = codec::encode_describe(
+                &mut self.write_buf[pos..],
+                DescribeTarget::Statement,
+                &stmt.name,
+            );
+            pos += n;
+        }
+
+        let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
+        let param_formats: Vec<i16> = pg_values
+            .iter()
+            .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
+            .collect();
+        let param_values: Vec<Option<Vec<u8>>> = pg_values
+            .iter()
+            .zip(param_formats.iter())
+            .map(|(v, &fmt)| {
+                if fmt == 1 {
+                    v.to_binary_bytes()
+                } else {
+                    v.to_text_bytes()
+                }
+            })
+            .collect();
+        let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
+        let n = codec::encode_bind(
+            &mut self.write_buf[pos..],
+            "",
+            &stmt.name,
+            &param_formats,
+            &param_refs,
+            &[1],
+        );
+        pos += n;
+
+        // Execute with max_rows = 0 (unlimited) — PostgreSQL will send all
+        // DataRows but we stop caring after the first one.
+        let n = codec::encode_execute(&mut self.write_buf[pos..], "", 0);
+        pos += n;
+
+        let n = codec::encode_sync(&mut self.write_buf[pos..]);
+        pos += n;
+
+        self.flush_write_buf(pos)?;
+
+        self.read_extended_result_one(sql, &stmt.name, stmt.is_new, stmt.columns)
+    }
+
+    /// Execute a query expecting zero or one row. Returns `Ok(None)` when
+    /// the query returns no rows, avoiding the `PgError::NoRows` error path.
+    pub fn query_opt(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Option<Row>> {
+        let stmt = self.stmt_cache.get_or_create(sql);
+
+        let estimated = 10 + sql.len() + (params.len() * 256);
+        self.ensure_write_capacity(estimated);
+
+        let mut pos = 0;
+
+        if stmt.is_new {
+            let n = codec::encode_parse(&mut self.write_buf[pos..], &stmt.name, sql, &[]);
+            pos += n;
+            let n = codec::encode_describe(
+                &mut self.write_buf[pos..],
+                DescribeTarget::Statement,
+                &stmt.name,
+            );
+            pos += n;
+        }
+
+        let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
+        let param_formats: Vec<i16> = pg_values
+            .iter()
+            .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
+            .collect();
+        let param_values: Vec<Option<Vec<u8>>> = pg_values
+            .iter()
+            .zip(param_formats.iter())
+            .map(|(v, &fmt)| {
+                if fmt == 1 {
+                    v.to_binary_bytes()
+                } else {
+                    v.to_text_bytes()
+                }
+            })
+            .collect();
+        let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
+        let n = codec::encode_bind(
+            &mut self.write_buf[pos..],
+            "",
+            &stmt.name,
+            &param_formats,
+            &param_refs,
+            &[1],
+        );
+        pos += n;
+
+        let n = codec::encode_execute(&mut self.write_buf[pos..], "", 0);
+        pos += n;
+
+        let n = codec::encode_sync(&mut self.write_buf[pos..]);
+        pos += n;
+
+        self.flush_write_buf(pos)?;
+
+        self.read_extended_result_opt(sql, &stmt.name, stmt.is_new, stmt.columns)
     }
 
     /// Execute a statement that returns no rows (INSERT, UPDATE, DELETE).
@@ -650,167 +755,6 @@ impl PgConnection {
     pub fn execute(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<u64> {
         let _rows = self.query(sql, params)?;
         Ok(self.last_affected_rows)
-    }
-
-    // ─── Query Pipelining ─────────────────────────────────────
-
-    /// Execute multiple queries in a single round-trip (query pipelining).
-    ///
-    /// All `Parse` / `Describe` / `Bind` / `Execute` messages are encoded into
-    /// one write buffer and sent with a **single `Sync`**.  This reduces N
-    /// independent queries from N network round-trips down to **one**, giving a
-    /// large throughput improvement for fan-out reads or bulk lookups.
-    ///
-    /// Results are returned in the same order as `queries`.  On any server
-    /// error the pipeline stops and returns `Err`; PostgreSQL discards the
-    /// remaining pipelined queries after an error within a Sync cycle.
-    ///
-    /// Repeated SQL strings within the same batch are automatically deduplicated:
-    /// only one `Parse` is sent for duplicate SQL, keeping the batch compact.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let results = conn.pipeline_query(&[
-    ///     ("SELECT id, name FROM users WHERE id = $1", &[&1i32] as &[&dyn ToSql]),
-    ///     ("SELECT id, name FROM users WHERE id = $1", &[&2i32] as &[&dyn ToSql]),
-    ///     ("SELECT count(*) FROM orders",              &[] as &[&dyn ToSql]),
-    /// ])?;
-    /// // results[0] → rows for the first SELECT
-    /// // results[1] → rows for the second SELECT
-    /// // results[2] → rows for the count query
-    /// ```
-    pub fn pipeline_query(&mut self, queries: &[(&str, &[&dyn ToSql])]) -> PgResult<Vec<Vec<Row>>> {
-        let (rows, _counts) = self.read_pipeline_results_for(queries)?;
-        Ok(rows)
-    }
-
-    /// Execute multiple statements (INSERT / UPDATE / DELETE / …) in a single
-    /// round-trip and return each query's affected-row count.
-    ///
-    /// Same pipelining semantics as [`pipeline_query`][Self::pipeline_query];
-    /// row data returned by the server is silently discarded.
-    pub fn pipeline_execute(&mut self, queries: &[(&str, &[&dyn ToSql])]) -> PgResult<Vec<u64>> {
-        let (_rows, counts) = self.read_pipeline_results_for(queries)?;
-        Ok(counts)
-    }
-
-    /// Shared implementation for both `pipeline_query` and `pipeline_execute`.
-    fn read_pipeline_results_for(
-        &mut self,
-        queries: &[(&str, &[&dyn ToSql])],
-    ) -> PgResult<(Vec<Vec<Row>>, Vec<u64>)> {
-        if queries.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
-        }
-
-        let total_est: usize = queries
-            .iter()
-            .map(|(sql, params)| 300 + sql.len() + params.len() * 64)
-            .sum::<usize>()
-            + 5;
-        self.ensure_write_capacity(total_est);
-
-        let mut pos = 0usize;
-        let mut entries: Vec<PipelineEntry> = Vec::with_capacity(queries.len());
-
-        let mut pipeline_seen: std::collections::HashMap<
-            &str,
-            (String, Option<Vec<codec::ColumnDesc>>),
-        > = std::collections::HashMap::new();
-
-        for &(sql, params) in queries {
-            let (stmt_name, is_new, cached_cols) =
-                if let Some((name, cols)) = pipeline_seen.get(sql) {
-                    (name.clone(), false, cols.clone().map(Rc::new))
-                } else {
-                    let stmt = self.stmt_cache.get_or_create(sql);
-                    let cols = stmt.columns.clone();
-                    if stmt.is_new {
-                        pipeline_seen.insert(sql, (stmt.name.clone(), None));
-                    }
-                    (stmt.name, stmt.is_new, cols.map(Rc::new))
-                };
-
-            if is_new {
-                let needed = 20 + sql.len() + stmt_name.len();
-                if pos + needed > self.write_buf.len() {
-                    self.write_buf
-                        .resize((pos + needed).max(self.write_buf.len() * 2), 0);
-                }
-                let n = codec::encode_parse(&mut self.write_buf[pos..], &stmt_name, sql, &[]);
-                pos += n;
-                let n = codec::encode_describe(
-                    &mut self.write_buf[pos..],
-                    DescribeTarget::Statement,
-                    &stmt_name,
-                );
-                pos += n;
-            }
-
-            let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
-            let param_formats: Vec<i16> = pg_values
-                .iter()
-                .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
-                .collect();
-            let param_values: Vec<Option<Vec<u8>>> = pg_values
-                .iter()
-                .zip(param_formats.iter())
-                .map(|(v, &fmt)| {
-                    if fmt == 1 {
-                        v.to_binary_bytes()
-                    } else {
-                        v.to_text_bytes()
-                    }
-                })
-                .collect();
-            let param_refs: Vec<Option<&[u8]>> =
-                param_values.iter().map(|p| p.as_deref()).collect();
-
-            let param_data_size: usize = param_values
-                .iter()
-                .map(|v| v.as_ref().map_or(4, |d| 4 + d.len()))
-                .sum();
-            let needed = 50 + stmt_name.len() + param_data_size + 15;
-            if pos + needed > self.write_buf.len() {
-                self.write_buf
-                    .resize((pos + needed).max(self.write_buf.len() * 2), 0);
-            }
-
-            let n = codec::encode_bind(
-                &mut self.write_buf[pos..],
-                "",
-                &stmt_name,
-                &param_formats,
-                &param_refs,
-                &[1],
-            );
-            pos += n;
-
-            let n = codec::encode_execute(&mut self.write_buf[pos..], "", 0);
-            pos += n;
-
-            // TFB General Requirement #7: when using PostgreSQL's Extended Query
-            // Protocol, "each query must be separated by a Sync message".
-            // Putting Sync after every Execute ensures each query has its own
-            // error-recovery boundary (matching the semantics of N sequential
-            // queries), while still batching all N queries into one TCP write.
-            if pos + 5 > self.write_buf.len() {
-                self.write_buf.resize(pos + 5, 0);
-            }
-            let n = codec::encode_sync(&mut self.write_buf[pos..]);
-            pos += n;
-
-            entries.push(PipelineEntry {
-                is_new,
-                sql: sql.to_string(),
-                stmt_name,
-                columns: cached_cols,
-            });
-        }
-
-        // All Syncs have already been encoded inside the loop above.
-        self.flush_write_buf(pos)?;
-        self.read_pipeline_results(entries)
     }
 
     // ─── Transaction Support ──────────────────────────────────
@@ -1176,24 +1120,82 @@ impl PgConnection {
         }
     }
 
+    /// Wait for the socket to become readable using `poll(2)`.
+    ///
+    /// This is a true OS-level wait — the thread sleeps in the kernel until
+    /// the socket has data or the timeout expires.  No busy-waiting, no
+    /// `thread::sleep`.
+    #[cfg(unix)]
+    fn wait_readable(&self, timeout: Duration) -> PgResult<()> {
+        let fd = self.stream.as_raw_fd();
+        let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        if ret < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                return Ok(()); // EINTR — caller will retry
+            }
+            return Err(PgError::Io(e));
+        }
+        if ret == 0 {
+            return Err(PgError::Timeout);
+        }
+        if pfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Err(PgError::ConnectionClosed);
+        }
+        Ok(())
+    }
+
+    /// Wait for the socket to become writable using `poll(2)`.
+    #[cfg(unix)]
+    fn wait_writable(&self, timeout: Duration) -> PgResult<()> {
+        let fd = self.stream.as_raw_fd();
+        let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        if ret < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                return Ok(());
+            }
+            return Err(PgError::Io(e));
+        }
+        if ret == 0 {
+            return Err(PgError::Timeout);
+        }
+        if pfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Err(PgError::ConnectionClosed);
+        }
+        Ok(())
+    }
+
     /// Poll the socket for readability with a timeout.
     ///
-    /// Calls `try_fill_read_buf` in a loop, using a short sleep between
-    /// attempts. For production use, replace the inner spin with an
-    /// event-loop registration (epoll_wait / kevent) for true zero-waste
-    /// waiting.
+    /// Uses the OS `poll(2)` syscall for efficient, zero-waste waiting.
+    /// The thread sleeps in the kernel until data arrives or the timeout
+    /// expires — no busy-loop, no `thread::sleep`.
     pub fn poll_read(&mut self, timeout: Duration) -> PgResult<usize> {
         let start = Instant::now();
         loop {
             match self.try_fill_read_buf() {
                 Ok(n) => return Ok(n),
                 Err(PgError::WouldBlock) => {
-                    if start.elapsed() >= timeout {
+                    let elapsed = start.elapsed();
+                    if elapsed >= timeout {
                         return Err(PgError::Timeout);
                     }
-                    // Yield to the OS for a short interval. In a real
-                    // event-loop integration this would be replaced by
-                    // registering the fd and returning Pending.
+                    #[cfg(unix)]
+                    self.wait_readable(timeout - elapsed)?;
+                    #[cfg(not(unix))]
                     std::thread::sleep(Duration::from_micros(50));
                 }
                 Err(e) => return Err(e),
@@ -1210,9 +1212,13 @@ impl PgConnection {
             match self.try_write(&data[written..]) {
                 Ok(n) => written += n,
                 Err(PgError::WouldBlock) => {
-                    if start.elapsed() >= timeout {
+                    let elapsed = start.elapsed();
+                    if elapsed >= timeout {
                         return Err(PgError::Timeout);
                     }
+                    #[cfg(unix)]
+                    self.wait_writable(timeout - elapsed)?;
+                    #[cfg(not(unix))]
                     std::thread::sleep(Duration::from_micros(50));
                 }
                 Err(e) => return Err(e),
@@ -1272,9 +1278,13 @@ impl PgConnection {
                 match self.stream.write(&self.write_buf[written..n]) {
                     Ok(w) => written += w,
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        if start.elapsed() >= timeout {
+                        let elapsed = start.elapsed();
+                        if elapsed >= timeout {
                             return Err(PgError::Timeout);
                         }
+                        #[cfg(unix)]
+                        self.wait_writable(timeout - elapsed)?;
+                        #[cfg(not(unix))]
                         std::thread::sleep(Duration::from_micros(50));
                     }
                     Err(e) => {
@@ -1469,23 +1479,37 @@ impl PgConnection {
         }
     }
 
-    /// Read responses for a pipelined batch sent by [`pipeline_query`][Self::pipeline_query].
-    ///
-    /// Processes the flat stream of backend messages using `current_idx` to
-    /// track which query's result we are accumulating.  `CommandComplete`
-    /// advances `current_idx`; `ReadyForQuery` terminates the loop.
-    fn read_pipeline_results(
+    /// Optimised read path for `query_one`: returns the first `DataRow`
+    /// directly without collecting into a `Vec`. Remaining rows and
+    /// protocol messages are drained so the connection stays clean.
+    fn read_extended_result_one(
         &mut self,
-        entries: Vec<PipelineEntry>,
-    ) -> PgResult<(Vec<Vec<Row>>, Vec<u64>)> {
-        let n = entries.len();
-        let mut results: Vec<Vec<Row>> = (0..n).map(|_| Vec::new()).collect();
-        let mut counts: Vec<u64> = vec![0u64; n];
-        let mut current_idx = 0usize;
-        // One Sync is sent per query, so we expect exactly N ReadyForQuery
-        // responses.  We count them and return only after all N arrive.
-        let mut rfq_received = 0usize;
-        let mut columns_rc: Rc<Vec<codec::ColumnDesc>> = Rc::new(Vec::new());
+        sql: &str,
+        stmt_name: &str,
+        is_new: bool,
+        cached_columns: Option<Vec<codec::ColumnDesc>>,
+    ) -> PgResult<Row> {
+        match self.read_extended_result_opt(sql, stmt_name, is_new, cached_columns)? {
+            Some(row) => Ok(row),
+            None => Err(PgError::NoRows),
+        }
+    }
+
+    /// Optimised read path for `query_opt`: returns the first `DataRow`
+    /// as `Some(Row)`, or `None` if the query returns zero rows.
+    /// Remaining rows are drained.
+    fn read_extended_result_opt(
+        &mut self,
+        sql: &str,
+        stmt_name: &str,
+        is_new: bool,
+        cached_columns: Option<Vec<codec::ColumnDesc>>,
+    ) -> PgResult<Option<Row>> {
+        let mut result: Option<Row> = None;
+        let mut columns_rc: Rc<Vec<codec::ColumnDesc>> = match cached_columns {
+            Some(c) => Rc::new(c),
+            None => Rc::new(Vec::new()),
+        };
 
         loop {
             if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
@@ -1498,128 +1522,57 @@ impl PgConnection {
                 let body = &self.read_buf[5..msg_len];
 
                 match header.tag {
-                    BackendTag::ParseComplete | BackendTag::ParameterDescription => {}
+                    BackendTag::ParseComplete => {}
+                    BackendTag::ParameterDescription => {}
                     BackendTag::RowDescription => {
                         let mut columns = codec::parse_row_description(body);
                         for col in &mut columns {
                             col.format_code = FormatCode::Binary;
                         }
-                        if current_idx < n && entries[current_idx].is_new {
-                            let entry = &entries[current_idx];
-                            if let Some(evicted) = self.stmt_cache.insert(
-                                &entry.sql,
-                                entry.stmt_name.clone(),
+                        if is_new
+                            && let Some(evicted) = self.stmt_cache.insert(
+                                sql,
+                                stmt_name.to_string(),
                                 0,
                                 Some(columns.clone()),
-                            ) {
-                                self.close_statement_on_server(&evicted.name);
-                            }
+                            )
+                        {
+                            self.close_statement_on_server(&evicted.name);
                         }
                         columns_rc = Rc::new(columns);
                     }
-                    BackendTag::NoData => {
-                        if current_idx < n && entries[current_idx].is_new {
-                            let entry = &entries[current_idx];
-                            if let Some(evicted) =
-                                self.stmt_cache
-                                    .insert(&entry.sql, entry.stmt_name.clone(), 0, None)
-                            {
-                                self.close_statement_on_server(&evicted.name);
-                            }
-                        }
-                        columns_rc = Rc::new(Vec::new());
-                    }
-                    BackendTag::BindComplete => {
-                        if current_idx < n
-                            && !entries[current_idx].is_new
-                            && let Some(ref c) = entries[current_idx].columns
+                    BackendTag::NoData if is_new => {
+                        if let Some(evicted) =
+                            self.stmt_cache.insert(sql, stmt_name.to_string(), 0, None)
                         {
-                            columns_rc = Rc::clone(c);
+                            self.close_statement_on_server(&evicted.name);
                         }
+                    }
+                    BackendTag::NoData => {}
+                    BackendTag::BindComplete => {}
+                    BackendTag::DataRow
+                        // Only capture the first row; subsequent DataRows are skipped.
+                        if result.is_none() => {
+                            let raw_values = codec::parse_data_row(body);
+                            result = Some(Row::new(Rc::clone(&columns_rc), raw_values));
                     }
                     BackendTag::DataRow => {
-                        if current_idx < n {
-                            let raw_values = codec::parse_data_row(body);
-                            results[current_idx].push(Row::new(Rc::clone(&columns_rc), raw_values));
-                        }
+                        // Subsequent DataRows are skipped (not allocated).
                     }
                     BackendTag::CommandComplete => {
                         let (tag, rows_affected) = extract_command_complete(body);
                         self.last_command_tag = tag;
                         self.last_affected_rows = rows_affected;
-                        if current_idx < n {
-                            counts[current_idx] = rows_affected;
-                        }
-                        current_idx += 1;
                     }
                     BackendTag::ReadyForQuery => {
                         self.tx_status = TransactionStatus::from(body[0]);
-                        rfq_received += 1;
                         self.consume_read(msg_len);
-                        if rfq_received >= n {
-                            return Ok((results, counts));
-                        }
-                        // More ReadyForQuery messages still coming; keep reading.
-                        continue;
+                        return Ok(result);
                     }
                     BackendTag::ErrorResponse => {
-                        // With per-query Syncs, PostgreSQL still executes the
-                        // remaining queries (each has its own Sync boundary).
-                        // Record the error, consume through to this query's
-                        // ReadyForQuery, then continue reading remaining results
-                        // to keep the connection clean before returning Err.
-                        let err = if current_idx < n {
-                            self.parse_error_with_context(body, &entries[current_idx].sql)
-                        } else {
-                            self.parse_error(body)
-                        };
+                        let err = self.parse_error_with_context(body, sql);
                         self.consume_read(msg_len);
-                        // Drain to the ReadyForQuery for this failed query.
-                        loop {
-                            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
-                                self.fill_read_buf(None)?;
-                            }
-                            let mut got_rfq = false;
-                            while let Some(il) =
-                                codec::message_complete(&self.read_buf[..self.read_pos])
-                            {
-                                let ih = codec::decode_header(&self.read_buf).ok_or_else(|| {
-                                    PgError::Protocol("Incomplete header".to_string())
-                                })?;
-                                if ih.tag == BackendTag::ReadyForQuery {
-                                    let ib = &self.read_buf[5..il];
-                                    self.tx_status = TransactionStatus::from(ib[0]);
-                                    self.consume_read(il);
-                                    rfq_received += 1;
-                                    got_rfq = true;
-                                    break;
-                                }
-                                self.consume_read(il);
-                            }
-                            if got_rfq {
-                                break;
-                            }
-                        }
-                        // Drain all remaining queries in the pipeline so the
-                        // connection is left in a clean state, then return Err.
-                        while rfq_received < n {
-                            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
-                                self.fill_read_buf(None)?;
-                            }
-                            while let Some(dl) =
-                                codec::message_complete(&self.read_buf[..self.read_pos])
-                            {
-                                let dh = codec::decode_header(&self.read_buf).ok_or_else(|| {
-                                    PgError::Protocol("Incomplete header".to_string())
-                                })?;
-                                if dh.tag == BackendTag::ReadyForQuery {
-                                    let db = &self.read_buf[5..dl];
-                                    self.tx_status = TransactionStatus::from(db[0]);
-                                    rfq_received += 1;
-                                }
-                                self.consume_read(dl);
-                            }
-                        }
+                        self.drain_to_ready()?;
                         return Err(err);
                     }
                     BackendTag::NotificationResponse => {
@@ -1848,23 +1801,14 @@ impl<'a> Transaction<'a> {
         self.conn.query_one(sql, params)
     }
 
+    /// Execute a query expecting zero or one row.
+    pub fn query_opt(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Option<Row>> {
+        self.conn.query_opt(sql, params)
+    }
+
     /// Execute a statement that returns no rows.
     pub fn execute(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<u64> {
         self.conn.execute(sql, params)
-    }
-
-    /// Execute multiple queries in a single round-trip (query pipelining).
-    ///
-    /// See [`PgConnection::pipeline_query`] for full documentation.
-    pub fn pipeline_query(&mut self, queries: &[(&str, &[&dyn ToSql])]) -> PgResult<Vec<Vec<Row>>> {
-        self.conn.pipeline_query(queries)
-    }
-
-    /// Execute multiple statements in a single round-trip.
-    ///
-    /// See [`PgConnection::pipeline_execute`] for full documentation.
-    pub fn pipeline_execute(&mut self, queries: &[(&str, &[&dyn ToSql])]) -> PgResult<Vec<u64>> {
-        self.conn.pipeline_execute(queries)
     }
 
     /// Create a savepoint within this transaction.

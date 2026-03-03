@@ -247,7 +247,7 @@ Legend: ✅ done · 🔧 partial · ❌ not started
 | 9.13 | Unix domain socket support | connection.rs | ✅ | PgStream enum (Tcp/Unix), PgConfig.socket_dir, from_url() percent-decode & ?host= |
 | 9.14 | MD5 auth | — | ❌ recognized but returns error |
 | 9.15 | `cancel_query()` via new TCP + CancelRequest | connection.rs | ✅ |
-| 9.16 | Pipeline mode (multi-statement without Sync) | — | ❌ |
+| 9.16 | ~~Pipeline mode~~ | — | ❌ removed (violates TFB rules) |
 | 9.17 | Statement cache LRU eviction (tick-based, configurable capacity) | statement.rs, connection.rs | ✅ |
 | 9.18 | Notice handler callback (`set_notice_handler()`) | connection.rs | ✅ |
 | 9.19 | CopyFail encoding | codec.rs | ✅ |
@@ -402,7 +402,7 @@ Completed (16 items across all phases):
 | 2.13 Composite / record type | Complex | Large |
 | 2.14 Custom enum support | Requires type registry | Medium |
 | 2.42 Custom type registry | Extensibility | Medium |
-| 9.16 Pipeline mode | Advanced perf optimization | Large |
+| ~~9.16 Pipeline mode~~ | Removed — violates TFB rules | — |
 
 ---
 

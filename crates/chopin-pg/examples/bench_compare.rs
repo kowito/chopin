@@ -2,10 +2,9 @@
 //!
 //! Workloads
 //! ─────────
-//! 1. Traditional CRUD  — SELECT 1, parameterised query, point SELECT/UPDATE/INSERT
-//! 2. TFB Multi-Query   — queries=1/5/10/15/20 random World rows per "request"
-//!    chopin-pg also runs each count with pipeline_query (TFB General Req #7
-//!    explicitly permits network-level pipelining; our impl uses per-query Sync).
+//! 1. Traditional CRUD       — SELECT 1, parameterised query, point SELECT/UPDATE/INSERT
+//! 2. TFB Multi-Query   #3   — N=1/5/10/15/20 random World row SELECTs per request
+//! 3. TFB Database Updates #5 — N=1/5/10/15/20 random World row SELECT+UPDATE per request
 //!
 //! All drivers use a single connection; warmup is run before every sub-test.
 //!
@@ -24,10 +23,11 @@ const DB: &str = "postgres";
 // TFB World table constants
 const WORLD_ROWS: i32 = 10_000;
 const WORLD_SQL: &str = "SELECT id, randomnumber FROM world WHERE id = $1";
+const UPDATE_SQL: &str = "UPDATE world SET randomnumber = $1 WHERE id = $2";
 
-const SIMPLE_ITERS: u64 = 20_000;
+const SIMPLE_ITERS: u64 = 100_000;
 const WARMUP_ITERS: usize = 200;
-const CRUD_ITERS: usize = 5_000;
+const CRUD_ITERS: usize = 10_000;
 
 /// TFB "Multiple Database Queries" counts (queries per simulated request).
 const MULTI_QUERY_COUNTS: &[usize] = &[1, 5, 10, 15, 20];
@@ -54,17 +54,17 @@ struct DriverResults {
     crud_select_rps: f64,
     crud_update_rps: f64,
     crud_insert_rps: f64,
-    // TFB Multi-Query: one entry per MULTI_QUERY_COUNTS value
+    // TFB Multi-Query (Test #3): one entry per MULTI_QUERY_COUNTS value
     multi_seq: Vec<f64>,
-    // TFB Multi-Query with pipelining (chopin-pg only; None for other drivers)
-    multi_pipeline: Option<Vec<f64>>,
+    // TFB Database Updates (Test #5): one entry per MULTI_QUERY_COUNTS value
+    updates_seq: Vec<f64>,
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // chopin-pg  (sync, run via spawn_blocking)
 // ══════════════════════════════════════════════════════════════════════════════
 fn run_chopin_pg() -> Result<DriverResults, Box<dyn std::error::Error + Send + Sync>> {
-    use chopin_pg::{PgConfig, PgConnection, ToSql};
+    use chopin_pg::{PgConfig, PgConnection};
 
     let cfg = PgConfig::new(HOST, PORT, USER, PASS, DB);
     let mut conn = PgConnection::connect(&cfg)?;
@@ -118,8 +118,7 @@ fn run_chopin_pg() -> Result<DriverResults, Box<dyn std::error::Error + Send + S
     let mut rng = 0xdead_beefu32;
     let crud_select_rps = timed!(WARMUP_ITERS, CRUD_ITERS, {
         let id = rand_world_id(&mut rng) % 10_000;
-        let rows =
-            conn.query("SELECT val FROM bench_compare_chopin WHERE id = $1", &[&id])?;
+        let rows = conn.query("SELECT val FROM bench_compare_chopin WHERE id = $1", &[&id])?;
         let _: Option<&str> = rows[0].get_str(0)?;
     });
 
@@ -183,45 +182,33 @@ fn run_chopin_pg() -> Result<DriverResults, Box<dyn std::error::Error + Send + S
         multi_seq.push(MULTI_REQUESTS as f64 / t.elapsed().as_secs_f64());
     }
 
-    // ── TFB Multi-Query: pipeline_query (TFB General Req #7 permits this) ─────
-    // Each call to pipeline_query sends N individual queries in one TCP write,
-    // each separated by its own Sync message.  Execution semantics are identical
-    // to N sequential round-trips.
-    let mut multi_pipeline = Vec::with_capacity(MULTI_QUERY_COUNTS.len());
+    // ── TFB Database Updates (Test #5): N random read-then-update per request ───
+    let mut updates_seq = Vec::with_capacity(MULTI_QUERY_COUNTS.len());
     for &n in MULTI_QUERY_COUNTS {
-        let mut ids = vec![0i32; n];
         // warmup
-        let mut rng = 0x5555_5555u32;
+        let mut rng = 0x2468_1357u32;
         for _ in 0..WARMUP_ITERS {
-            for id in ids.iter_mut() {
-                *id = rand_world_id(&mut rng);
-            }
-            let param_slices: Vec<[&dyn ToSql; 1]> =
-                ids.iter().map(|v| [v as &dyn ToSql]).collect();
-            let queries: Vec<(&str, &[&dyn ToSql])> =
-                param_slices.iter().map(|p| (WORLD_SQL, p.as_slice())).collect();
-            let results = conn.pipeline_query(&queries)?;
-            for rows in &results {
-                let _: i32 = rows[0].get_i32(0)?.unwrap();
+            for _ in 0..n {
+                let id = rand_world_id(&mut rng);
+                let rows = conn.query(WORLD_SQL, &[&id])?;
+                let row_id: i32 = rows[0].get_i32(0)?.unwrap();
+                let new_rn = rand_world_id(&mut rng);
+                conn.execute(UPDATE_SQL, &[&new_rn, &row_id])?;
             }
         }
         // measure
-        let mut rng = 0xaaaa_aaaa_u32;
+        let mut rng = 0x1357_2468u32;
         let t = Instant::now();
         for _ in 0..MULTI_REQUESTS {
-            for id in ids.iter_mut() {
-                *id = rand_world_id(&mut rng);
-            }
-            let param_slices: Vec<[&dyn ToSql; 1]> =
-                ids.iter().map(|v| [v as &dyn ToSql]).collect();
-            let queries: Vec<(&str, &[&dyn ToSql])> =
-                param_slices.iter().map(|p| (WORLD_SQL, p.as_slice())).collect();
-            let results = conn.pipeline_query(&queries)?;
-            for rows in &results {
-                let _: i32 = rows[0].get_i32(0)?.unwrap();
+            for _ in 0..n {
+                let id = rand_world_id(&mut rng);
+                let rows = conn.query(WORLD_SQL, &[&id])?;
+                let row_id: i32 = rows[0].get_i32(0)?.unwrap();
+                let new_rn = rand_world_id(&mut rng);
+                conn.execute(UPDATE_SQL, &[&new_rn, &row_id])?;
             }
         }
-        multi_pipeline.push(MULTI_REQUESTS as f64 / t.elapsed().as_secs_f64());
+        updates_seq.push(MULTI_REQUESTS as f64 / t.elapsed().as_secs_f64());
     }
 
     Ok(DriverResults {
@@ -232,7 +219,7 @@ fn run_chopin_pg() -> Result<DriverResults, Box<dyn std::error::Error + Send + S
         crud_update_rps,
         crud_insert_rps,
         multi_seq,
-        multi_pipeline: Some(multi_pipeline),
+        updates_seq,
     })
 }
 
@@ -254,14 +241,11 @@ async fn run_sqlx() -> Result<DriverResults, Box<dyn std::error::Error>> {
     sqlx::query("DROP TABLE IF EXISTS bench_compare_sqlx")
         .execute(&pool)
         .await?;
-    sqlx::query(
-        "CREATE TABLE bench_compare_sqlx (id INT PRIMARY KEY, val TEXT, count INT)",
-    )
-    .execute(&pool)
-    .await?;
+    sqlx::query("CREATE TABLE bench_compare_sqlx (id INT PRIMARY KEY, val TEXT, count INT)")
+        .execute(&pool)
+        .await?;
     for chunk_start in (0..10_000usize).step_by(1000) {
-        let mut qb =
-            sqlx::QueryBuilder::new("INSERT INTO bench_compare_sqlx (id, val, count) ");
+        let mut qb = sqlx::QueryBuilder::new("INSERT INTO bench_compare_sqlx (id, val, count) ");
         qb.push_values(chunk_start..chunk_start + 1000, |mut b, i| {
             b.push_bind(i as i32)
                 .push_bind(format!("val_{}", i))
@@ -315,11 +299,10 @@ async fn run_sqlx() -> Result<DriverResults, Box<dyn std::error::Error>> {
     let t = Instant::now();
     for _ in 0..CRUD_ITERS {
         let id = rand_world_id(&mut rng) % 10_000;
-        let (_val,): (String,) =
-            sqlx::query_as("SELECT val FROM bench_compare_sqlx WHERE id = $1")
-                .bind(id)
-                .fetch_one(&pool)
-                .await?;
+        let (_val,): (String,) = sqlx::query_as("SELECT val FROM bench_compare_sqlx WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
     }
     let crud_select_rps = CRUD_ITERS as f64 / t.elapsed().as_secs_f64();
 
@@ -380,10 +363,7 @@ async fn run_sqlx() -> Result<DriverResults, Box<dyn std::error::Error>> {
         for _ in 0..WARMUP_ITERS {
             for _ in 0..n {
                 let id = rand_world_id(&mut rng);
-                let _: (i32, i32) = sqlx::query_as(WORLD_SQL)
-                    .bind(id)
-                    .fetch_one(&pool)
-                    .await?;
+                let _: (i32, i32) = sqlx::query_as(WORLD_SQL).bind(id).fetch_one(&pool).await?;
             }
         }
         let mut rng = 0xabcd_ef01u32;
@@ -391,13 +371,46 @@ async fn run_sqlx() -> Result<DriverResults, Box<dyn std::error::Error>> {
         for _ in 0..MULTI_REQUESTS {
             for _ in 0..n {
                 let id = rand_world_id(&mut rng);
-                let (_id, _rn): (i32, i32) = sqlx::query_as(WORLD_SQL)
-                    .bind(id)
-                    .fetch_one(&pool)
-                    .await?;
+                let (_id, _rn): (i32, i32) =
+                    sqlx::query_as(WORLD_SQL).bind(id).fetch_one(&pool).await?;
             }
         }
         multi_seq.push(MULTI_REQUESTS as f64 / t.elapsed().as_secs_f64());
+    }
+
+    // ── TFB Database Updates (Test #5) ────────────────────────────────────
+    let mut updates_seq = Vec::with_capacity(MULTI_QUERY_COUNTS.len());
+    for &n in MULTI_QUERY_COUNTS {
+        let mut rng = 0x2468_1357u32;
+        for _ in 0..WARMUP_ITERS {
+            for _ in 0..n {
+                let id = rand_world_id(&mut rng);
+                let (row_id, _rn): (i32, i32) =
+                    sqlx::query_as(WORLD_SQL).bind(id).fetch_one(&pool).await?;
+                let new_rn = rand_world_id(&mut rng);
+                sqlx::query("UPDATE world SET randomnumber = $1 WHERE id = $2")
+                    .bind(new_rn)
+                    .bind(row_id)
+                    .execute(&pool)
+                    .await?;
+            }
+        }
+        let mut rng = 0x1357_2468u32;
+        let t = Instant::now();
+        for _ in 0..MULTI_REQUESTS {
+            for _ in 0..n {
+                let id = rand_world_id(&mut rng);
+                let (row_id, _rn): (i32, i32) =
+                    sqlx::query_as(WORLD_SQL).bind(id).fetch_one(&pool).await?;
+                let new_rn = rand_world_id(&mut rng);
+                sqlx::query("UPDATE world SET randomnumber = $1 WHERE id = $2")
+                    .bind(new_rn)
+                    .bind(row_id)
+                    .execute(&pool)
+                    .await?;
+            }
+        }
+        updates_seq.push(MULTI_REQUESTS as f64 / t.elapsed().as_secs_f64());
     }
 
     Ok(DriverResults {
@@ -408,7 +421,7 @@ async fn run_sqlx() -> Result<DriverResults, Box<dyn std::error::Error>> {
         crud_update_rps,
         crud_insert_rps,
         multi_seq,
-        multi_pipeline: None,
+        updates_seq,
     })
 }
 
@@ -437,9 +450,7 @@ async fn run_tokio_postgres() -> Result<DriverResults, Box<dyn std::error::Error
         .batch_execute("DROP TABLE IF EXISTS bench_compare_tp")
         .await?;
     client
-        .batch_execute(
-            "CREATE TABLE bench_compare_tp (id INT PRIMARY KEY, val TEXT, count INT)",
-        )
+        .batch_execute("CREATE TABLE bench_compare_tp (id INT PRIMARY KEY, val TEXT, count INT)")
         .await?;
     for chunk_start in (0..10_000usize).step_by(1000) {
         let mut sql = String::from("INSERT INTO bench_compare_tp (id, val, count) VALUES ");
@@ -576,6 +587,43 @@ async fn run_tokio_postgres() -> Result<DriverResults, Box<dyn std::error::Error
         multi_seq.push(MULTI_REQUESTS as f64 / t.elapsed().as_secs_f64());
     }
 
+    // ── TFB Database Updates (Test #5) ────────────────────────────────────
+    let mut updates_seq = Vec::with_capacity(MULTI_QUERY_COUNTS.len());
+    for &n in MULTI_QUERY_COUNTS {
+        let mut rng = 0x2468_1357u32;
+        for _ in 0..WARMUP_ITERS {
+            for _ in 0..n {
+                let id = rand_world_id(&mut rng);
+                let row = client.query_one(WORLD_SQL, &[&id]).await?;
+                let row_id: i32 = row.get(0);
+                let new_rn = rand_world_id(&mut rng);
+                client
+                    .execute(
+                        "UPDATE world SET randomnumber = $1 WHERE id = $2",
+                        &[&new_rn, &row_id],
+                    )
+                    .await?;
+            }
+        }
+        let mut rng = 0x1357_2468u32;
+        let t = Instant::now();
+        for _ in 0..MULTI_REQUESTS {
+            for _ in 0..n {
+                let id = rand_world_id(&mut rng);
+                let row = client.query_one(WORLD_SQL, &[&id]).await?;
+                let row_id: i32 = row.get(0);
+                let new_rn = rand_world_id(&mut rng);
+                client
+                    .execute(
+                        "UPDATE world SET randomnumber = $1 WHERE id = $2",
+                        &[&new_rn, &row_id],
+                    )
+                    .await?;
+            }
+        }
+        updates_seq.push(MULTI_REQUESTS as f64 / t.elapsed().as_secs_f64());
+    }
+
     Ok(DriverResults {
         name: "tokio-postgres",
         select_one_rps,
@@ -584,7 +632,7 @@ async fn run_tokio_postgres() -> Result<DriverResults, Box<dyn std::error::Error
         crud_update_rps,
         crud_insert_rps,
         multi_seq,
-        multi_pipeline: None,
+        updates_seq,
     })
 }
 
@@ -621,6 +669,7 @@ fn print_crud_table(results: &[DriverResults]) {
     println!();
     println!("{}", "─".repeat(label_w + col_w * results.len()));
 
+    #[allow(clippy::type_complexity)]
     let rows: &[(&str, fn(&DriverResults) -> f64)] = &[
         ("SELECT 1 (req/s)", |r| r.select_one_rps),
         ("Param query (req/s)", |r| r.param_rps),
@@ -658,71 +707,105 @@ fn print_crud_table(results: &[DriverResults]) {
 }
 
 fn print_multi_query_table(results: &[DriverResults]) {
-    // Build column list: chopin-pg seq, chopin-pg pipeline, sqlx, tokio-postgres
     println!();
     println!("┌─ TFB Multi-Query  (requests/s, one connection) ───────────────────────┐");
-    println!("│  N=queries per request  •  {MULTI_REQUESTS} requests each  •  world table 10K rows  │");
-    println!("│  pipeline_query: N queries sent in 1 TCP write, each w/ own Sync      │");
-    println!("│  (TFB General Req #7: pipelining permitted as network-level opt.)      │");
+    println!(
+        "│  N=queries per request  •  {MULTI_REQUESTS} requests each  •  world table 10K rows  │"
+    );
     println!("└───────────────────────────────────────────────────────────────────────┘");
     println!();
 
     let label_w = 8usize;
     let col_w = 16usize;
 
-    // Build columns: seq for each driver, then pipeline for chopin-pg
-    let seq_drivers: Vec<&DriverResults> = results.iter().collect();
-    let pipeline_drivers: Vec<&DriverResults> = results
-        .iter()
-        .filter(|r| r.multi_pipeline.is_some())
-        .collect();
-
     // Header
     print!("{:<label_w$}", "N");
-    for r in &seq_drivers {
+    for r in results {
         print!("{:>col_w$}", r.name);
     }
-    for r in &pipeline_drivers {
-        print!("{:>col_w$}", format!("{} (pipe)", r.name));
-    }
     println!();
-    let total_cols = seq_drivers.len() + pipeline_drivers.len();
-    println!("{}", "─".repeat(label_w + col_w * total_cols));
+    println!("{}", "─".repeat(label_w + col_w * results.len()));
 
     for (i, &n) in MULTI_QUERY_COUNTS.iter().enumerate() {
         print!("{:<label_w$}", n);
-        for r in &seq_drivers {
+        for r in results {
             print!("{}", fmt_rps(r.multi_seq[i]));
-        }
-        for r in &pipeline_drivers {
-            if let Some(ref p) = r.multi_pipeline {
-                print!("{}", fmt_rps(p[i]));
-            }
         }
         println!();
     }
 
-    // Pipeline vs sequential speedup for chopin-pg
+    // chopin-pg vs others speedup
     if let Some(chopin) = results.iter().find(|r| r.name == "chopin-pg") {
-        if let Some(ref pipeline) = chopin.multi_pipeline {
-            println!();
-            println!("  chopin-pg pipeline speedup vs sequential:");
-            print!("{:<label_w$}", "N");
-            print!("{:>col_w$}", "pipe/seq");
-            // vs async drivers
-            for r in results.iter().filter(|r| r.name != "chopin-pg") {
-                print!("{:>col_w$}", format!("pipe/vs {}", r.name));
+        let others: Vec<&DriverResults> =
+            results.iter().filter(|r| r.name != "chopin-pg").collect();
+        println!();
+        println!("  chopin-pg speedup:");
+        print!("{:<label_w$}", "N");
+        for o in &others {
+            print!("{:>col_w$}", format!("vs {}", o.name));
+        }
+        println!();
+        println!("{}", "─".repeat(label_w + col_w * others.len()));
+        for (i, &n) in MULTI_QUERY_COUNTS.iter().enumerate() {
+            print!("{:<label_w$}", n);
+            for o in &others {
+                print!(
+                    "{:>col_w$}",
+                    speedup_label(chopin.multi_seq[i], o.multi_seq[i])
+                );
             }
             println!();
-            println!("{}", "─".repeat(label_w + col_w * (1 + results.len() - 1)));
-            for (i, &n) in MULTI_QUERY_COUNTS.iter().enumerate() {
-                print!("{:<label_w$}", n);
-                print!("{:>col_w$}", speedup_label(pipeline[i], chopin.multi_seq[i]));
-                for r in results.iter().filter(|r| r.name != "chopin-pg") {
-                    print!("{:>col_w$}", speedup_label(pipeline[i], r.multi_seq[i]));
-                }
-                println!();
+        }
+    }
+}
+
+fn print_updates_table(results: &[DriverResults]) {
+    println!();
+    println!("┌─ TFB Database Updates / Test #5  (requests/s, one connection) ───────┐");
+    println!(
+        "│  N=rows per request (SELECT+UPDATE each)  •  {MULTI_REQUESTS} requests each      │"
+    );
+    println!("└───────────────────────────────────────────────────────────────────────┘");
+    println!();
+
+    let label_w = 8usize;
+    let col_w = 16usize;
+
+    print!("{:<label_w$}", "N");
+    for r in results {
+        print!("{:>col_w$}", r.name);
+    }
+    println!();
+    println!("{}", "─".repeat(label_w + col_w * results.len()));
+
+    for (i, &n) in MULTI_QUERY_COUNTS.iter().enumerate() {
+        print!("{:<label_w$}", n);
+        for r in results {
+            print!("{}", fmt_rps(r.updates_seq[i]));
+        }
+        println!();
+    }
+
+    if let Some(chopin) = results.iter().find(|r| r.name == "chopin-pg") {
+        let others: Vec<&DriverResults> =
+            results.iter().filter(|r| r.name != "chopin-pg").collect();
+        println!();
+        println!("  chopin-pg speedup:");
+        print!("{:<label_w$}", "N");
+        for o in &others {
+            print!("{:>col_w$}", format!("vs {}", o.name));
+        }
+        println!();
+        println!("{}", "─".repeat(label_w + col_w * others.len()));
+        for (i, &n) in MULTI_QUERY_COUNTS.iter().enumerate() {
+            print!("{:<label_w$}", n);
+            for o in &others {
+                print!(
+                    "{:>col_w$}",
+                    speedup_label(chopin.updates_seq[i], o.updates_seq[i])
+                );
             }
+            println!();
         }
     }
 }
@@ -803,6 +886,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_crud_table(&results);
     println!();
     print_multi_query_table(&results);
+    println!();
+    print_updates_table(&results);
     println!();
     println!("  >1.0x = chopin-pg is faster   <1.0x = chopin-pg is slower");
     println!();

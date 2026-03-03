@@ -1,4 +1,9 @@
-//! Zero-copy row abstraction for query results.
+//! Row abstraction for query results with inline small-value optimisation.
+//!
+//! Column values ≤ 24 bytes (which covers all binary-format scalars: bool,
+//! i16, i32, i64, f32, f64, UUID, date, time, timestamp) are stored
+//! **inline** — zero heap allocations per column.  Only values larger than
+//! 24 bytes (e.g. long text, bytea, jsonb) spill to the heap.
 
 use std::rc::Rc;
 
@@ -7,22 +12,74 @@ use crate::error::{PgError, PgResult};
 use crate::protocol::FormatCode;
 use crate::types::{FromSql, PgValue};
 
+/// Maximum number of bytes stored inline (no heap allocation).
+/// 24 bytes covers: bool(1), i16(2), i32(4), i64(8), f32(4), f64(8),
+/// UUID(16), Date(4), Time(8), Timestamp(8), Interval(16), MacAddr(6),
+/// Point(16).
+const INLINE_CAP: usize = 24;
+
+/// Compact byte storage: small values inline, large values on the heap.
+#[derive(Clone)]
+enum CompactBytes {
+    /// Value stored inline — no heap allocation.
+    Inline { data: [u8; INLINE_CAP], len: u8 },
+    /// Value too large for inline — heap allocated.
+    Heap(Vec<u8>),
+}
+
+impl std::fmt::Debug for CompactBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CompactBytes({}b)", self.as_slice().len())
+    }
+}
+
+impl CompactBytes {
+    /// Create from a byte slice.  Inline if ≤ INLINE_CAP, heap otherwise.
+    #[inline]
+    fn from_slice(data: &[u8]) -> Self {
+        if data.len() <= INLINE_CAP {
+            let mut buf = [0u8; INLINE_CAP];
+            buf[..data.len()].copy_from_slice(data);
+            CompactBytes::Inline {
+                data: buf,
+                len: data.len() as u8,
+            }
+        } else {
+            CompactBytes::Heap(data.to_vec())
+        }
+    }
+
+    /// Borrow the stored bytes.
+    #[inline]
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            CompactBytes::Inline { data, len } => &data[..*len as usize],
+            CompactBytes::Heap(v) => v,
+        }
+    }
+}
+
 /// A row returned from a query. Contains column descriptions and raw data.
 ///
 /// Column descriptors are shared via `Rc` across all rows in a result set,
 /// avoiding expensive deep clones on every `DataRow` message.
+///
+/// Column values use [`CompactBytes`] — values ≤ 24 bytes are stored inline
+/// (no heap allocation), which covers all binary-format scalar types.
 #[derive(Debug)]
 pub struct Row {
     columns: Rc<Vec<ColumnDesc>>,
-    values: Vec<Option<Vec<u8>>>,
+    values: Vec<Option<CompactBytes>>,
 }
 
 impl Row {
     /// Create a new row from shared column descriptions and raw column data.
+    ///
+    /// Small values (≤ 24 bytes) are stored inline with zero heap allocation.
     pub fn new(columns: Rc<Vec<ColumnDesc>>, raw_values: Vec<Option<&[u8]>>) -> Self {
         let values = raw_values
             .into_iter()
-            .map(|v| v.map(|d| d.to_vec()))
+            .map(|v| v.map(CompactBytes::from_slice))
             .collect();
         Self { columns, values }
     }
@@ -30,7 +87,7 @@ impl Row {
     /// Safely create a mock row for testing, bypassing wire protocols.
     pub fn mock(names: &[&str], values: &[PgValue]) -> Self {
         let mut cols = Vec::new();
-        let mut raw_values = Vec::new();
+        let mut raw_values: Vec<Option<CompactBytes>> = Vec::new();
         for (i, name) in names.iter().enumerate() {
             let (type_oid, data) = match &values[i] {
                 PgValue::Null => (25, None), // default to text
@@ -50,7 +107,7 @@ impl Row {
                 type_modifier: -1,
                 format_code: FormatCode::Text,
             });
-            raw_values.push(data);
+            raw_values.push(data.map(|d| CompactBytes::from_slice(&d)));
         }
         Self {
             columns: Rc::new(cols),
@@ -81,8 +138,8 @@ impl Row {
         match &self.values[index] {
             None => Ok(PgValue::Null),
             Some(data) => match col.format_code {
-                FormatCode::Text => PgValue::from_text(col.type_oid, data),
-                FormatCode::Binary => PgValue::from_binary(col.type_oid, data),
+                FormatCode::Text => PgValue::from_text(col.type_oid, data.as_slice()),
+                FormatCode::Binary => PgValue::from_binary(col.type_oid, data.as_slice()),
             },
         }
     }
@@ -125,7 +182,7 @@ impl Row {
         }
         match &self.values[index] {
             None => Ok(None),
-            Some(data) => std::str::from_utf8(data)
+            Some(data) => std::str::from_utf8(data.as_slice())
                 .map(Some)
                 .map_err(|_| PgError::TypeConversion("Invalid UTF-8".to_string())),
         }
