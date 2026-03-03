@@ -1,66 +1,79 @@
 // src/extractor.rs
-use crate::jwt::JwtManager;
+use std::sync::OnceLock;
+
+use crate::jwt::{AuthError, HasJti, JwtManager};
 use chopin_core::extract::FromRequest;
 use chopin_core::http::{Context, Response};
 use serde::Deserialize;
 
+// ─── Global manager ──────────────────────────────────────────────────────────
+
+/// The global [`JwtManager`] shared across all threads.
+///
+/// Initialise it once at startup with [`init_jwt_manager`] before the server
+/// starts accepting requests.
+pub static GLOBAL_JWT_MANAGER: OnceLock<JwtManager> = OnceLock::new();
+
+/// Initialise the global [`JwtManager`].
+///
+/// Call this **once** before starting the server. Panics if called more than once.
+///
+/// # Example
+/// ```rust,ignore
+/// use chopin_auth::{JwtManager, init_jwt_manager};
+/// init_jwt_manager(JwtManager::new(b"my-secret"));
+/// ```
+pub fn init_jwt_manager(manager: JwtManager) {
+    if GLOBAL_JWT_MANAGER.set(manager).is_err() {
+        panic!("JwtManager already initialised — call init_jwt_manager only once");
+    }
+}
+
+// ─── Auth extractor ─────────────────────────────────────────────────────────
+
+/// A request extractor that validates the `Authorization: Bearer <token>` header
+/// and resolves to the decoded claims `T`.
+///
+/// `T` must implement both [`Deserialize`] and [`HasJti`]. Types that do not use
+/// revocation can satisfy [`HasJti`] with a one-line empty impl.
+///
+/// # Responses on failure
+/// - `401` – missing header, invalid/expired/revoked token.
+/// - `500` – the global [`JwtManager`] was not initialised.
 pub struct Auth<T> {
     pub claims: T,
 }
 
-// We rely on a global or context-provided JwtManager.
-// For shared-nothing, the easiest way to provide the JwtManager is via a thread-local,
-// but since this is an extractor, let's look at how chopin handles state.
-// Wait, `Context` does not have an `extensions` or `state` map right now.
-// For now, let's use a thread-local for the `JwtManager`.
-// The user starts the server, and they would initialize the thread-local token verifier.
-
-thread_local! {
-    pub static JWT_MANAGER: std::cell::RefCell<Option<JwtManager>> = const { std::cell::RefCell::new(None) };
-}
-
-pub fn init_jwt_manager(manager: JwtManager) {
-    JWT_MANAGER.with(|m| *m.borrow_mut() = Some(manager));
-}
-
 impl<'a, T> FromRequest<'a> for Auth<T>
 where
-    T: for<'de> Deserialize<'de> + 'static,
+    T: for<'de> Deserialize<'de> + HasJti + 'static,
 {
     type Error = Response;
 
-    // `Response` is intentionally the error type here (HTTP 401 / 500 short-circuits).
-    // The size increase comes from the inline header slab in `Headers`; the allocation
-    // pattern is unchanged at the call site.
+    // `Response` is intentionally the error type here (HTTP 401/500 short-circuits).
     #[allow(clippy::result_large_err)]
     fn from_request(ctx: &'a Context<'a>) -> Result<Self, Self::Error> {
-        let auth_header = {
-            let mut found = None;
-            for i in 0..ctx.req.header_count as usize {
-                let (k, v) = ctx.req.headers[i];
-                if k.eq_ignore_ascii_case("Authorization") {
-                    found = Some(v);
-                    break;
-                }
+        // Extract the Authorization header.
+        let auth_header = (0..ctx.req.header_count as usize).find_map(|i| {
+            let (k, v) = ctx.req.headers[i];
+            k.eq_ignore_ascii_case("Authorization").then_some(v)
+        });
+
+        let token = auth_header
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .ok_or_else(|| Response::new(401))?;
+
+        let manager = GLOBAL_JWT_MANAGER
+            .get()
+            .ok_or_else(Response::server_error)?;
+
+        let claims = manager.decode::<T>(token).map_err(|e| match e {
+            AuthError::Expired | AuthError::Revoked | AuthError::InvalidToken(_) => {
+                Response::new(401)
             }
-            found
-        };
+            _ => Response::server_error(),
+        })?;
 
-        if let Some(auth_val) = auth_header
-            && let Some(token) = auth_val.strip_prefix("Bearer ")
-        {
-            let claims = JWT_MANAGER.with(|m| {
-                if let Some(manager) = m.borrow().as_ref() {
-                    manager.decode::<T>(token).map_err(|_| Response::new(401))
-                } else {
-                    // Manager not initialized
-                    Err(Response::server_error())
-                }
-            })?;
-
-            return Ok(Auth { claims });
-        }
-
-        Err(Response::new(401))
+        Ok(Auth { claims })
     }
 }

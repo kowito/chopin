@@ -1,14 +1,31 @@
 // src/middleware.rs
 
-/// Implementing `RequireRole` as a zero-allocation middleware.
-/// Since Chopin middleware uses static function pointers (`fn(...) -> Response`),
-/// we need to generate discrete functions for specific roles if we want to bind them.
-pub trait Role: PartialEq {
-    // Empty trait to signify a Role Enum or Struct.
-}
+/// Marker trait for role types used with [`require_role_middleware`].
+pub trait Role: PartialEq {}
 
-/// Helper macro to generate a zero-allocation middleware function for a specific role and claim type.
-/// The `Claims` type must implement `fn has_role(&self, role: &Role) -> bool`.
+/// Generate a zero-allocation middleware function that requires a specific role.
+///
+/// The generated function reads the `Authorization: Bearer <token>` header,
+/// decodes the JWT using the global [`JwtManager`], and calls `$has_role_fn` on
+/// the decoded claims. Responds with:
+/// - `401` – missing or invalid token.
+/// - `403` – authenticated but wrong role.
+///
+/// # Requirements
+/// - [`init_jwt_manager`](crate::extractor::init_jwt_manager) must have been called before the server starts.
+/// - `$claims_type` must implement [`HasJti`](crate::jwt::HasJti) (empty impl is fine).
+///
+/// # Example
+/// ```rust,ignore
+/// use chopin_auth::{Role, require_role_middleware};
+///
+/// #[derive(PartialEq)]
+/// enum MyRole { Admin, User }
+/// impl Role for MyRole {}
+///
+/// require_role_middleware!(require_admin, MyClaims, MyRole::Admin, MyClaims::has_role);
+/// // then: router.middleware(require_admin)
+/// ```
 #[macro_export]
 macro_rules! require_role_middleware {
     ($middleware_name:ident, $claims_type:ty, $role_expr:expr, $has_role_fn:path) => {
@@ -16,39 +33,29 @@ macro_rules! require_role_middleware {
             ctx: chopin_core::http::Context,
             next: chopin_core::router::BoxedHandler,
         ) -> chopin_core::http::Response {
-            let auth_header = {
-                let mut found = None;
-                for i in 0..ctx.req.header_count as usize {
-                    let (k, v) = ctx.req.headers[i];
-                    if k.eq_ignore_ascii_case("Authorization") {
-                        found = Some(v);
-                        break;
-                    }
+            // Extract the Authorization header.
+            let token = (0..ctx.req.header_count as usize).find_map(|i| {
+                let (k, v) = ctx.req.headers[i];
+                if k.eq_ignore_ascii_case("Authorization") {
+                    v.strip_prefix("Bearer ")
+                } else {
+                    None
                 }
-                found
+            });
+
+            let Some(token) = token else {
+                return chopin_core::http::Response::new(401);
             };
 
-            if let Some(auth_val) = auth_header {
-                if let Some(token) = auth_val.strip_prefix("Bearer ") {
-                    // Quick check thread-local without allocating
-                    let is_authorized = $crate::extractor::JWT_MANAGER.with(|m| {
-                        if let Some(manager) = m.borrow().as_ref() {
-                            if let Ok(claims) = manager.decode::<$claims_type>(token) {
-                                return $has_role_fn(&claims, &$role_expr);
-                            }
-                        }
-                        false
-                    });
+            let Some(manager) = $crate::extractor::GLOBAL_JWT_MANAGER.get() else {
+                return chopin_core::http::Response::server_error();
+            };
 
-                    if is_authorized {
-                        return next(ctx);
-                    } else {
-                        return chopin_core::http::Response::new(403);
-                    }
-                }
+            match manager.decode::<$claims_type>(token) {
+                Ok(claims) if $has_role_fn(&claims, &$role_expr) => next(ctx),
+                Ok(_) => chopin_core::http::Response::new(403),
+                Err(_) => chopin_core::http::Response::new(401),
             }
-
-            chopin_core::http::Response::new(401)
         }
     };
 }
