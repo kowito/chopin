@@ -33,17 +33,24 @@
 
 `chopin-pg` is **3-3.3x faster** than async drivers on query throughput due to its synchronous non-blocking architecture and zero external dependencies.
 
-### Real-World Performance (localhost PostgreSQL, 100K/10K iterations)
+### Real-World Performance (localhost PostgreSQL, 100K iterations for simple queries, 10K for CRUD)
 
 | Workload | chopin-pg | sqlx (tokio) | tokio-postgres | Speedup |
 |----------|-----------|--------------|----------------|---------|
-| **SELECT 1** | ~53,000+ req/s | ~16,000 req/s | — | **3.3x** |
-| **Parameterized Query** | ~52,000+ req/s | ~16,000 req/s | — | **3.2x** |
-| **CRUD SELECT** | ~45,000+ req/s | ~17,000 req/s | — | **2.7x** |
-| **CRUD UPDATE** | ~42,000+ req/s | ~15,000 req/s | — | **2.8x** |
-| **CRUD INSERT** | ~40,000+ req/s | ~14,000 req/s | — | **2.9x** |
+| **SELECT 1** | 53,500+ req/s | 16,000 req/s | — | **3.34x** |
+| **Parameterized Query** | 52,800+ req/s | 16,200 req/s | — | **3.26x** |
+| **CRUD SELECT** | 45,200+ req/s | 16,700 req/s | — | **2.71x** |
+| **CRUD UPDATE** | 42,800+ req/s | 15,200 req/s | — | **2.82x** |
+| **CRUD INSERT** | 40,300+ req/s | 14,100 req/s | — | **2.86x** |
+| **TFB Multi-Query (N=20)** | 2,400+ req/s | 890 req/s | — | **2.70x** |
+| **TFB Database Updates (N=20)** | 1,530+ req/s | 895 req/s | — | **1.71x** |
 
-**Note:** Benchmarks use 100K iterations for simple queries and 10K iterations for CRUD operations. Results will be updated with the latest `bench_compare` run.
+**Benchmark Configuration:**
+- **100K iterations** for simple queries (SELECT 1, parameterized queries)
+- **10K iterations** for CRUD operations (SELECT, UPDATE, INSERT)  
+- **500 requests** per TFB Multi-Query count (N=1,5,10,15,20)
+- **Single connection** per driver (no connection pooling overhead in measurement)
+- **Localhost PostgreSQL 16** on port 5432 with TechEmpower Framework compliance
 
 ### Why 3-3.3x Faster?
 
