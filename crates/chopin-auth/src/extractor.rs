@@ -6,6 +6,78 @@ use chopin_core::extract::FromRequest;
 use chopin_core::http::{Context, Response};
 use serde::Deserialize;
 
+// ─── ErrorHandler ───────────────────────────────────────────────────────────
+
+/// Convert an [`AuthError`] into an HTTP [`Response`].
+///
+/// A default implementation is provided that returns an empty 401 for
+/// token errors and an empty 500 for internal errors, preserving
+/// backward-compatible behaviour.
+///
+/// Register a custom handler once at startup with [`set_error_handler`].
+///
+/// # Example
+/// ```rust,ignore
+/// use chopin_auth::extractor::{ErrorHandler, set_error_handler};
+/// use chopin_auth::jwt::AuthError;
+/// use chopin_core::http::Response;
+///
+/// struct JsonErrors;
+/// impl ErrorHandler for JsonErrors {
+///     fn handle(&self, err: AuthError) -> Response {
+///         let body = format!(r#"{{"error":"{err}"}}");
+///         Response::json(401, &body)
+///     }
+/// }
+///
+/// set_error_handler(JsonErrors);
+/// ```
+pub trait ErrorHandler: Send + Sync {
+    /// Convert `err` into an HTTP response that will be returned to the client.
+    fn handle(&self, err: AuthError) -> Response;
+}
+
+struct DefaultErrorHandler;
+impl ErrorHandler for DefaultErrorHandler {
+    fn handle(&self, err: AuthError) -> Response {
+        match err {
+            AuthError::Expired | AuthError::Revoked | AuthError::InvalidToken(_) => {
+                Response::new(401)
+            }
+            _ => Response::server_error(),
+        }
+    }
+}
+
+static GLOBAL_ERROR_HANDLER: OnceLock<Box<dyn ErrorHandler>> = OnceLock::new();
+
+/// Register a custom [`ErrorHandler`] used by all [`Auth`] extractors.
+///
+/// Call this **once** before starting the server, after (or alongside)
+/// [`init_jwt_manager`]. If never called, the default handler returns empty
+/// 401/500 responses.
+///
+/// Panics if called more than once.
+///
+/// # Example
+/// ```rust,ignore
+/// use chopin_auth::extractor::set_error_handler;
+/// set_error_handler(MyJsonErrorHandler);
+/// ```
+pub fn set_error_handler(handler: impl ErrorHandler + 'static) {
+    if GLOBAL_ERROR_HANDLER.set(Box::new(handler)).is_err() {
+        panic!("ErrorHandler already set — call set_error_handler only once");
+    }
+}
+
+#[inline]
+fn dispatch_error(err: AuthError) -> Response {
+    match GLOBAL_ERROR_HANDLER.get() {
+        Some(h) => h.handle(err),
+        None => DefaultErrorHandler.handle(err),
+    }
+}
+
 // ─── Global manager ──────────────────────────────────────────────────────────
 
 /// The global [`JwtManager`] shared across all threads.
@@ -67,12 +139,7 @@ where
             .get()
             .ok_or_else(Response::server_error)?;
 
-        let claims = manager.decode::<T>(token).map_err(|e| match e {
-            AuthError::Expired | AuthError::Revoked | AuthError::InvalidToken(_) => {
-                Response::new(401)
-            }
-            _ => Response::server_error(),
-        })?;
+        let claims = manager.decode::<T>(token).map_err(dispatch_error)?;
 
         Ok(Auth { claims })
     }

@@ -3,6 +3,36 @@
 /// Marker trait for role types used with [`require_role_middleware`].
 pub trait Role: PartialEq {}
 
+/// Implemented by claims types that can be checked for a specific role.
+///
+/// Implement this alongside [`Role`] to enable role-based access with the
+/// [`require_role_middleware!`] macro.
+///
+/// # Example
+/// ```rust,ignore
+/// use chopin_auth::{Role, RoleCheck};
+///
+/// #[derive(PartialEq)]
+/// enum MyRole { Admin, User }
+/// impl Role for MyRole {}
+///
+/// struct MyClaims { sub: String, role: MyRole }
+/// impl RoleCheck<MyRole> for MyClaims {
+///     fn has_role(&self, role: &MyRole) -> bool {
+///         self.role == *role
+///     }
+/// }
+/// ```
+///
+/// Then use with the macro:
+/// ```rust,ignore
+/// require_role_middleware!(require_admin, MyClaims, MyRole::Admin, MyClaims::has_role);
+/// ```
+pub trait RoleCheck<R: Role> {
+    /// Returns `true` if these claims grant the specified `role`.
+    fn has_role(&self, role: &R) -> bool;
+}
+
 /// Generate a zero-allocation middleware function that requires a specific role.
 ///
 /// The generated function reads the `Authorization: Bearer <token>` header,

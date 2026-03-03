@@ -80,6 +80,36 @@ impl TokenBlacklist {
         }
     }
 
+    /// Spawn a background thread that calls [`TokenBlacklist::cleanup`] on a
+    /// fixed `interval`, preventing unbounded memory growth from accumulated
+    /// expired entries.
+    ///
+    /// The thread runs until the process exits. Because [`TokenBlacklist`] is
+    /// backed by an [`Arc`], the spawned thread holds its own clone and will
+    /// not prevent the original value from being dropped — the cleanup simply
+    /// becomes a no-op once the last reference is gone.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use std::time::Duration;
+    /// use chopin_auth::TokenBlacklist;
+    ///
+    /// let bl = TokenBlacklist::new();
+    /// bl.start_cleanup_task(Duration::from_secs(300)); // clean up every 5 min
+    /// ```
+    pub fn start_cleanup_task(&self, interval: std::time::Duration) {
+        let bl = self.clone();
+        std::thread::Builder::new()
+            .name("chopin-auth-blacklist-cleanup".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(interval);
+                    bl.cleanup();
+                }
+            })
+            .expect("failed to spawn blacklist cleanup thread");
+    }
+
     /// Number of currently tracked entries (including expired ones not yet cleaned up).
     pub fn len(&self) -> usize {
         self.revoked.read().map(|l| l.len()).unwrap_or(0)

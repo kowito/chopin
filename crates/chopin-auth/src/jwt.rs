@@ -86,11 +86,13 @@ pub struct JwtConfig {
 /// A cloneable JWT manager for encoding and decoding tokens.
 ///
 /// Constructors:
-/// - [`JwtManager::new`]          – HMAC-SHA256 (sign + verify)
-/// - [`JwtManager::verify_only`]  – HMAC-SHA256 (verify only)
-/// - [`JwtManager::from_rsa_pem`] – RS256 (sign + verify)
-/// - [`JwtManager::from_ec_pem`]  – ES256 (sign + verify)
-/// - [`JwtManager::with_config`]  – fully custom config
+/// - [`JwtManager::new`]                – HMAC-SHA256 (sign + verify)
+/// - [`JwtManager::verify_only`]        – HMAC-SHA256 (verify only)
+/// - [`JwtManager::from_rsa_pem`]       – RS256 (sign + verify)
+/// - [`JwtManager::from_rsa_public_pem`] – RS256 (verify only)
+/// - [`JwtManager::from_ec_pem`]        – ES256 (sign + verify)
+/// - [`JwtManager::from_ec_public_pem`] – ES256 (verify only)
+/// - [`JwtManager::with_config`]        – fully custom config
 ///
 /// Add a revocation blacklist with [`JwtManager::with_blacklist`].
 #[derive(Clone)]
@@ -130,7 +132,8 @@ impl JwtManager {
 
     /// Construct a manager from a PEM-encoded RSA private/public key pair (RS256).
     ///
-    /// Pass `None` for `private_key_pem` to create a verify-only manager.
+    /// Both the private key (for signing) and the public key (for verification)
+    /// must be provided. For verify-only use, see [`JwtManager::from_rsa_public_pem`].
     pub fn from_rsa_pem(private_key_pem: &[u8], public_key_pem: &[u8]) -> Result<Self, AuthError> {
         let encoding_key = EncodingKey::from_rsa_pem(private_key_pem)
             .map_err(|e| AuthError::Internal(format!("RSA private key: {e}")))?;
@@ -146,7 +149,28 @@ impl JwtManager {
         })
     }
 
+    /// Construct a **verify-only** manager from a PEM-encoded RSA public key (RS256).
+    ///
+    /// No signing key is stored; calling [`JwtManager::encode`] will return
+    /// [`AuthError::EncodingKeyMissing`]. Ideal for microservices that only
+    /// consume tokens, never issue them.
+    pub fn from_rsa_public_pem(public_key_pem: &[u8]) -> Result<Self, AuthError> {
+        let decoding_key = DecodingKey::from_rsa_pem(public_key_pem)
+            .map_err(|e| AuthError::Internal(format!("RSA public key: {e}")))?;
+        Ok(Self {
+            config: Arc::new(JwtConfig {
+                encoding_key: None,
+                decoding_key,
+                validation: Validation::new(Algorithm::RS256),
+            }),
+            blacklist: None,
+        })
+    }
+
     /// Construct a manager from a PEM-encoded EC private/public key pair (ES256).
+    ///
+    /// Both keys are required for signing and verification. For verify-only use,
+    /// see [`JwtManager::from_ec_public_pem`].
     pub fn from_ec_pem(private_key_pem: &[u8], public_key_pem: &[u8]) -> Result<Self, AuthError> {
         let encoding_key = EncodingKey::from_ec_pem(private_key_pem)
             .map_err(|e| AuthError::Internal(format!("EC private key: {e}")))?;
@@ -155,6 +179,24 @@ impl JwtManager {
         Ok(Self {
             config: Arc::new(JwtConfig {
                 encoding_key: Some(encoding_key),
+                decoding_key,
+                validation: Validation::new(Algorithm::ES256),
+            }),
+            blacklist: None,
+        })
+    }
+
+    /// Construct a **verify-only** manager from a PEM-encoded EC public key (ES256).
+    ///
+    /// No signing key is stored; calling [`JwtManager::encode`] will return
+    /// [`AuthError::EncodingKeyMissing`]. Ideal for microservices that only
+    /// consume tokens, never issue them.
+    pub fn from_ec_public_pem(public_key_pem: &[u8]) -> Result<Self, AuthError> {
+        let decoding_key = DecodingKey::from_ec_pem(public_key_pem)
+            .map_err(|e| AuthError::Internal(format!("EC public key: {e}")))?;
+        Ok(Self {
+            config: Arc::new(JwtConfig {
+                encoding_key: None,
                 decoding_key,
                 validation: Validation::new(Algorithm::ES256),
             }),

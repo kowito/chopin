@@ -41,7 +41,7 @@ pub mod middleware;
 pub mod revocation;
 
 pub use crypto::{PasswordHasher, hash_password, verify_password};
-pub use extractor::{Auth, init_jwt_manager};
+pub use extractor::{Auth, ErrorHandler, init_jwt_manager, set_error_handler};
 pub use jwt::{AuthError, HasJti, JwtConfig, JwtManager};
-pub use middleware::Role;
+pub use middleware::{Role, RoleCheck};
 pub use revocation::TokenBlacklist;
