@@ -158,42 +158,60 @@ thread_local! {
 }
 ```
 
-### ORM Integration
-Declaring models and interacting with the database is completely type-safe with the `Model` derive macro. All models must implement `Validate` (with a default pass-through available).
+### ORM & ActiveModel
+Declaring models and interacting with the database is completely type-safe with the `Model` derive macro.
+
+**ActiveModel for Partial Updates:**
+For fine-grained control over updates, use `ActiveModel`. It tracks modified fields dynamically, ensuring only changed columns are sent to the database.
 
 ```rust
-use chopin_orm::{Model, Validate, builder::ColumnTrait};
-
-#[derive(Model, Debug, Clone)]
-#[model(table_name = "products")]
-struct Product {
-    #[model(primary_key)]
-    id: i32,
-    name: String,
-    price: i32,
-}
-
-impl Validate for Product {}
-
-#[get("/products")]
-fn list_products(ctx: Context) -> Response {
+#[get("/products/:id")]
+fn update_price(ctx: Context) -> Response {
+    let id: i32 = ctx.param("id").unwrap().parse().unwrap();
+    
     DB.with(|db| {
         let mut pool = db.borrow_mut();
-
-        // 1. Type-safe query with column DSL
-        let products = Product::find()
-            .filter(ProductColumn::price.gt(100))
-            .limit(10)
-            .all(&mut *pool).unwrap();
-
-        // 2. Inserting
-        let mut new_prod = Product { id: 0, name: String::from("Piano"), price: 3000 };
-        new_prod.insert(&mut *pool).unwrap();
+        
+        // 1. Fetch existing model
+        let product = Product::find().filter(ProductColumn::id.eq(id)).one(&mut *pool).unwrap().unwrap();
+        
+        // 2. Wrap in ActiveModel
+        let mut active = ProductActiveModel::from(product);
+        
+        // 3. Set ONLY the fields that changed
+        active.set("price", 4000);
+        
+        // 4. Save - intelligently issues UPDATE or INSERT
+        active.save(&mut *pool).unwrap();
     });
 
     Response::new(200)
 }
 ```
+
+### Advanced Relationship Joins
+Chopin ORM supports automatic eager loading and joins, including tables with composite primary keys.
+
+**Defining Relations:**
+Use `belongs_to` and `has_many` attributes in your model definition.
+
+```rust
+#[derive(Model)]
+struct Order {
+    #[model(primary_key)]
+    id: i32,
+    #[model(belongs_to = User)]
+    user_id: i32,
+}
+```
+
+**Eager Loading with Joins:**
+```rust
+let orders_with_users = Order::find()
+    .join_parent::<User>()
+    .all(&mut *pool).unwrap();
+```
+Chopin automatically resolves the foreign key mapping and constructs the `JOIN` clause.
 
 ---
 

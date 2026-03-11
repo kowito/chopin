@@ -56,11 +56,19 @@ impl<M> Condition<M> {
 
     /// Resolves the condition tree into a parameterized SQL string.
     ///
-    /// **Safety Note**: `params_out` receives raw pointers (`*const PgValue`) referencing the values
-    /// owned by this `Condition` tree. These pointers are only valid as long as the `Condition`
-    /// is not dropped or mutated. This is safely managed internally by `QueryBuilder::build_query`,
-    /// which ensures the `Condition` outlives the executed query.
-    fn resolve(&self, param_idx: &mut usize, params_out: &mut Vec<*const PgValue>) -> String {
+    /// Collects references to the `PgValue` parameters owned by this condition tree.
+    /// The returned references are valid as long as `self` is alive.
+    ///
+    /// # Safety / Security
+    /// This method performs placeholder mapping from `{}` to `$n`. While standard
+    /// DSL methods in `ColumnTrait` are safe, using `Condition::Raw` with unsanitized
+    /// user input in the clause string can lead to SQL injection. Always use `{}`
+    /// for values and pass them via the `params` vector.
+    fn resolve<'a>(
+        &'a self,
+        param_idx: &mut usize,
+        params_out: &mut Vec<&'a PgValue>,
+    ) -> String {
         match self {
             Condition::Raw(clause, params, _) => {
                 let mut resolved = String::with_capacity(clause.len());
@@ -75,9 +83,7 @@ impl<M> Condition<M> {
                         resolved.push(c);
                     }
                 }
-                for p in params {
-                    params_out.push(p as *const _);
-                }
+                params_out.extend(params.iter());
                 resolved
             }
             Condition::And(conds) => {
@@ -221,6 +227,7 @@ pub trait ColumnTrait<M: Model> {
 ///
 /// Constructed primarily via `<Model>::find()` and `<Model>::select(...)`.
 /// Chain methods like `.filter()`, `.order_by()`, and `.limit()` before executing.
+#[must_use = "QueryBuilder does nothing until executed with .all(), .one(), .count(), etc."]
 pub struct QueryBuilder<M> {
     _marker: PhantomData<M>,
     select_override: Option<Vec<Expr<M>>>,
@@ -292,35 +299,39 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
     }
 
     /// Adds an `INNER JOIN` automatically resolving foreign keys using `HasForeignKey`.
-    ///
-    /// **Note**: Currently assumes the joined models utilize a single-column primary key.
-    /// Composite primary keys are not yet supported for automatic joins.
     pub fn join_child<R: Model + crate::HasForeignKey<M>>(mut self) -> Self {
-        let (other_table, fk_column) = R::foreign_key_info();
+        let (other_table, mappings) = R::foreign_key_info();
         let my_table = M::table_name();
-        let my_pk = M::primary_key_columns().first().unwrap_or(&"id");
-        self.joins.push(format!(
-            "JOIN {} ON {}.{} = {}.{}",
-            other_table, other_table, fk_column, my_table, my_pk
-        ));
+
+        let join_on = mappings
+            .iter()
+            .map(|(child_col, parent_col)| {
+                format!("{}.{} = {}.{}", other_table, child_col, my_table, parent_col)
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        self.joins.push(format!("JOIN {} ON {}", other_table, join_on));
         self
     }
 
     /// Adds an `INNER JOIN` automatically resolving the parent entity foreign keys.
-    ///
-    /// **Note**: Currently assumes the joined models utilize a single-column primary key.
-    /// Composite primary keys are not yet supported for automatic joins.
     pub fn join_parent<R: Model>(mut self) -> Self
     where
         M: crate::HasForeignKey<R>,
     {
-        let (my_table, fk_column) = M::foreign_key_info();
+        let (my_table, mappings) = M::foreign_key_info();
         let other_table = R::table_name();
-        let other_pk = R::primary_key_columns().first().unwrap_or(&"id");
-        self.joins.push(format!(
-            "JOIN {} ON {}.{} = {}.{}",
-            other_table, other_table, other_pk, my_table, fk_column
-        ));
+
+        let join_on = mappings
+            .iter()
+            .map(|(local_col, parent_col)| {
+                format!("{}.{} = {}.{}", other_table, parent_col, my_table, local_col)
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        self.joins.push(format!("JOIN {} ON {}", other_table, join_on));
         self
     }
 
@@ -350,17 +361,13 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
     }
 
     fn build_query(&self) -> (String, Vec<&PgValue>) {
-        let mut all_params = Vec::new();
+        let mut all_params: Vec<&PgValue> = Vec::new();
         let mut param_idx = 1;
-
-        // We use unsafe for `*const PgValue` mapping to `&PgValue` because closure borrows `all_params` mutably if we pass it directly.
-        // It's perfectly safe here since `self` owns the `PgValue`s and outlives `all_params`.
-        let mut temp_params = Vec::new();
 
         let select_clause = if let Some(exprs) = &self.select_override {
             let mapped: Vec<_> = exprs
                 .iter()
-                .map(|e| e.resolve(&mut param_idx, &mut temp_params))
+                .map(|e| e.resolve(&mut param_idx, &mut all_params))
                 .collect();
             mapped.join(", ")
         } else {
@@ -379,7 +386,7 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
             let filter_strings: Vec<_> = self
                 .filters
                 .iter()
-                .map(|e| e.resolve(&mut param_idx, &mut temp_params))
+                .map(|e| e.resolve(&mut param_idx, &mut all_params))
                 .collect();
             query.push_str(&filter_strings.join(" AND "));
         }
@@ -394,13 +401,9 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
             let having_strings: Vec<_> = self
                 .having
                 .iter()
-                .map(|e| e.resolve(&mut param_idx, &mut temp_params))
+                .map(|e| e.resolve(&mut param_idx, &mut all_params))
                 .collect();
             query.push_str(&having_strings.join(" AND "));
-        }
-
-        for p_ptr in temp_params {
-            all_params.push(unsafe { &*p_ptr });
         }
 
         if let Some(order) = &self.order_by {
@@ -419,9 +422,11 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
         (query, all_params)
     }
 
+    /// Executes the query and returns raw `Row` results without model mapping.
     pub fn into_raw(self, executor: &mut impl crate::Executor) -> OrmResult<Vec<crate::Row>> {
         let (query, all_params) = self.build_query();
-        println!("Query: {}, Params len: {}", query, all_params.len());
+        #[cfg(feature = "log")]
+        log::debug!("into_raw: {} | params: {}", query, all_params.len());
         let params_ref: Vec<&dyn chopin_pg::types::ToSql> =
             all_params.iter().map(|p| *p as _).collect();
         executor.query(&query, &params_ref)
@@ -478,6 +483,7 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
 }
 
 /// A paginated result set holding data and metadata (counts).
+#[derive(Debug)]
 pub struct Page<M> {
     pub items: Vec<M>,
     pub total: i64,
@@ -486,7 +492,20 @@ pub struct Page<M> {
     pub total_pages: usize,
 }
 
+impl<M> Page<M> {
+    /// Returns `true` if there are more pages after this one.
+    pub fn has_next(&self) -> bool {
+        self.page < self.total_pages
+    }
+
+    /// Returns `true` if there are pages before this one.
+    pub fn has_prev(&self) -> bool {
+        self.page > 1
+    }
+}
+
 /// An iterator-like coordinator wrapping a `QueryBuilder` for pagination slicing.
+#[must_use = "Paginator does nothing until .fetch() is called"]
 pub struct Paginator<M> {
     builder: QueryBuilder<M>,
     page_size: usize,

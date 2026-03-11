@@ -13,10 +13,14 @@ chopin-pg = { workspace = true }
 chopin-orm-macro = { workspace = true }
 async-trait = "0.1.86"
 log = { version = "0.4", optional = true }
+chrono = { version = "0.4", optional = true }
+rust_decimal = { version = "1", optional = true }
 
 [features]
 default = []
 log = ["dep:log"]
+chrono = ["dep:chrono", "chopin-pg/chrono"]
+decimal = ["dep:rust_decimal", "chopin-pg/decimal"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -1,25 +1,38 @@
 use crate::{Executor, OrmResult};
 use chopin_pg::Row;
+use std::collections::VecDeque;
 
 /// An in-memory testing stub satisfying the `Executor` trait without PostgreSQL connections.
 ///
-/// Intercepts inbound queries while releasing user-defined `mock_row!` sequences dynamically natively into client code.
+/// Queues mock results that are drained in FIFO order as queries are executed.
 pub struct MockExecutor {
+    /// Records all executed queries as `(sql, param_count)` tuples.
     pub executed_queries: Vec<(String, usize)>,
-    pub mocked_results: Vec<Vec<Row>>,
+    mocked_results: VecDeque<Vec<Row>>,
 }
 
 impl MockExecutor {
     pub fn new() -> Self {
         Self {
             executed_queries: Vec::new(),
-            mocked_results: Vec::new(),
+            mocked_results: VecDeque::new(),
         }
     }
 
-    /// Enqueues an ordered sequence of Mock configurations to be drained consecutively by the test suite upon query intercepts.
+    /// Enqueues a set of rows to be returned by the next `query()` call.
     pub fn push_result(&mut self, rows: Vec<Row>) {
-        self.mocked_results.push(rows);
+        self.mocked_results.push_back(rows);
+    }
+
+    /// Returns the number of remaining mocked result sets.
+    pub fn remaining_results(&self) -> usize {
+        self.mocked_results.len()
+    }
+
+    /// Clears all recorded queries and remaining mocked results.
+    pub fn reset(&mut self) {
+        self.executed_queries.clear();
+        self.mocked_results.clear();
     }
 }
 
@@ -43,8 +56,8 @@ impl Executor for MockExecutor {
     ) -> OrmResult<Vec<Row>> {
         self.executed_queries
             .push((query.to_string(), params.len()));
-        if !self.mocked_results.is_empty() {
-            Ok(self.mocked_results.remove(0))
+        if let Some(rows) = self.mocked_results.pop_front() {
+            Ok(rows)
         } else {
             Ok(vec![])
         }

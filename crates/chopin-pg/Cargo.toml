@@ -10,6 +10,13 @@ description = "A high-performance, asynchronous PostgreSQL driver for the Chopin
 
 [dependencies]
 libc = "0.2.180"
+chrono = { version = "0.4", optional = true }
+rust_decimal = { version = "1", optional = true }
+
+[features]
+default = []
+chrono = ["dep:chrono"]
+decimal = ["dep:rust_decimal"]
 
 [dev-dependencies]
 monoio = { version = "0.2.4", features = ["macros", "utils"] }

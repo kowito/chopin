@@ -591,7 +591,7 @@ fn test_relationships() {
     assert_eq!(author_name, "Alice");
 
     // Lazy Loading test
-    let loaded_author = p1.fetch_author_id(&mut pool).unwrap().unwrap();
+    let loaded_author = p1.fetch_author(&mut pool).unwrap().unwrap();
     assert_eq!(loaded_author.id, a1.id);
     assert_eq!(loaded_author.name, "Alice");
 

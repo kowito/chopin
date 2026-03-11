@@ -839,6 +839,37 @@ impl ToSql for (f64, f64) {
     }
 }
 
+// ─── Chrono ToSql Implementations ────────────────────────────
+
+/// PostgreSQL epoch offset: 2000-01-01T00:00:00 UTC − Unix epoch = 946,684,800 seconds.
+#[cfg(feature = "chrono")]
+const PG_EPOCH_OFFSET_SECS: i64 = 946_684_800;
+
+#[cfg(feature = "chrono")]
+impl ToSql for chrono::NaiveDateTime {
+    fn to_sql(&self) -> PgValue {
+        let unix_secs = self.and_utc().timestamp();
+        let sub_micros = self.and_utc().timestamp_subsec_micros() as i64;
+        let pg_micros = (unix_secs - PG_EPOCH_OFFSET_SECS) * 1_000_000 + sub_micros;
+        PgValue::Timestamp(pg_micros)
+    }
+    fn type_oid(&self) -> u32 {
+        oid::TIMESTAMP
+    }
+}
+
+// ─── rust_decimal ToSql Implementations ──────────────────────
+
+#[cfg(feature = "decimal")]
+impl ToSql for rust_decimal::Decimal {
+    fn to_sql(&self) -> PgValue {
+        PgValue::Numeric(self.to_string())
+    }
+    fn type_oid(&self) -> u32 {
+        oid::NUMERIC
+    }
+}
+
 // ─── FromSql Implementations ─────────────────────────────────
 
 impl FromSql for i16 {

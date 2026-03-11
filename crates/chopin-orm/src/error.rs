@@ -1,6 +1,8 @@
 use chopin_pg::error::PgError;
 
 /// Error type for the Chopin ORM.
+///
+/// All variants are `Send + Sync`, making this safe to use across thread boundaries.
 #[derive(Debug)]
 pub enum OrmError {
     /// Error from the underlying PostgreSQL driver.
@@ -9,10 +11,12 @@ pub enum OrmError {
     RecordNotFound,
     /// Multiple records were found for a query that expected exactly one.
     MultipleRecordsFound,
-    /// Error during data extraction or type conversion.
+    /// Error during data extraction or type conversion from a row.
     Extraction(String),
-    /// Model-specific validation or configuration error.
+    /// Model-specific configuration or logic error.
     ModelError(String),
+    /// One or more validation rules failed.
+    Validation(Vec<String>),
 }
 
 impl std::fmt::Display for OrmError {
@@ -23,6 +27,9 @@ impl std::fmt::Display for OrmError {
             OrmError::MultipleRecordsFound => write!(f, "Multiple records found"),
             OrmError::Extraction(msg) => write!(f, "Extraction error: {}", msg),
             OrmError::ModelError(msg) => write!(f, "Model error: {}", msg),
+            OrmError::Validation(errors) => {
+                write!(f, "Validation failed: {}", errors.join(", "))
+            }
         }
     }
 }
@@ -39,6 +46,18 @@ impl std::error::Error for OrmError {
 impl From<PgError> for OrmError {
     fn from(e: PgError) -> Self {
         OrmError::Database(e)
+    }
+}
+
+impl From<String> for OrmError {
+    fn from(msg: String) -> Self {
+        OrmError::ModelError(msg)
+    }
+}
+
+impl From<&str> for OrmError {
+    fn from(msg: &str) -> Self {
+        OrmError::ModelError(msg.to_string())
     }
 }
 
@@ -110,6 +129,7 @@ mod tests {
         assert!(OrmError::MultipleRecordsFound.source().is_none());
         assert!(OrmError::Extraction("e".into()).source().is_none());
         assert!(OrmError::ModelError("m".into()).source().is_none());
+        assert!(OrmError::Validation(vec!["v".into()]).source().is_none());
     }
 
     // ─── From<PgError> ───────────────────────────────────────────────────────
@@ -121,6 +141,14 @@ mod tests {
         assert!(matches!(orm_err, OrmError::Database(_)));
     }
 
+    #[test]
+    fn test_from_string() {
+        let orm_err: OrmError = "test error".into();
+        assert!(matches!(orm_err, OrmError::ModelError(_)));
+        let orm_err: OrmError = String::from("test error").into();
+        assert!(matches!(orm_err, OrmError::ModelError(_)));
+    }
+
     // ─── Debug ───────────────────────────────────────────────────────────────
 
     #[test]
@@ -130,6 +158,22 @@ mod tests {
         let _ = format!("{:?}", OrmError::Extraction("e".into()));
         let _ = format!("{:?}", OrmError::ModelError("m".into()));
         let _ = format!("{:?}", OrmError::Database(PgError::Protocol("x".into())));
+        let _ = format!("{:?}", OrmError::Validation(vec!["v".into()]));
+    }
+
+    // ─── Validation variant ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_display_validation() {
+        let s = OrmError::Validation(vec!["field required".into(), "too short".into()]).to_string();
+        assert!(s.contains("field required"), "unexpected: {}", s);
+        assert!(s.contains("too short"), "unexpected: {}", s);
+    }
+
+    #[test]
+    fn test_validation_empty() {
+        let s = OrmError::Validation(vec![]).to_string();
+        assert!(s.contains("Validation failed"), "unexpected: {}", s);
     }
 
     // ─── OrmResult type alias ─────────────────────────────────────────────────

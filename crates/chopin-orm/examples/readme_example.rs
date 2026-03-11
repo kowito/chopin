@@ -69,7 +69,7 @@ fn main() {
     post.insert(&mut pool).expect("Post insert failed");
 
     let author = post
-        .fetch_user_id(&mut pool)
+        .fetch_user(&mut pool)
         .unwrap()
         .expect("Author not found");
     println!("Post author: {}", author.name);

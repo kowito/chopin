@@ -16,12 +16,18 @@ pub use error::{OrmError, OrmResult};
 pub mod active_model;
 pub use active_model::ActiveModel;
 pub mod migrations;
-pub use migrations::{Index, Migration, MigrationManager};
+pub use migrations::{Index, Migration, MigrationManager, MigrationStatus};
 pub mod mock;
 pub use mock::MockExecutor;
 
+/// A trait for types that can execute SQL queries and return results.
+///
+/// Implemented by `PgPool`, `PgConnection`, and `Transaction`.
 pub trait Executor {
+    /// Executes a command (e.g., INSERT, UPDATE, DELETE) and returns the number of affected rows.
     fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToSql]) -> OrmResult<u64>;
+
+    /// Executes a query and returns the resulting rows.
     fn query(
         &mut self,
         query: &str,
@@ -49,24 +55,64 @@ impl Executor for PgPool {
     }
 }
 
+impl Executor for PgConnection {
+    fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToSql]) -> OrmResult<u64> {
+        chopin_pg::connection::PgConnection::execute(self, query, params).map_err(OrmError::from)
+    }
+
+    fn query(
+        &mut self,
+        query: &str,
+        params: &[&dyn chopin_pg::types::ToSql],
+    ) -> OrmResult<Vec<Row>> {
+        chopin_pg::connection::PgConnection::query(self, query, params).map_err(OrmError::from)
+    }
+}
+
+/// A database transaction wrapper that automatically rolls back on drop
+/// unless explicitly committed.
+///
+/// This ensures that if a panic or early return occurs, the transaction
+/// is safely rolled back rather than leaving the connection in a dirty state.
 pub struct Transaction<'a> {
     conn: &'a mut PgConnection,
+    committed: bool,
 }
 
 impl<'a> Transaction<'a> {
+    /// Begins a new transaction on the given connection.
     pub fn begin(conn: &'a mut PgConnection) -> OrmResult<Self> {
         conn.execute("BEGIN", &[]).map_err(OrmError::from)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            committed: false,
+        })
     }
 
-    pub fn commit(self) -> OrmResult<()> {
+    /// Commits the transaction. Must be called explicitly to persist changes.
+    pub fn commit(mut self) -> OrmResult<()> {
+        self.committed = true;
         self.conn.execute("COMMIT", &[]).map_err(OrmError::from)?;
         Ok(())
     }
 
-    pub fn rollback(self) -> OrmResult<()> {
+    /// Explicitly rolls back the transaction.
+    pub fn rollback(mut self) -> OrmResult<()> {
+        self.committed = true; // prevent double-rollback in Drop
         self.conn.execute("ROLLBACK", &[]).map_err(OrmError::from)?;
         Ok(())
+    }
+}
+
+impl<'a> Drop for Transaction<'a> {
+    fn drop(&mut self) {
+        if !self.committed {
+            // Best-effort rollback on drop — ignore errors since we may be
+            // in a panic unwind where the connection is already broken.
+            let _ = self.conn.execute("ROLLBACK", &[]);
+            #[cfg(feature = "log")]
+            log::warn!("Transaction dropped without explicit commit — rolled back");
+        }
     }
 }
 
@@ -150,8 +196,9 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
                     col_def
                 );
                 executor.execute(&alter_stmt, &[])?;
-                println!(
-                    "Auto-Migrated {}: added column {}",
+                #[cfg(feature = "log")]
+                log::info!(
+                    "Auto-migrated {}: added column {}",
                     Self::table_name(),
                     col_name
                 );
@@ -176,10 +223,7 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
     /// Insert the model into the database. Retrieves generated columns.
     fn insert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
         if let Err(errors) = self.validate() {
-            return Err(OrmError::ModelError(format!(
-                "Validation failed: {}",
-                errors.join(", ")
-            )));
+            return Err(OrmError::Validation(errors));
         }
         let all_cols = Self::columns();
         let gen_cols = Self::generated_columns();
@@ -231,10 +275,7 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
     /// Insert the model or update it if the primary key conflicts
     fn upsert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
         if let Err(errors) = self.validate() {
-            return Err(OrmError::ModelError(format!(
-                "Validation failed: {}",
-                errors.join(", ")
-            )));
+            return Err(OrmError::Validation(errors));
         }
         let all_cols = Self::columns();
         let pk_cols = Self::primary_key_columns();
@@ -309,10 +350,7 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
         update_columns: &[&str],
     ) -> OrmResult<Self> {
         if let Err(errors) = self.validate() {
-            return Err(OrmError::ModelError(format!(
-                "Validation failed: {}",
-                errors.join(", ")
-            )));
+            return Err(OrmError::Validation(errors));
         }
         let all_columns = Self::columns();
         let all_values = self.get_values();
@@ -372,10 +410,7 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
     /// Update the model in the database matching its primary key.
     fn update(&self, executor: &mut impl Executor) -> OrmResult<()> {
         if let Err(errors) = self.validate() {
-            return Err(OrmError::ModelError(format!(
-                "Validation failed: {}",
-                errors.join(", ")
-            )));
+            return Err(OrmError::Validation(errors));
         }
         let cols = Self::columns();
         let pk_cols = Self::primary_key_columns();
@@ -558,8 +593,125 @@ impl<T: ExtractValue> ExtractValue for Option<T> {
     }
 }
 
+// ─── f32 ExtractValue ─────────────────────────────────────────────────────────
+
+impl ExtractValue for f32 {
+    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
+        let val = row.get_by_name(col).map_err(OrmError::from)?;
+        Self::from_pg_value(val)
+    }
+    fn from_pg_value(val: PgValue) -> OrmResult<Self> {
+        match val {
+            PgValue::Float4(v) => Ok(v),
+            PgValue::Float8(v) => Ok(v as f32),
+            PgValue::Int4(n) => Ok(n as f32),
+            PgValue::Int8(n) => Ok(n as f32),
+            PgValue::Int2(n) => Ok(n as f32),
+            PgValue::Text(s) => s
+                .parse()
+                .map_err(|_| OrmError::Extraction(format!("Cannot parse '{}' as f32", s))),
+            _ => Err(OrmError::Extraction("Expected Float4".into())),
+        }
+    }
+}
+
+// ─── chrono::NaiveDateTime ExtractValue ───────────────────────────────────────
+
+#[cfg(feature = "chrono")]
+const PG_EPOCH_OFFSET_SECS: i64 = 946_684_800;
+
+#[cfg(feature = "chrono")]
+impl ExtractValue for chrono::NaiveDateTime {
+    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
+        let val = row
+            .get_by_name(col)
+            .map_err(|e| OrmError::Extraction(format!("column '{}': {}", col, e)))?;
+        Self::from_pg_value(val)
+    }
+    fn from_pg_value(val: PgValue) -> OrmResult<Self> {
+        match val {
+            PgValue::Timestamp(micros) | PgValue::Timestamptz(micros) => {
+                let unix_micros = micros + PG_EPOCH_OFFSET_SECS * 1_000_000;
+                let secs = unix_micros.div_euclid(1_000_000);
+                let nsecs = (unix_micros.rem_euclid(1_000_000) * 1_000) as u32;
+                chrono::DateTime::from_timestamp(secs, nsecs)
+                    .map(|dt| dt.naive_utc())
+                    .ok_or_else(|| {
+                        OrmError::Extraction(format!(
+                            "Invalid timestamp microseconds: {}",
+                            micros
+                        ))
+                    })
+            }
+            PgValue::Text(s) | PgValue::Json(s) => {
+                chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
+                    .or_else(|_| {
+                        chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")
+                    })
+                    .or_else(|_| {
+                        chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+                    })
+                    .map_err(|e| {
+                        OrmError::Extraction(format!(
+                            "Cannot parse '{}' as NaiveDateTime: {}",
+                            s, e
+                        ))
+                    })
+            }
+            PgValue::Null => Err(OrmError::Extraction(
+                "Cannot extract NaiveDateTime from NULL — use Option<NaiveDateTime>".to_string(),
+            )),
+            other => Err(OrmError::Extraction(format!(
+                "Cannot convert {:?} to NaiveDateTime",
+                other
+            ))),
+        }
+    }
+}
+
+// ─── rust_decimal::Decimal ExtractValue ───────────────────────────────────────
+
+#[cfg(feature = "decimal")]
+impl ExtractValue for rust_decimal::Decimal {
+    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
+        let val = row
+            .get_by_name(col)
+            .map_err(|e| OrmError::Extraction(format!("column '{}': {}", col, e)))?;
+        Self::from_pg_value(val)
+    }
+    fn from_pg_value(val: PgValue) -> OrmResult<Self> {
+        use std::str::FromStr;
+        match val {
+            PgValue::Numeric(s) | PgValue::Text(s) => {
+                rust_decimal::Decimal::from_str(&s).map_err(|e| {
+                    OrmError::Extraction(format!("Cannot parse '{}' as Decimal: {}", s, e))
+                })
+            }
+            PgValue::Float8(v) => rust_decimal::Decimal::from_f64_retain(v)
+                .ok_or_else(|| {
+                    OrmError::Extraction(format!("Cannot convert f64 {} to Decimal", v))
+                }),
+            PgValue::Float4(v) => rust_decimal::Decimal::from_f64_retain(v as f64)
+                .ok_or_else(|| {
+                    OrmError::Extraction(format!("Cannot convert f32 {} to Decimal", v))
+                }),
+            PgValue::Int4(n) => Ok(rust_decimal::Decimal::from(n)),
+            PgValue::Int8(n) => Ok(rust_decimal::Decimal::from(n)),
+            PgValue::Int2(n) => Ok(rust_decimal::Decimal::from(n)),
+            PgValue::Null => Err(OrmError::Extraction(
+                "Cannot extract Decimal from NULL — use Option<Decimal>".to_string(),
+            )),
+            other => Err(OrmError::Extraction(format!(
+                "Cannot convert {:?} to Decimal",
+                other
+            ))),
+        }
+    }
+}
+
 pub trait HasForeignKey<M: Model> {
-    fn foreign_key_info() -> (&'static str, &'static str);
+    /// Returns the table name of the child and a list of (child_column, parent_column) mappings.
+    fn foreign_key_info() -> (&'static str, Vec<(&'static str, &'static str)>);
 }
 
 /// A transparent middleware executor that intercepts queries and parameters.
