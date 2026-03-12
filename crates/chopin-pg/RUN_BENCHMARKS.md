@@ -175,6 +175,106 @@ docker-compose -p chopin-pg-bench down
 
 ---
 
+## Maximizing Performance
+
+### Build Flags
+
+Always benchmark with `--release` and native CPU tuning:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo run --release --example bench_pg
+```
+
+For an even more aggressive profile, add to `Cargo.toml` under `[profile.release]`:
+
+```toml
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+```
+
+Then rebuild and re-run.
+
+### Connection Pool Sizing
+
+Each benchmark example uses a **single connection per worker thread** (thread-per-core model). For maximum throughput, run `N` parallel benchmark processes where `N = number of physical CPU cores`, each with its own connection:
+
+```bash
+# Run 4 parallel benchmarks on a 4-core machine
+for i in 1 2 3 4; do
+  cargo run --release --example bench_pg &
+done
+wait
+```
+
+### PostgreSQL Configuration
+
+For benchmark-grade PostgreSQL performance, tweak `postgresql.conf` (edit the Docker volume or connect and `ALTER SYSTEM`):
+
+```sql
+-- Maximum connections must be >= number of benchmark workers
+ALTER SYSTEM SET max_connections = 200;
+
+-- Shared buffers: 25% of RAM (e.g. 1GB for 4GB machine)
+ALTER SYSTEM SET shared_buffers = '1GB';
+
+-- Disable fsync for benchmark (UNSAFE for production)
+ALTER SYSTEM SET fsync = off;
+ALTER SYSTEM SET synchronous_commit = off;
+ALTER SYSTEM SET full_page_writes = off;
+
+-- WAL tuning for write-heavy benchmarks
+ALTER SYSTEM SET wal_buffers = '64MB';
+ALTER SYSTEM SET checkpoint_completion_target = 0.9;
+
+SELECT pg_reload_conf();
+```
+
+> **Warning:** `fsync = off` is only appropriate for benchmarking — it risks data corruption on a crash. Never use in production.
+
+### OS-Level Tuning (Linux)
+
+```bash
+# Large socket buffers
+sudo sysctl -w net.core.rmem_max=16777216
+sudo sysctl -w net.core.wmem_max=16777216
+sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216"
+sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 16777216"
+
+# Increase file descriptor limit
+ulimit -n 1048576
+
+# Disable TCP Nagle for low-latency requests (chopin-pg sets TCP_NODELAY itself)
+sudo sysctl -w net.ipv4.tcp_low_latency=1
+```
+
+### What to Isolate
+
+For reproducible numbers:
+1. Run PostgreSQL and the benchmark on separate machines (or at least separate NUMA nodes) to avoid cache contention.
+2. Disable CPU frequency scaling:
+   ```bash
+   echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+   ```
+3. Pin the benchmark process to a specific core set:
+   ```bash
+   taskset -c 0-3 cargo run --release --example bench_pg
+   ```
+4. Warm up the database before recording: run the benchmark once for 30 seconds before taking the measurement run.
+
+### Expected Peak Numbers (local Docker, release build, target-cpu=native)
+
+| Benchmark | Baseline | With tuning above |
+|-----------|----------|-------------------|
+| `SELECT 1` | ~125K req/s | ~160–180K req/s |
+| Parameterized query | ~110K req/s | ~140–160K req/s |
+| COPY bulk insert | ~100K rows/s | ~130–150K rows/s |
+| Point SELECT | ~45K req/s | ~55–70K req/s |
+
+---
+
 ## Advanced: Profiling
 
 Use `perf` (Linux) or `Instruments` (macOS) to profile:

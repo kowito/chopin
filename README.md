@@ -1,6 +1,6 @@
 # Chopin 🎼 (Codename: Nocturne Op. 9 No. 2)
 <p align="center">
-  <img src="docs/assets/logo.png" alt="Chopin Logo" width="200">
+  <img src="docs/site/assets/logo.png" alt="Chopin Logo" width="200">
 </p>
 
 [![Build status](https://github.com/kowito/chopin/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/kowito/chopin/actions/workflows/CI.yml)

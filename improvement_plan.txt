@@ -1,0 +1,164 @@
+# Chopin Framework — Improvement Plan
+
+
+
+Based on the current codebase state (March 2026).  Covers all crates: `chopin-core`, `chopin-pg`, `chopin-orm`, `chopin-auth`, `chopin-cli`.
+
+Legend: ✅ done · 🔧 partial · ❌ not started
+
+---
+
+## Sprint A — io_uring Worker (chopin-core) — HIGH PRIORITY
+
+The syscall layer (`syscalls::uring`) and `conn::Conn.pending_op` are already in place, but
+`worker_uring.rs` does not yet exist.  This is the biggest remaining performance opportunity on Linux.
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| A.1 | Create `src/worker_uring.rs` with full io_uring event loop | ❌ | ~700 lines mirroring worker.rs |
+| A.2 | Multi-shot accept via `prep_accept_multishot` (kernel ≥5.19) | ❌ | One SQE → many CQEs, no re-arm |
+| A.3 | SQPOLL mode — opt-in via `IORING_SETUP_SQPOLL` flag | ❌ | Flag scaffolded; not wired to Worker |
+| A.4 | Fixed / registered buffer rings (`io_uring_register`) | ❌ | Eliminates per-read copy |
+| A.5 | Sendfile via io_uring for `Body::File` (fallback to sync today) | ❌ | |
+| A.6 | `Worker::run_uring()` wired into `Worker::run()` dispatch | ❌ | `run_epoll` branch exists; uring branch missing |
+| A.7 | Benchmark `io-uring` vs epoll on Linux (`wrk -t16 -c1024`) | ❌ | Needed to validate win |
+| A.8 | CI: run io-uring feature tests only on `target_os = "linux"` | ❌ | Guard with `cfg_attr` in workflow |
+
+---
+
+## Sprint B — chopin-pg: TLS/SSL & Auth Gaps — HIGH PRIORITY
+
+TLS is a **production blocker** — no cloud-hosted PostgreSQL (RDS, Neon, Supabase, Cloud SQL)
+accepts plain-text connections by default.
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| B.1 | TLS/SSL support — `rustls` behind `tls` feature flag | ❌ | Wrap `PgStream::Tcp` in `rustls::StreamOwned` |
+| B.2 | `PgConfig::ssl_mode` field (disable / prefer / require / verify-ca) | ❌ | Parse from URL `?sslmode=` |
+| B.3 | SCRAM-SHA-256-PLUS (channel binding over TLS) | ❌ | Required when `ssl_mode = require` |
+| B.4 | MD5 password authentication | ❌ | Recognized in protocol but returns error today |
+| B.5 | Trust authentication (no password) | ❌ | Used in local dev / Docker |
+
+---
+
+## Sprint C — chopin-pg: Type System Completions — MEDIUM
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| C.1 | `PgValue::Bit` / `VarBit` + OIDs 1560/1562 | ❌ | Binary: 4-byte header + packed bits |
+| C.2 | Custom type registry `OID → (encode, decode)` per connection | ❌ | Prerequisite for C.3 and C.4 |
+| C.3 | Custom PostgreSQL enum support | ❌ | Needs C.2 to map text OIDs |
+| C.4 | Composite / record type (`RECORD`) | ❌ | Large; needs C.2 |
+| C.5 | `MACADDR8` (OID 774) binary decode | 🔧 | OID added; codec still missing |
+| C.6 | `UUID_ARRAY` (2951) / `JSONB_ARRAY` (3807) OID constants | 🔧 | Array codec works; OIDs not registered |
+| C.7 | Exhaustive doc comments on all public items | 🔧 | Main items covered |
+| C.8 | CI benchmark examples with `cargo bench` | 🔧 | Examples exist; not in CI |
+
+---
+
+## Sprint D — chopin-core: Correctness & Safety Fixes — MEDIUM
+
+These are small-effort items that prevent production surprises.
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| D.1 | Enforce `MAX_REQUEST_SIZE` in parser (prevent OOM on huge bodies) | ❌ | Parser currently unbounded |
+| D.2 | Check `requests_served` cap for keep-alive (`keepalive_requests`) | ❌ | `Conn.requests_served` exists but never capped |
+| D.3 | Graceful drain: wait for in-flight requests before exit | 🔧 | Shutdown flag present; active-count missing |
+| D.4 | `Content-Length` mismatch detection (body shorter/longer than announced) | ❌ | Silent corruption today |
+| D.5 | Configurable slab size via env var / CLI flag | ❌ | Hard-coded `10_000` in worker |
+| D.6 | `parse_host_port` — support IPv6 bracket notation (`[::1]:8080`) | ❌ | Splits on `:`, breaks for IPv6 |
+
+---
+
+## Sprint E — chopin-core: HTTP Features — MEDIUM
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| E.1 | WebSocket upgrade — `Upgrade: websocket` handshake + frame codec | ❌ | Large effort; RFC 6455 |
+| E.2 | Response compression (`gzip` / `brotli`) behind feature flag | ❌ | `Accept-Encoding` negotiation |
+| E.3 | HTTP/2 (h2c — prior knowledge or upgrade) | ❌ | Very large; consider `h2` crate |
+| E.4 | Chunked transfer-encoding for streaming responses | ❌ | Needed for SSE / large files |
+| E.5 | `multipart/form-data` upload handler (multipart.rs stub exists) | 🔧 | Module exists; implementation sparse |
+
+Priority order: D.* safety first → E.4 → E.2 → E.1 → E.3 last.
+
+---
+
+## Sprint F — chopin-auth: OAuth 2.0 / OIDC — MEDIUM
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| F.1 | OAuth2 authorization-code flow helpers (PKCE, state, redirect) | ❌ | |
+| F.2 | JWKS endpoint client — verify RS256 / ES256 tokens | ❌ | Required for Auth0 / Cognito / Google |
+| F.3 | Refresh-token handling and silent refresh | ❌ | |
+| F.4 | `#[require_scope("read:users")]` macro | ❌ | Builds on existing RBAC |
+| F.5 | Unit tests for JWT expiry, revocation, and RBAC denial | ❌ | Auth crate has no tests today |
+
+---
+
+## Sprint G — chopin-orm: Query Builder Gaps — MEDIUM
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| G.1 | `QueryBuilder` aggregates: `count()`, `sum()`, `avg()`, `min()`, `max()` | 🔧 | Builder exists; no aggregate API |
+| G.2 | `JOIN` support (INNER, LEFT, RIGHT) | ❌ | |
+| G.3 | Belongs-to / has-many eager loading (avoid N+1) | ❌ | |
+| G.4 | Soft-delete (`deleted_at IS NULL` scope) | ❌ | Common pattern |
+| G.5 | Batch insert (`INSERT … VALUES (…),(…)`) | ❌ | Replaces N round-trips |
+| G.6 | `upsert()` (`INSERT … ON CONFLICT DO UPDATE`) | ❌ | |
+| G.7 | Unit tests against `MockExecutor` | 🔧 | Mock exists; tests minimal |
+
+---
+
+## Sprint H — CI / Testing — MEDIUM
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| H.1 | GitHub Actions workflow: `cargo test`, `clippy`, `fmt` | ❌ | No `.github/` directory |
+| H.2 | chopin-core e2e tests: keep-alive, large body, partial writes | 🔧 | Sparse coverage today |
+| H.3 | chopin-pg integration tests in CI (Docker PostgreSQL service) | 🔧 | Tests exist; no CI harness |
+| H.4 | Criterion benchmarks in CI (`cargo bench --no-run` smoke check) | ❌ | |
+| H.5 | TFB-style benchmark harness for plaintext + JSON routes | 🔧 | `bench_plaintext.sh` exists locally |
+| H.6 | `cargo deny` / `cargo audit` for dependency CVE scanning | ❌ | |
+
+---
+
+## Sprint I — chopin-cli: Developer Experience — LOW
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| I.1 | `chopin dev` — hot-reload via `cargo-watch` | ❌ | Currently just `cargo run` |
+| I.2 | `chopin generate model <Name> <field:type>…` — scaffold model + migration | ❌ | Generator stubs exist |
+| I.3 | `chopin migrate rollback` | 🔧 | `migrations.rs` exists; rollback missing |
+| I.4 | `chopin deploy` — functional Docker multi-stage build | 🔧 | `deploy.rs` stub; not wired |
+| I.5 | `chopin check` — validate env vars and DB connectivity at startup | 🔧 | `check.rs` exists; not enforced |
+
+---
+
+## Sprint J — Documentation — LOW
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| J.1 | `ARCHITECTURE.md` — populate empty file | ❌ | File exists but empty |
+| J.2 | Rustdoc examples on `Router`, `Context`, `Response`, `Chopin` | ❌ | |
+| J.3 | `docs/USAGE_GUIDE.md` — chopin-pg + chopin-orm integration section | 🔧 | Guide exists; DB section missing |
+| J.4 | `CHANGELOG.md` | ❌ | |
+| J.5 | Public API doc comments on all `pub` items in `chopin-core` | 🔧 | ~50% coverage |
+
+---
+
+## Priority Summary
+
+| Sprint | Crate | Impact | Effort | When |
+|--------|-------|--------|--------|------|
+| **A** — io_uring worker | chopin-core | Performance | Large | Now |
+| **B** — TLS + auth | chopin-pg | Production blocker | Medium | Now |
+| **D.1–D.3** — safety | chopin-core | Correctness | Small | Now |
+| **C** — type completions | chopin-pg | Completeness | Medium | After B |
+| **H** — CI / testing | all | Quality | Medium | After A+B |
+| **E.1, E.4** — features | chopin-core | Feature | Medium | Parallel |
+| **F** — OAuth/OIDC | chopin-auth | Feature | Large | Later |
+| **G** — ORM relations | chopin-orm | Feature | Medium | Later |
+| **I** — CLI UX | chopin-cli | DX | Small | Later |
+| **J** — Docs | all | DX | Small | Ongoing |

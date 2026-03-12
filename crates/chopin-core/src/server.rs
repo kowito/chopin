@@ -3,8 +3,6 @@ use crate::error::ChopinError;
 use crate::router::Router;
 use crate::syscalls::{self};
 use crate::worker::Worker;
-#[cfg(all(target_os = "linux", feature = "io-uring"))]
-use crate::worker_uring::Worker as UringWorker;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -107,21 +105,10 @@ impl Server {
                     // Create dedicated SO_REUSEPORT listener for this worker
                     match syscalls::create_listen_socket_reuseport(&host_clone, port_clone) {
                         Ok(listen_fd) => {
-                            #[cfg(all(target_os = "linux", feature = "io-uring"))]
-                            {
-                                let mut worker =
-                                    UringWorker::new(i, router_clone, metrics_worker, listen_fd);
-                                if let Err(_e) = worker.run(shutdown) {
-                                    // Error suppressed in production
-                                }
-                            }
-                            #[cfg(not(all(target_os = "linux", feature = "io-uring")))]
-                            {
-                                let mut worker =
-                                    Worker::new(i, router_clone, metrics_worker, listen_fd);
-                                if let Err(_e) = worker.run(shutdown) {
-                                    // Error suppressed in production
-                                }
+                            let mut worker =
+                                Worker::new(i, router_clone, metrics_worker, listen_fd);
+                            if let Err(_e) = worker.run(shutdown) {
+                                // Error suppressed in production
                             }
                             unsafe {
                                 libc::close(listen_fd);

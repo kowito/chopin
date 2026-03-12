@@ -15,26 +15,29 @@ fn json_handler(ctx: Context) -> Response {
 }
 
 fn plain_handler(_ctx: Context) -> Response {
-    // Response::text() sets Content-Type: text/plain
-    Response::text("Hello, World!")
+    // text_static passes the body slice directly — zero heap allocation on the hot path.
+    Response::text_static(b"Hello, World!")
 }
 
 fn main() {
     let mut router = Router::new();
     router.get("/json", json_handler);
-    router.get("/plain", plain_handler);
+    router.get("/plaintext", plain_handler);
+    router.get("/plain", plain_handler); // legacy alias
 
     let workers: usize = std::env::var("WORKERS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(num_cpus::get);
 
-    println!(
-        "Chopin server listening on 0.0.0.0:8080 with {} workers",
-        workers
-    );
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8080);
 
-    Server::bind("0.0.0.0:8080")
+    println!("Chopin server listening on 0.0.0.0:{port} with {workers} workers");
+
+    Server::bind(&format!("0.0.0.0:{port}"))
         .workers(workers)
         .serve(router)
         .unwrap();

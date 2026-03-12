@@ -1,12 +1,25 @@
-// src/worker.rs
-// Note: nested ifs are used instead of let guards for stable Rust compatibility
-// with benchmark environments.
+// src/worker.rs — unified worker: epoll/kqueue (default) + io_uring (Linux, feature = "io-uring")
 
 use crate::conn::ConnState;
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
+use crate::conn as conn;
 use crate::error::{ChopinError, ChopinResult};
 use crate::http_date::format_http_date;
 use crate::slab::ConnectionSlab;
-use crate::syscalls::{self, EPOLLIN, EPOLLOUT, Epoll, epoll_event};
+use crate::syscalls;
+#[cfg(not(all(target_os = "linux", feature = "io-uring")))]
+use crate::syscalls::{EPOLLIN, EPOLLOUT, Epoll, epoll_event};
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
+#[allow(unused_imports)]
+use crate::syscalls::uring::{
+    UringRing, io_uring_cqe,
+    IORING_CQE_F_MORE, IORING_SETUP_COOP_TASKRUN, IORING_SETUP_SINGLE_ISSUER,
+    IORING_SETUP_SQPOLL,
+    OP_TYPE_ACCEPT, OP_TYPE_CLOSE, OP_TYPE_READ, OP_TYPE_WRITE, OP_TYPE_WRITEV,
+    ACCEPT_CONN_IDX,
+    encode_user_data, decode_user_data,
+    prep_accept_multishot, prep_close, prep_read, prep_write, prep_writev,
+};
 use crate::timer::TimerWheel;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -98,8 +111,21 @@ impl Worker {
         }
     }
 
-    #[allow(clippy::collapsible_if)]
+    /// Dispatches to the io_uring event loop on Linux with the `io-uring` feature,
+    /// or falls back to the epoll/kqueue event loop on all other platforms.
     pub fn run(&mut self, shutdown: Arc<AtomicBool>) -> ChopinResult<()> {
+        #[cfg(all(target_os = "linux", feature = "io-uring"))]
+        {
+            eprintln!("[chopin] worker-{} using io_uring event loop", self.id);
+            return self.run_uring(shutdown);
+        }
+        #[cfg(not(all(target_os = "linux", feature = "io-uring")))]
+        self.run_epoll(shutdown)
+    }
+
+    #[cfg(not(all(target_os = "linux", feature = "io-uring")))]
+    #[allow(clippy::collapsible_if)]
+    fn run_epoll(&mut self, shutdown: Arc<AtomicBool>) -> ChopinResult<()> {
         // 1. Setup epoll/kqueue instance
         let epoll = Epoll::new()?;
 
@@ -166,11 +192,20 @@ impl Worker {
                     loop {
                         match syscalls::accept_connection(self.listen_fd) {
                             Ok(Some(client_fd)) => {
-                                // TCP_NODELAY + SO_NOSIGPIPE are inherited from the listener
-                                // Disable delayed ACK on Linux for lower latency
-                                #[cfg(target_os = "linux")]
+                                // Explicitly set TCP_NODELAY on every accepted socket.
+                                // Inheritance from the listener is not guaranteed on all
+                                // platforms (notably macOS), so we set it unconditionally.
                                 unsafe {
                                     let one: libc::c_int = 1;
+                                    libc::setsockopt(
+                                        client_fd,
+                                        libc::IPPROTO_TCP,
+                                        libc::TCP_NODELAY,
+                                        &one as *const _ as *const libc::c_void,
+                                        std::mem::size_of_val(&one) as libc::socklen_t,
+                                    );
+                                    // Disable delayed ACK on Linux for lower latency.
+                                    #[cfg(target_os = "linux")]
                                     libc::setsockopt(
                                         client_fd,
                                         libc::IPPROTO_TCP,
@@ -858,6 +893,7 @@ impl Worker {
         Ok(())
     }
 
+    #[cfg(not(all(target_os = "linux", feature = "io-uring")))]
     fn prune_connections_wheel(
         &self,
         slab: &mut ConnectionSlab,
@@ -896,6 +932,762 @@ impl Worker {
                         self.metrics.dec_conn();
                     } else {
                         // Connection still alive — re-insert at its current slot
+                        drain.reinsert(idx, last_active);
+                    }
+                }
+            }
+        }
+    }
+
+    // ── io_uring path ────────────────────────────────────────────────────────
+    // All methods below are compiled only on Linux with the `io-uring` feature.
+    // They implement a fully asynchronous completion-based event loop that
+    // replaces the epoll readiness loop above.
+
+    /// Submit a multi-shot accept SQE on the listen fd.
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    #[inline]
+    fn submit_accept(&self, ring: &mut UringRing) {
+        if let Some(sqe) = ring.get_sqe() {
+            let ud = encode_user_data(ACCEPT_CONN_IDX as usize, OP_TYPE_ACCEPT);
+            prep_accept_multishot(sqe, self.listen_fd, ud);
+        }
+    }
+
+    /// Submit a read SQE for the given connection.
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    #[inline]
+    fn submit_read(&self, ring: &mut UringRing, slab: &mut ConnectionSlab, idx: usize) {
+        if let Some(conn) = slab.get_mut(idx) {
+            if conn.pending_op != 0 {
+                return; // Already has an in-flight op
+            }
+            let read_start = conn.read_len as usize;
+            if read_start >= conn.read_buf.len() {
+                return; // Buffer full
+            }
+            let buf_ptr = conn.read_buf[read_start..].as_mut_ptr();
+            let buf_len = (conn.read_buf.len() - read_start) as u32;
+            let ud = encode_user_data(idx, OP_TYPE_READ);
+            if let Some(sqe) = ring.get_sqe() {
+                prep_read(sqe, conn.fd, buf_ptr, buf_len, ud);
+                conn.pending_op = OP_TYPE_READ;
+            }
+        }
+    }
+
+    /// Submit a write SQE for pending write_buf data.
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    #[inline]
+    fn submit_write(&self, ring: &mut UringRing, slab: &mut ConnectionSlab, idx: usize) {
+        if let Some(conn) = slab.get_mut(idx) {
+            if conn.pending_op != 0 {
+                return;
+            }
+            let ws = conn.write_pos as usize;
+            let wt = conn.write_len as usize;
+            if ws >= wt {
+                return; // Nothing to write
+            }
+            let buf_ptr = conn.write_buf[ws..wt].as_ptr();
+            let buf_len = (wt - ws) as u32;
+            let ud = encode_user_data(idx, OP_TYPE_WRITE);
+            if let Some(sqe) = ring.get_sqe() {
+                prep_write(sqe, conn.fd, buf_ptr, buf_len, ud);
+                conn.pending_op = OP_TYPE_WRITE;
+            }
+        }
+    }
+
+    /// Submit a writev SQE (headers + body scatter-gather).
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    #[inline]
+    fn submit_writev_headers_body(
+        &self,
+        ring: &mut UringRing,
+        slab: &mut ConnectionSlab,
+        idx: usize,
+        iovecs: &[libc::iovec],
+    ) {
+        if let Some(conn) = slab.get_mut(idx) {
+            if conn.pending_op != 0 {
+                return;
+            }
+            let ud = encode_user_data(idx, OP_TYPE_WRITEV);
+            if let Some(sqe) = ring.get_sqe() {
+                prep_writev(sqe, conn.fd, iovecs.as_ptr(), iovecs.len() as u32, ud);
+                conn.pending_op = OP_TYPE_WRITEV;
+            }
+        }
+    }
+
+    /// Submit a close SQE for the given fd.
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    #[inline]
+    fn submit_close(&self, ring: &mut UringRing, fd: i32, idx: usize) {
+        let ud = encode_user_data(idx, OP_TYPE_CLOSE);
+        if let Some(sqe) = ring.get_sqe() {
+            prep_close(sqe, fd, ud);
+        }
+    }
+
+    /// Free slob slot and submit async close SQE.
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    #[inline]
+    fn close_connection(
+        &self,
+        ring: &mut UringRing,
+        slab: &mut ConnectionSlab,
+        idx: usize,
+    ) {
+        if let Some(conn) = slab.get_mut(idx) {
+            conn.close_sendfile();
+            conn.body_clear();
+            let fd = conn.fd;
+            conn.pending_op = 0;
+            slab.free(idx);
+            self.metrics.dec_conn();
+            self.submit_close(ring, fd, idx);
+        }
+    }
+
+    /// Dispatch a completed CQE to the appropriate handler.
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    fn process_cqe(
+        &self,
+        ring: &mut UringRing,
+        slab: &mut ConnectionSlab,
+        timer_wheel: &mut TimerWheel,
+        cqe: io_uring_cqe,
+        now: u32,
+        is_shutting_down: bool,
+    ) -> ChopinResult<()> {
+        let (conn_idx, op_type) = decode_user_data(cqe.user_data);
+        match op_type {
+            OP_TYPE_ACCEPT => {
+                self.handle_accept(ring, slab, timer_wheel, cqe, now, is_shutting_down)?;
+            }
+            OP_TYPE_READ => {
+                self.handle_read(ring, slab, timer_wheel, conn_idx, cqe, now, is_shutting_down)?;
+            }
+            OP_TYPE_WRITE | OP_TYPE_WRITEV => {
+                self.handle_write(ring, slab, conn_idx, cqe, now, is_shutting_down)?;
+            }
+            OP_TYPE_CLOSE => { /* close completed — slab already freed */ }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    fn handle_accept(
+        &self,
+        ring: &mut UringRing,
+        slab: &mut ConnectionSlab,
+        timer_wheel: &mut TimerWheel,
+        cqe: io_uring_cqe,
+        now: u32,
+        is_shutting_down: bool,
+    ) -> ChopinResult<()> {
+        if is_shutting_down {
+            return Ok(());
+        }
+        if cqe.res < 0 {
+            if (cqe.flags & IORING_CQE_F_MORE) == 0 {
+                self.submit_accept(ring);
+            }
+            return Ok(());
+        }
+        let client_fd = cqe.res;
+        unsafe {
+            let flags = libc::fcntl(client_fd, libc::F_GETFL);
+            libc::fcntl(client_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            let one: libc::c_int = 1;
+            libc::setsockopt(
+                client_fd, libc::IPPROTO_TCP, libc::TCP_NODELAY,
+                &one as *const _ as *const libc::c_void,
+                std::mem::size_of_val(&one) as libc::socklen_t,
+            );
+            libc::setsockopt(
+                client_fd, libc::IPPROTO_TCP, libc::TCP_QUICKACK,
+                &one as *const _ as *const libc::c_void,
+                std::mem::size_of_val(&one) as libc::socklen_t,
+            );
+        }
+        if let Ok(idx) = slab.allocate(client_fd) {
+            if let Some(c) = slab.get_mut(idx) {
+                c.state = ConnState::Reading;
+                c.flags = conn::CONN_KEEP_ALIVE;
+                c.last_active = now;
+                c.requests_served = 0;
+                c.pending_op = 0;
+                self.metrics.inc_conn();
+                timer_wheel.insert(idx, now);
+            }
+            self.submit_read(ring, slab, idx);
+        } else {
+            self.submit_close(ring, client_fd, 0);
+        }
+        if (cqe.flags & IORING_CQE_F_MORE) == 0 {
+            self.submit_accept(ring);
+        }
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    #[allow(clippy::collapsible_if)]
+    fn handle_read(
+        &self,
+        ring: &mut UringRing,
+        slab: &mut ConnectionSlab,
+        timer_wheel: &mut TimerWheel,
+        idx: usize,
+        cqe: io_uring_cqe,
+        now: u32,
+        is_shutting_down: bool,
+    ) -> ChopinResult<()> {
+        if let Some(c) = slab.get_mut(idx) {
+            c.pending_op = 0;
+        }
+        if cqe.res <= 0 {
+            if let Some(c) = slab.get(idx) {
+                if cqe.res == 0 && c.read_len > 0 {
+                    self.pipeline_and_write(ring, slab, timer_wheel, idx, now, is_shutting_down)?;
+                    return Ok(());
+                }
+            }
+            self.close_connection(ring, slab, idx);
+            return Ok(());
+        }
+        let bytes_read = cqe.res as usize;
+        if let Some(c) = slab.get_mut(idx) {
+            c.read_len += bytes_read as u16;
+            c.last_active = now;
+        }
+        self.pipeline_and_write(ring, slab, timer_wheel, idx, now, is_shutting_down)?;
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    #[allow(clippy::collapsible_if)]
+    fn handle_write(
+        &self,
+        ring: &mut UringRing,
+        slab: &mut ConnectionSlab,
+        idx: usize,
+        cqe: io_uring_cqe,
+        now: u32,
+        is_shutting_down: bool,
+    ) -> ChopinResult<()> {
+        if let Some(c) = slab.get_mut(idx) {
+            c.pending_op = 0;
+        }
+        if cqe.res < 0 {
+            self.close_connection(ring, slab, idx);
+            return Ok(());
+        }
+        let bytes_written = cqe.res as usize;
+        self.metrics.add_bytes(bytes_written);
+        if let Some(c) = slab.get_mut(idx) {
+            c.last_active = now;
+            let wt = c.write_len as usize;
+            let ws = c.write_pos as usize;
+            if ws < wt {
+                if ws == 0 && c.body_ptr != 0 && c.body_sent == 0 {
+                    if bytes_written >= wt {
+                        c.write_pos = wt as u16;
+                        c.body_sent = (bytes_written - wt) as u32;
+                    } else {
+                        c.write_pos = bytes_written as u16;
+                    }
+                } else {
+                    c.write_pos += bytes_written as u16;
+                }
+            } else if c.body_ptr != 0 && c.body_sent < c.body_total {
+                c.body_sent += bytes_written as u32;
+            } else if c.sendfile_remaining > 0 {
+                c.sendfile_remaining -= bytes_written as u64;
+                c.sendfile_offset += bytes_written as u64;
+            }
+        }
+        if let Some(c) = slab.get(idx) {
+            let ws = c.write_pos as usize;
+            let wt = c.write_len as usize;
+            if ws < wt {
+                self.submit_write(ring, slab, idx);
+            } else if c.body_ptr != 0 && c.body_sent < c.body_total {
+                if let Some(c) = slab.get_mut(idx) {
+                    let remaining = (c.body_total - c.body_sent) as usize;
+                    let body_slice_ptr = (c.body_ptr + c.body_sent as usize) as *const u8;
+                    let ud = encode_user_data(idx, OP_TYPE_WRITE);
+                    c.pending_op = OP_TYPE_WRITE;
+                    if let Some(sqe) = ring.get_sqe() {
+                        prep_write(sqe, c.fd, body_slice_ptr, remaining as u32, ud);
+                    }
+                }
+            } else if c.sendfile_remaining > 0 {
+                if let Some(c) = slab.get_mut(idx) {
+                    match syscalls::sendfile_nonblocking(
+                        c.fd,
+                        c.sendfile_fd,
+                        &mut c.sendfile_offset,
+                        c.sendfile_remaining,
+                    ) {
+                        Ok(n) if n > 0 => {
+                            self.metrics.add_bytes(n);
+                            c.sendfile_remaining -= n as u64;
+                            if c.sendfile_remaining > 0 {
+                                self.complete_response(ring, slab, idx, is_shutting_down)?;
+                                return Ok(());
+                            }
+                        }
+                        _ => { c.close_sendfile(); }
+                    }
+                }
+                self.complete_response(ring, slab, idx, is_shutting_down)?;
+            } else {
+                self.complete_response(ring, slab, idx, is_shutting_down)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Response fully sent: reset write state and either continue pipeline or wait.
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    fn complete_response(
+        &self,
+        ring: &mut UringRing,
+        slab: &mut ConnectionSlab,
+        idx: usize,
+        is_shutting_down: bool,
+    ) -> ChopinResult<()> {
+        if let Some(c) = slab.get_mut(idx) {
+            c.close_sendfile();
+            c.body_clear();
+            c.write_len = 0;
+            c.write_pos = 0;
+            c.pending_op = 0;
+            let ka = (c.flags & conn::CONN_KEEP_ALIVE) != 0;
+            if ka && !is_shutting_down {
+                if c.read_len > 0 {
+                    c.state = ConnState::Parsing;
+                    drop(c);
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(|_| ChopinError::ClockError)?
+                        .as_secs() as u32;
+                    self.pipeline_and_write(ring, slab, &mut TimerWheel::new(now), idx, now, is_shutting_down)?;
+                } else {
+                    c.state = ConnState::Reading;
+                    drop(c);
+                    self.submit_read(ring, slab, idx);
+                }
+            } else {
+                drop(c);
+                self.close_connection(ring, slab, idx);
+            }
+        }
+        Ok(())
+    }
+
+    /// Core pipeline: parse all complete requests, serialize responses, submit write SQEs.
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    #[allow(clippy::collapsible_if)]
+    fn pipeline_and_write(
+        &self,
+        ring: &mut UringRing,
+        slab: &mut ConnectionSlab,
+        _timer_wheel: &mut TimerWheel,
+        idx: usize,
+        _now: u32,
+        is_shutting_down: bool,
+    ) -> ChopinResult<()> {
+        let mut read_offset: usize = 0;
+
+        loop {
+            // Headroom check
+            let should_flush = if let Some(c) = slab.get_mut(idx) {
+                let rl = c.read_len as usize;
+                if rl == 0 {
+                    c.state = ConnState::Reading;
+                    drop(c);
+                    self.submit_read(ring, slab, idx);
+                    return Ok(());
+                }
+                c.write_len as usize + 512 > conn::WRITE_BUF_SIZE
+            } else {
+                return Ok(());
+            };
+            if should_flush { break; }
+
+            // Parse a request
+            let parse_result = if let Some(c) = slab.get_mut(idx) {
+                let rl = c.read_len as usize;
+                let buf = &mut c.read_buf[read_offset..read_offset + rl];
+                match crate::parser::parse_request(buf) {
+                    Ok((req, consumed)) => Some((req, consumed)),
+                    Err(crate::parser::ParseError::Incomplete) => {
+                        if c.write_len > 0 {
+                            None // Flush
+                        } else {
+                            c.state = ConnState::Reading;
+                            drop(c);
+                            if read_offset > 0 {
+                                if let Some(c) = slab.get_mut(idx) {
+                                    let remaining = c.read_len as usize;
+                                    if remaining > 0 {
+                                        c.read_buf.copy_within(read_offset..read_offset + remaining, 0);
+                                    }
+                                }
+                            }
+                            self.submit_read(ring, slab, idx);
+                            return Ok(());
+                        }
+                    }
+                    Err(_) => {
+                        self.close_connection(ring, slab, idx);
+                        return Ok(());
+                    }
+                }
+            } else {
+                return Ok(());
+            };
+
+            let Some((req, consumed)) = parse_result else { break; };
+
+            if let Some(c) = slab.get_mut(idx) {
+                let mut ctx = crate::http::Context {
+                    req,
+                    params: [("", ""); crate::http::MAX_PARAMS],
+                    param_count: 0,
+                };
+                let mut keep_alive = (c.flags & conn::CONN_KEEP_ALIVE) != 0;
+                if is_shutting_down {
+                    keep_alive = false;
+                } else if keep_alive {
+                    for i in 0..ctx.req.header_count as usize {
+                        let (k, v) = ctx.req.headers[i];
+                        if k.len() == 10
+                            && k.as_bytes()[0] | 0x20 == b'c'
+                            && k.eq_ignore_ascii_case("Connection")
+                            && v.eq_ignore_ascii_case("close")
+                        {
+                            keep_alive = false;
+                            break;
+                        }
+                    }
+                }
+                self.metrics.inc_req();
+                c.requests_served += 1;
+
+                let response = match self.router.match_route(ctx.req.method, ctx.req.path) {
+                    Some((handler, params, param_count, composed)) => {
+                        ctx.params = params;
+                        ctx.param_count = param_count;
+                        let handler_ptr = *handler;
+                        #[cfg(feature = "catch-panic")]
+                        let result = std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(|| {
+                                if let Some(co) = composed { (**co)(ctx) } else { handler_ptr(ctx) }
+                            }),
+                        );
+                        #[cfg(feature = "catch-panic")]
+                        let response = match result {
+                            Ok(r) => r,
+                            Err(_) => crate::http::Response::server_error(),
+                        };
+                        #[cfg(not(feature = "catch-panic"))]
+                        let response = if let Some(co) = composed { (**co)(ctx) } else { handler_ptr(ctx) };
+                        response
+                    }
+                    None => crate::http::Response::not_found(),
+                };
+
+                let wstart = c.write_len as usize;
+                let wbuf = &mut c.write_buf[wstart..];
+                let mut pos: usize = 0;
+                let mut overflow = false;
+
+                macro_rules! w {
+                    ($src:expr) => {
+                        if !overflow {
+                            let s = $src;
+                            let end = pos + s.len();
+                            if let Some(sl) = wbuf.get_mut(pos..end) {
+                                sl.copy_from_slice(s);
+                                pos = end;
+                            } else {
+                                overflow = true;
+                            }
+                        }
+                    };
+                }
+
+                let ct_written = if response.status == 200 {
+                    match response.content_type {
+                        "application/json" => { w!(FAST_200_JSON); true }
+                        "text/plain"       => { w!(FAST_200_TEXT); true }
+                        "text/html; charset=utf-8" => { w!(FAST_200_HTML); true }
+                        _ => { w!(STATUS_200_PREFIX); false }
+                    }
+                } else {
+                    let mut sl_buf = [0u8; 40];
+                    let sl_len = status_line(response.status, &mut sl_buf);
+                    w!(&sl_buf[..sl_len]);
+                    w!(b"Server: chopin\r\n");
+                    false
+                };
+
+                let mut date_buf = [0u8; 37];
+                let response_now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|_| ChopinError::ClockError)?
+                    .as_secs() as u32;
+                format_http_date(response_now, &mut date_buf);
+                w!(&date_buf[..]);
+
+                if !ct_written {
+                    match response.content_type {
+                        "text/plain"       => w!(CT_TEXT_PLAIN),
+                        "application/json" => w!(CT_APP_JSON),
+                        ct => { w!(b"Content-Type: "); w!(ct.as_bytes()); w!(b"\r\n"); }
+                    }
+                }
+
+                let is_chunked = matches!(response.body, crate::http::Body::Stream(_));
+                if is_chunked {
+                    w!(b"Transfer-Encoding: chunked\r\n");
+                } else {
+                    w!(b"Content-Length: ");
+                    let body_len = response.body.len();
+                    let mut itoa_buf = [0u8; 10];
+                    let itoa_len = {
+                        let mut n = body_len;
+                        if n == 0 { itoa_buf[0] = b'0'; 1 }
+                        else {
+                            let mut i = 0;
+                            while n > 0 { itoa_buf[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
+                            itoa_buf[..i].reverse();
+                            i
+                        }
+                    };
+                    w!(&itoa_buf[..itoa_len]);
+                    w!(b"\r\n");
+                }
+
+                if keep_alive { w!(b"Connection: keep-alive\r\n"); }
+                else          { w!(b"Connection: close\r\n"); }
+
+                for header in response.headers.iter() {
+                    w!(header.name.as_bytes()); w!(b": ");
+                    w!(header.value.as_str().as_bytes()); w!(b"\r\n");
+                }
+                w!(b"\r\n");
+
+                if !overflow {
+                    match response.body {
+                        crate::http::Body::Empty => {}
+                        crate::http::Body::Static(b) => {
+                            if wstart == 0 && pos + b.len() <= conn::WRITE_BUF_SIZE {
+                                c.body_ptr = b.as_ptr() as usize;
+                                c.body_total = b.len() as u32;
+                            } else { w!(b); }
+                        }
+                        crate::http::Body::Bytes(b) => {
+                            if wstart == 0 && pos + b.len() <= conn::WRITE_BUF_SIZE {
+                                let boxed = b.into_boxed_slice();
+                                c.body_ptr = boxed.as_ptr() as usize;
+                                c.body_total = boxed.len() as u32;
+                                c.body_owned = Some(boxed);
+                            } else { w!(b.as_slice()); }
+                        }
+                        crate::http::Body::Stream(mut iter) => {
+                            for chunk in iter.by_ref() {
+                                let hex_len = {
+                                    let mut n = chunk.len();
+                                    let mut hex_buf = [0u8; 8];
+                                    let mut i = 0;
+                                    if n == 0 { hex_buf[0] = b'0'; i = 1; }
+                                    else {
+                                        while n > 0 {
+                                            let d = (n % 16) as u8;
+                                            hex_buf[i] = if d < 10 { b'0' + d } else { b'A' + d - 10 };
+                                            n /= 16; i += 1;
+                                        }
+                                        hex_buf[..i].reverse();
+                                    }
+                                    (hex_buf, i)
+                                };
+                                w!(&hex_len.0[..hex_len.1]); w!(b"\r\n");
+                                w!(chunk.as_slice()); w!(b"\r\n");
+                            }
+                            w!(b"0\r\n\r\n");
+                        }
+                        crate::http::Body::File { mut fd, offset, len } => {
+                            c.sendfile_fd = fd.take();
+                            c.sendfile_offset = offset;
+                            c.sendfile_remaining = len;
+                        }
+                    }
+                }
+
+                if overflow {
+                    if wstart > 0 { break; } // Flush queued responses first
+                    let mut pos_err = 0;
+                    let err_prefix = b"HTTP/1.1 500 Internal Server Error\r\n";
+                    wbuf[pos_err..pos_err + err_prefix.len()].copy_from_slice(err_prefix);
+                    pos_err += err_prefix.len();
+                    let error_now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(|_| ChopinError::ClockError)?
+                        .as_secs() as u32;
+                    let mut date_buf_err = [0u8; 37];
+                    let date_len = format_http_date(error_now, &mut date_buf_err);
+                    wbuf[pos_err..pos_err + date_len].copy_from_slice(&date_buf_err[..date_len]);
+                    pos_err += date_len;
+                    let err_suffix = b"Content-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error";
+                    wbuf[pos_err..pos_err + err_suffix.len()].copy_from_slice(err_suffix);
+                    pos = pos_err + err_suffix.len();
+                    keep_alive = false;
+                }
+
+                c.write_len = (wstart + pos) as u16;
+                read_offset += consumed;
+                c.read_len = (c.read_len as usize - consumed) as u16;
+
+                if !keep_alive {
+                    c.flags &= !conn::CONN_KEEP_ALIVE;
+                    break;
+                }
+                if c.body_ptr != 0 { break; } // Need writev, stop pipelining
+            } else {
+                return Ok(());
+            }
+        } // end loop
+
+        // Deferred compaction
+        if read_offset > 0 {
+            if let Some(c) = slab.get_mut(idx) {
+                let remaining = c.read_len as usize;
+                if remaining > 0 {
+                    c.read_buf.copy_within(read_offset..read_offset + remaining, 0);
+                }
+            }
+        }
+
+        // Submit write SQE
+        if let Some(c) = slab.get(idx) {
+            let ws = c.write_pos as usize;
+            let wt = c.write_len as usize;
+            if ws == 0 && c.body_ptr != 0 && c.body_sent == 0 && wt > 0 {
+                let header_slice = &c.write_buf[0..wt];
+                let body_slice = unsafe {
+                    std::slice::from_raw_parts(c.body_ptr as *const u8, c.body_total as usize)
+                };
+                let iovecs = [
+                    libc::iovec { iov_base: header_slice.as_ptr() as *mut libc::c_void, iov_len: header_slice.len() },
+                    libc::iovec { iov_base: body_slice.as_ptr() as *mut libc::c_void,   iov_len: body_slice.len()   },
+                ];
+                self.submit_writev_headers_body(ring, slab, idx, &iovecs);
+            } else if wt > ws {
+                self.submit_write(ring, slab, idx);
+            } else if c.write_len == 0 {
+                drop(c);
+                self.submit_read(ring, slab, idx);
+            }
+        }
+        Ok(())
+    }
+
+    /// Main io_uring event loop (Linux, feature = "io-uring").
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    #[allow(clippy::collapsible_if)]
+    fn run_uring(&mut self, shutdown: Arc<AtomicBool>) -> ChopinResult<()> {
+        let setup_flags = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN;
+        let mut ring = UringRing::new(256, setup_flags)
+            .map_err(|e| ChopinError::Other(format!("io_uring_setup failed: {e}")))?;
+
+        let mut slab = ConnectionSlab::new(10_000);
+        let mut now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| ChopinError::ClockError)?
+            .as_secs() as u32;
+        let mut last_prune = now;
+        let mut timer_wheel = TimerWheel::new(now);
+        let mut iter_count: u32 = 0;
+
+        self.submit_accept(&mut ring);
+        ring.submit()?;
+
+        loop {
+            let is_shutting_down = shutdown.load(Ordering::Acquire);
+            if is_shutting_down && slab.is_empty() {
+                break;
+            }
+            iter_count = iter_count.wrapping_add(1);
+
+            #[allow(clippy::manual_is_multiple_of)]
+            if iter_count % 1024 == 0 {
+                now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|_| ChopinError::ClockError)?
+                    .as_secs() as u32;
+                if now - last_prune >= 1 {
+                    self.prune_connections_wheel_uring(&mut ring, &mut slab, &mut timer_wheel, now);
+                    last_prune = now;
+                }
+            }
+
+            ring.submit_and_wait(1)?;
+
+            let mut cqe_count = 0u32;
+            while let Some(cqe) = ring.peek_cqe() {
+                ring.advance_cq(1);
+                cqe_count += 1;
+                self.process_cqe(&mut ring, &mut slab, &mut timer_wheel, cqe, now, is_shutting_down)?;
+                if cqe_count >= 64 {
+                    ring.submit()?;
+                    cqe_count = 0;
+                }
+            }
+            if cqe_count > 0 {
+                ring.submit()?;
+            }
+        }
+
+        for i in 0..slab.capacity() {
+            if let Some(c) = slab.get_mut(i) {
+                if c.state != ConnState::Free {
+                    c.close_sendfile();
+                    c.body_clear();
+                    unsafe { libc::close(c.fd); }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    fn prune_connections_wheel_uring(
+        &self,
+        ring: &mut UringRing,
+        slab: &mut ConnectionSlab,
+        wheel: &mut TimerWheel,
+        now: u32,
+    ) {
+        const TIMEOUT: u32 = 30;
+        if let Some(mut drain) = wheel.advance(now, TIMEOUT) {
+            while let Some(indices) = drain.next_slot() {
+                for idx in indices {
+                    let (timed_out, last_active) = {
+                        if let Some(c) = slab.get(idx) {
+                            if c.state == ConnState::Free { continue; }
+                            (now.wrapping_sub(c.last_active) > TIMEOUT, c.last_active)
+                        } else { continue; }
+                    };
+                    if timed_out {
+                        self.close_connection(ring, slab, idx);
+                    } else {
                         drain.reinsert(idx, last_active);
                     }
                 }

@@ -26,9 +26,6 @@ pub mod syscalls;
 pub mod timer;
 pub mod worker;
 
-#[cfg(all(target_os = "linux", feature = "io-uring"))]
-pub mod worker_uring;
-
 // Re-exports for users
 pub use error::{ChopinError, ChopinResult};
 pub use extract::{FromRequest, Json, Query};
