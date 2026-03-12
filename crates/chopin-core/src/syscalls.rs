@@ -958,6 +958,8 @@ pub mod uring {
     pub const IORING_OP_NOP: u8 = 0;
     pub const IORING_OP_READV: u8 = 1;
     pub const IORING_OP_WRITEV: u8 = 2;
+    pub const IORING_OP_READ_FIXED: u8 = 4;
+    pub const IORING_OP_WRITE_FIXED: u8 = 5;
     pub const IORING_OP_READ: u8 = 22;
     pub const IORING_OP_WRITE: u8 = 23;
     pub const IORING_OP_ACCEPT: u8 = 13;
@@ -1435,6 +1437,22 @@ pub mod uring {
         sqe.user_data = user_data;
     }
 
+    /// Prepare a read from a pre-registered buffer (A.4: fixed buffers).
+    /// `buf_index` is the index into the array passed to `register_buffers()`.
+    #[inline(always)]
+    pub fn prep_read_fixed(
+        sqe: &mut io_uring_sqe, fd: i32, buf_ptr: *mut u8, len: u32,
+        offset: u64, buf_index: u16, user_data: u64,
+    ) {
+        sqe.opcode = IORING_OP_READ_FIXED;
+        sqe.fd = fd;
+        sqe.addr_or_splice = buf_ptr as u64;
+        sqe.len = len;
+        sqe.off_or_addr2 = offset;
+        sqe.buf_index_or_group = buf_index;
+        sqe.user_data = user_data;
+    }
+
     /// Prepare a write SQE.
     #[inline(always)]
     pub fn prep_write(sqe: &mut io_uring_sqe, fd: i32, buf_ptr: *const u8, len: u32, user_data: u64) {
@@ -1442,6 +1460,21 @@ pub mod uring {
         sqe.fd = fd;
         sqe.addr_or_splice = buf_ptr as u64;
         sqe.len = len;
+        sqe.user_data = user_data;
+    }
+
+    /// Prepare a write from a pre-registered buffer (A.4: fixed buffers).
+    #[inline(always)]
+    pub fn prep_write_fixed(
+        sqe: &mut io_uring_sqe, fd: i32, buf_ptr: *const u8, len: u32,
+        offset: u64, buf_index: u16, user_data: u64,
+    ) {
+        sqe.opcode = IORING_OP_WRITE_FIXED;
+        sqe.fd = fd;
+        sqe.addr_or_splice = buf_ptr as u64;
+        sqe.len = len;
+        sqe.off_or_addr2 = offset;
+        sqe.buf_index_or_group = buf_index;
         sqe.user_data = user_data;
     }
 
@@ -1473,6 +1506,28 @@ pub mod uring {
     #[inline(always)]
     pub fn prep_nop(sqe: &mut io_uring_sqe, user_data: u64) {
         sqe.opcode = IORING_OP_NOP;
+        sqe.user_data = user_data;
+    }
+
+    /// Prepare a splice SQE (A.5: zero-copy sendfile via io_uring).
+    /// Splices `len` bytes from `fd_in` (at `off_in`) into `fd_out`.
+    /// Use `-1` for `off_in` to read from the current file position.
+    #[inline(always)]
+    pub fn prep_splice(
+        sqe: &mut io_uring_sqe,
+        fd_in: i32,
+        off_in: i64,
+        fd_out: i32,
+        off_out: i64,
+        len: u32,
+        user_data: u64,
+    ) {
+        sqe.opcode = IORING_OP_SPLICE;
+        sqe.fd = fd_out;
+        sqe.addr_or_splice = off_in as u64; // splice_off_in
+        sqe.len = len;
+        sqe.off_or_addr2 = off_out as u64;
+        sqe.splice_fd_in_or_file_index = fd_in;
         sqe.user_data = user_data;
     }
 }

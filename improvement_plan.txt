@@ -8,19 +8,36 @@ Legend: ✅ done · 🔧 partial · ❌ not started
 
 ---
 
-## Sprint A — io_uring Worker (chopin-core) — HIGH PRIORITY
+## Shared-Nothing TPC Architecture — Status
 
-The syscall layer (`syscalls::uring`) and `conn::Conn.pending_op` are already in place, but
-`worker_uring.rs` does not yet exist.  This is the biggest remaining performance opportunity on Linux.
+Chopin's thread-per-core model is the foundation for eliminating OS scheduling overhead
+(context switches, cache-line bouncing).  Current status of the four pillars:
+
+| Pillar | Status | Location | Notes |
+|--------|--------|----------|-------|
+| `SO_REUSEPORT` socket sharding | ✅ | `syscalls::create_listen_socket_reuseport()` | Each worker owns its own listener — zero cross-thread accept contention |
+| CPU pinning (core affinity) | ✅ | `server.rs` → `core_affinity::set_for_current()` | One thread per `num_cpus::get()`, pinned at spawn |
+| Thread-per-core event loops | ✅ | `worker.rs` → `run_epoll()` / `run_uring()` | Connection accepted, processed, and closed on the same core |
+| Spin-poll / zero-timeout epoll | ✅ | `worker.rs` | `CHOPIN_EPOLL_TIMEOUT_MS=0` for spin-poll — see Sprint D.8 |
+| io_uring SQPOLL | ✅ | `worker.rs` | `CHOPIN_SQPOLL=1` enables kernel SQ polling — see Sprint A.3 |
+
+---
+
+## Sprint A — io_uring Hardening (chopin-core) — HIGH PRIORITY
+
+The io_uring backend already lives in `worker.rs` behind `#[cfg(all(target_os = "linux", feature = "io-uring"))]`
+guards (~750 lines, 17 conditional blocks).  `run_uring()` dispatches from `Worker::run()`, multishot
+accept works, and the full read → parse → serialize → writev pipeline is operational.  Remaining
+work is performance hardening and CI integration.
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| A.1 | Create `src/worker_uring.rs` with full io_uring event loop | ❌ | ~700 lines mirroring worker.rs |
-| A.2 | Multi-shot accept via `prep_accept_multishot` (kernel ≥5.19) | ❌ | One SQE → many CQEs, no re-arm |
-| A.3 | SQPOLL mode — opt-in via `IORING_SETUP_SQPOLL` flag | ❌ | Flag scaffolded; not wired to Worker |
-| A.4 | Fixed / registered buffer rings (`io_uring_register`) | ❌ | Eliminates per-read copy |
-| A.5 | Sendfile via io_uring for `Body::File` (fallback to sync today) | ❌ | |
-| A.6 | `Worker::run_uring()` wired into `Worker::run()` dispatch | ❌ | `run_epoll` branch exists; uring branch missing |
+| A.1 | io_uring event loop in `worker.rs` (single-file, `#[cfg]` guards) | ✅ | Rust idiomatic — shared parse/slab/serialize stays unified |
+| A.2 | Multi-shot accept via `prep_accept_multishot` (kernel ≥5.19) | ✅ | `submit_accept()` already uses `IORING_ACCEPT_MULTISHOT` |
+| A.3 | SQPOLL mode — opt-in via `IORING_SETUP_SQPOLL` flag | ✅ | `CHOPIN_SQPOLL=1` env var enables kernel-side SQ polling |
+| A.4 | Fixed / registered buffer rings (`io_uring_register`) | 🔧 | `prep_read_fixed` / `prep_write_fixed` helpers added; slab wiring pending |
+| A.5 | Sendfile via io_uring for `Body::File` (fallback to sync today) | 🔧 | `prep_splice()` helper added; integration with Body::File pending |
+| A.6 | `Worker::run_uring()` wired into `Worker::run()` dispatch | ✅ | `run()` branches on `cfg` at worker.rs:106 |
 | A.7 | Benchmark `io-uring` vs epoll on Linux (`wrk -t16 -c1024`) | ❌ | Needed to validate win |
 | A.8 | CI: run io-uring feature tests only on `target_os = "linux"` | ❌ | Guard with `cfg_attr` in workflow |
 
@@ -62,12 +79,13 @@ These are small-effort items that prevent production surprises.
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| D.1 | Enforce `MAX_REQUEST_SIZE` in parser (prevent OOM on huge bodies) | ❌ | Parser currently unbounded |
-| D.2 | Check `requests_served` cap for keep-alive (`keepalive_requests`) | ❌ | `Conn.requests_served` exists but never capped |
-| D.3 | Graceful drain: wait for in-flight requests before exit | 🔧 | Shutdown flag present; active-count missing |
-| D.4 | `Content-Length` mismatch detection (body shorter/longer than announced) | ❌ | Silent corruption today |
-| D.5 | Configurable slab size via env var / CLI flag | ❌ | Hard-coded `10_000` in worker |
-| D.6 | `parse_host_port` — support IPv6 bracket notation (`[::1]:8080`) | ❌ | Splits on `:`, breaks for IPv6 |
+| D.1 | Enforce `MAX_REQUEST_SIZE` in parser (prevent OOM on huge bodies) | ✅ | 1 MiB limit; returns 413 Content Too Large on exceed |
+| D.2 | Check `requests_served` cap for keep-alive (`keepalive_requests`) | ✅ | `KEEPALIVE_MAX_REQUESTS = 10_000`; closes after cap hit |
+| D.3 | Graceful drain: wait for in-flight requests before exit | ✅ | 30s hard drain deadline + `slab.is_empty()` check |
+| D.4 | `Content-Length` mismatch detection (body shorter/longer than announced) | ✅ | Parser returns Incomplete for short; exact consumption for match |
+| D.5 | Configurable slab size via env var / CLI flag | ✅ | `CHOPIN_SLAB_CAPACITY` env var (default 10_000) |
+| D.6 | `parse_host_port` — support IPv6 bracket notation (`[::1]:8080`) | ✅ | Bracket parsing + `rfind(':')` for IPv4 |
+| D.8 | Configurable epoll timeout (spin-poll mode: timeout=0) | ✅ | `CHOPIN_EPOLL_TIMEOUT_MS` env var (default 1000, 0 = spin) |
 
 ---
 
@@ -79,7 +97,7 @@ These are small-effort items that prevent production surprises.
 | E.2 | Response compression (`gzip` / `brotli`) behind feature flag | ❌ | `Accept-Encoding` negotiation |
 | E.3 | HTTP/2 (h2c — prior knowledge or upgrade) | ❌ | Very large; consider `h2` crate |
 | E.4 | Chunked transfer-encoding for streaming responses | ❌ | Needed for SSE / large files |
-| E.5 | `multipart/form-data` upload handler (multipart.rs stub exists) | 🔧 | Module exists; implementation sparse |
+| E.5 | `multipart/form-data` upload handler | ✅ | Streaming iterator with boundary detection and part extraction |
 
 Priority order: D.* safety first → E.4 → E.2 → E.1 → E.3 last.
 
@@ -93,7 +111,7 @@ Priority order: D.* safety first → E.4 → E.2 → E.1 → E.3 last.
 | F.2 | JWKS endpoint client — verify RS256 / ES256 tokens | ❌ | Required for Auth0 / Cognito / Google |
 | F.3 | Refresh-token handling and silent refresh | ❌ | |
 | F.4 | `#[require_scope("read:users")]` macro | ❌ | Builds on existing RBAC |
-| F.5 | Unit tests for JWT expiry, revocation, and RBAC denial | ❌ | Auth crate has no tests today |
+| F.5 | Unit tests for JWT expiry, revocation, and RBAC denial | 🔧 | Tests exist in crypto.rs + revocation.rs; JWT/RBAC coverage gaps |
 
 ---
 
@@ -101,8 +119,8 @@ Priority order: D.* safety first → E.4 → E.2 → E.1 → E.3 last.
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| G.1 | `QueryBuilder` aggregates: `count()`, `sum()`, `avg()`, `min()`, `max()` | 🔧 | Builder exists; no aggregate API |
-| G.2 | `JOIN` support (INNER, LEFT, RIGHT) | ❌ | |
+| G.1 | `QueryBuilder` aggregates: `count()`, `sum()`, `avg()`, `min()`, `max()` | ✅ | Implemented on `Column<M>` (builder.rs) |
+| G.2 | `JOIN` support (INNER, LEFT, RIGHT) | ✅ | `join()` + `join_child<R>()` for auto-FK resolution |
 | G.3 | Belongs-to / has-many eager loading (avoid N+1) | ❌ | |
 | G.4 | Soft-delete (`deleted_at IS NULL` scope) | ❌ | Common pattern |
 | G.5 | Batch insert (`INSERT … VALUES (…),(…)`) | ❌ | Replaces N round-trips |
@@ -115,7 +133,7 @@ Priority order: D.* safety first → E.4 → E.2 → E.1 → E.3 last.
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| H.1 | GitHub Actions workflow: `cargo test`, `clippy`, `fmt` | ❌ | No `.github/` directory |
+| H.1 | GitHub Actions workflow: `cargo test`, `clippy`, `fmt` | ✅ | `.github/workflows/CI.yml` exists |
 | H.2 | chopin-core e2e tests: keep-alive, large body, partial writes | 🔧 | Sparse coverage today |
 | H.3 | chopin-pg integration tests in CI (Docker PostgreSQL service) | 🔧 | Tests exist; no CI harness |
 | H.4 | Criterion benchmarks in CI (`cargo bench --no-run` smoke check) | ❌ | |
@@ -130,8 +148,8 @@ Priority order: D.* safety first → E.4 → E.2 → E.1 → E.3 last.
 |---|------|--------|-------|
 | I.1 | `chopin dev` — hot-reload via `cargo-watch` | ❌ | Currently just `cargo run` |
 | I.2 | `chopin generate model <Name> <field:type>…` — scaffold model + migration | ❌ | Generator stubs exist |
-| I.3 | `chopin migrate rollback` | 🔧 | `migrations.rs` exists; rollback missing |
-| I.4 | `chopin deploy` — functional Docker multi-stage build | 🔧 | `deploy.rs` stub; not wired |
+| I.3 | `chopin migrate rollback` | ✅ | migrations.rs has Up/Down/Generate; rollback via `down --steps` |
+| I.4 | `chopin deploy` — functional Docker multi-stage build | ✅ | `generate_dockerfile()` with multi-stage template + docker-compose |
 | I.5 | `chopin check` — validate env vars and DB connectivity at startup | 🔧 | `check.rs` exists; not enforced |
 
 ---
@@ -140,7 +158,7 @@ Priority order: D.* safety first → E.4 → E.2 → E.1 → E.3 last.
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| J.1 | `ARCHITECTURE.md` — populate empty file | ❌ | File exists but empty |
+| J.1 | `ARCHITECTURE.md` — populate empty file | ✅ | ~200 lines with shared-nothing principles + Mermaid diagrams |
 | J.2 | Rustdoc examples on `Router`, `Context`, `Response`, `Chopin` | ❌ | |
 | J.3 | `docs/USAGE_GUIDE.md` — chopin-pg + chopin-orm integration section | 🔧 | Guide exists; DB section missing |
 | J.4 | `CHANGELOG.md` | ❌ | |
@@ -152,9 +170,9 @@ Priority order: D.* safety first → E.4 → E.2 → E.1 → E.3 last.
 
 | Sprint | Crate | Impact | Effort | When |
 |--------|-------|--------|--------|------|
-| **A** — io_uring worker | chopin-core | Performance | Large | Now |
+| **A** — io_uring hardening | chopin-core | Performance | Medium | A.3 ✅, A.4–A.5 🔧, A.7–A.8 remaining |
 | **B** — TLS + auth | chopin-pg | Production blocker | Medium | Now |
-| **D.1–D.3** — safety | chopin-core | Correctness | Small | Now |
+| **D.1–D.8** — safety + TPC | chopin-core | Correctness + Perf | Small | ✅ Done |
 | **C** — type completions | chopin-pg | Completeness | Medium | After B |
 | **H** — CI / testing | all | Quality | Medium | After A+B |
 | **E.1, E.4** — features | chopin-core | Feature | Medium | Parallel |

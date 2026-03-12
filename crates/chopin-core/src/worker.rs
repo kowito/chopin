@@ -93,21 +93,39 @@ fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
     i
 }
 
+/// Maximum number of requests on a single keep-alive connection before closing.
+/// Prevents a single long-lived connection from monopolising a slab slot forever.
+const KEEPALIVE_MAX_REQUESTS: u32 = 10_000;
+
 pub struct Worker {
     #[allow(dead_code)]
     id: usize,
     router: Router,
     metrics: Arc<WorkerMetrics>,
     listen_fd: i32, // Dedicated SO_REUSEPORT listener
+    slab_capacity: usize,
+    epoll_timeout_ms: i32,
 }
 
 impl Worker {
     pub fn new(id: usize, router: Router, metrics: Arc<WorkerMetrics>, listen_fd: i32) -> Self {
+        let slab_capacity = std::env::var("CHOPIN_SLAB_CAPACITY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(10_000);
+
+        let epoll_timeout_ms = std::env::var("CHOPIN_EPOLL_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(1000);
+
         Self {
             id,
             router,
             metrics,
             listen_fd,
+            slab_capacity,
+            epoll_timeout_ms,
         }
     }
 
@@ -136,13 +154,14 @@ impl Worker {
         }
 
         // 2. Initialize Slab Allocator
-        // 10k = ~80 MB per worker (Conn is ~8 KB each). Override via CLI / config for heavy load.
-        let mut slab = ConnectionSlab::new(10_000);
+        // Default 10k = ~80 MB per worker (Conn is ~8 KB each).
+        // Override via CHOPIN_SLAB_CAPACITY env var for heavy load.
+        let mut slab = ConnectionSlab::new(self.slab_capacity);
 
         let mut events = vec![epoll_event { events: 0, u64: 0 }; 1024]; // Process up to 1024 events at once
 
-        // Wait timeout in ms.
-        let mut timeout = 1000;
+        // Wait timeout in ms (0 = spin-poll mode for lowest latency, trades CPU).
+        let mut timeout = self.epoll_timeout_ms;
 
         let mut now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -151,10 +170,15 @@ impl Worker {
         let mut last_prune = now;
         let mut timer_wheel = TimerWheel::new(now);
         let mut iter_count: u32 = 0;
+        let mut drain_started: u32 = 0; // timestamp when shutdown was first observed
 
         loop {
             let is_shutting_down = shutdown.load(Ordering::Acquire);
             if is_shutting_down && slab.is_empty() {
+                break;
+            }
+            // D.3: Hard drain deadline — exit after 30s even if connections remain
+            if is_shutting_down && drain_started > 0 && now.wrapping_sub(drain_started) > 30 {
                 break;
             }
             iter_count = iter_count.wrapping_add(1);
@@ -341,6 +365,11 @@ impl Worker {
 
                                             self.metrics.inc_req();
                                             conn.requests_served += 1;
+
+                                            // D.2: Cap keep-alive requests per connection
+                                            if conn.requests_served >= KEEPALIVE_MAX_REQUESTS {
+                                                keep_alive = false;
+                                            }
 
                                             let response = match self
                                                 .router
@@ -659,6 +688,19 @@ impl Worker {
                                             };
                                             break;
                                         }
+                                        Err(crate::parser::ParseError::TooLarge) => {
+                                            // Send 413 and close
+                                            let err_413 = b"HTTP/1.1 413 Content Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                                            let wstart = conn.write_len as usize;
+                                            let end = wstart + err_413.len();
+                                            if end <= crate::conn::WRITE_BUF_SIZE {
+                                                conn.write_buf[wstart..end].copy_from_slice(err_413);
+                                                conn.write_len = end as u16;
+                                            }
+                                            conn.flags &= !crate::conn::CONN_KEEP_ALIVE;
+                                            next_state = ConnState::Writing;
+                                            break;
+                                        }
                                         Err(_) => {
                                             next_state = ConnState::Closing;
                                             break;
@@ -875,6 +917,10 @@ impl Worker {
             }
             if shutdown.load(Ordering::Acquire) {
                 timeout = 100;
+                // D.3: Record when shutdown started for drain deadline
+                if drain_started == 0 {
+                    drain_started = now;
+                }
             }
         }
 
@@ -1344,6 +1390,20 @@ impl Worker {
                             return Ok(());
                         }
                     }
+                    Err(crate::parser::ParseError::TooLarge) => {
+                        // Send 413 and close
+                        let err_413 = b"HTTP/1.1 413 Content Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                        if let Some(c) = slab.get_mut(idx) {
+                            let wstart = c.write_len as usize;
+                            let end = wstart + err_413.len();
+                            if end <= conn::WRITE_BUF_SIZE {
+                                c.write_buf[wstart..end].copy_from_slice(err_413);
+                                c.write_len = end as u16;
+                            }
+                            c.flags &= !conn::CONN_KEEP_ALIVE;
+                        }
+                        break; // will submit write below
+                    }
                     Err(_) => {
                         self.close_connection(ring, slab, idx);
                         return Ok(());
@@ -1379,6 +1439,11 @@ impl Worker {
                 }
                 self.metrics.inc_req();
                 c.requests_served += 1;
+
+                // D.2: Cap keep-alive requests per connection
+                if c.requests_served >= KEEPALIVE_MAX_REQUESTS {
+                    keep_alive = false;
+                }
 
                 let response = match self.router.match_route(ctx.req.method, ctx.req.path) {
                     Some((handler, params, param_count, composed)) => {
@@ -1603,11 +1668,16 @@ impl Worker {
     #[cfg(all(target_os = "linux", feature = "io-uring"))]
     #[allow(clippy::collapsible_if)]
     fn run_uring(&mut self, shutdown: Arc<AtomicBool>) -> ChopinResult<()> {
-        let setup_flags = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN;
+        let mut setup_flags = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN;
+        // A.3: Opt-in to SQPOLL mode via env var (kernel thread polls SQ, zero-syscall submission)
+        if std::env::var("CHOPIN_SQPOLL").as_deref() == Ok("1") {
+            setup_flags |= IORING_SETUP_SQPOLL;
+            eprintln!("[chopin] worker-{} enabling SQPOLL mode", self.id);
+        }
         let mut ring = UringRing::new(256, setup_flags)
             .map_err(|e| ChopinError::Other(format!("io_uring_setup failed: {e}")))?;
 
-        let mut slab = ConnectionSlab::new(10_000);
+        let mut slab = ConnectionSlab::new(self.slab_capacity);
         let mut now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| ChopinError::ClockError)?

@@ -138,13 +138,68 @@ struct Parts {
 }
 
 fn parse_host_port(hp: &str) -> crate::error::ChopinResult<Parts> {
-    let parts: Vec<&str> = hp.split(':').collect();
-    let host = parts.first().unwrap_or(&"0.0.0.0").to_string();
-    let port = parts
-        .get(1)
-        .ok_or_else(|| crate::error::ChopinError::Other("Missing port in address".to_string()))?
-        .parse::<u16>()
-        .map_err(|_| crate::error::ChopinError::Other("Invalid port number".to_string()))?;
+    // D.6: Support IPv6 bracket notation, e.g. "[::1]:8080"
+    if let Some(rest) = hp.strip_prefix('[') {
+        // IPv6 bracketed form: [host]:port
+        let bracket_end = rest.find(']').ok_or_else(|| {
+            crate::error::ChopinError::Other("Missing closing ']' in IPv6 address".to_string())
+        })?;
+        let host = rest[..bracket_end].to_string();
+        let after = &rest[bracket_end + 1..];
+        let port_str = after.strip_prefix(':').ok_or_else(|| {
+            crate::error::ChopinError::Other("Missing port after IPv6 address".to_string())
+        })?;
+        let port = port_str
+            .parse::<u16>()
+            .map_err(|_| crate::error::ChopinError::Other("Invalid port number".to_string()))?;
+        Ok(Parts { host, port })
+    } else {
+        // IPv4 / hostname: split on last colon
+        let colon = hp.rfind(':').ok_or_else(|| {
+            crate::error::ChopinError::Other("Missing port in address".to_string())
+        })?;
+        let host = hp[..colon].to_string();
+        let port = hp[colon + 1..]
+            .parse::<u16>()
+            .map_err(|_| crate::error::ChopinError::Other("Invalid port number".to_string()))?;
+        Ok(Parts { host, port })
+    }
+}
 
-    Ok(Parts { host, port })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ipv4() {
+        let p = parse_host_port("0.0.0.0:8080").unwrap();
+        assert_eq!(p.host, "0.0.0.0");
+        assert_eq!(p.port, 8080);
+    }
+
+    #[test]
+    fn test_parse_ipv6_bracket() {
+        let p = parse_host_port("[::1]:9090").unwrap();
+        assert_eq!(p.host, "::1");
+        assert_eq!(p.port, 9090);
+    }
+
+    #[test]
+    fn test_parse_ipv6_full() {
+        let p = parse_host_port("[::]:3000").unwrap();
+        assert_eq!(p.host, "::");
+        assert_eq!(p.port, 3000);
+    }
+
+    #[test]
+    fn test_parse_localhost() {
+        let p = parse_host_port("localhost:4000").unwrap();
+        assert_eq!(p.host, "localhost");
+        assert_eq!(p.port, 4000);
+    }
+
+    #[test]
+    fn test_parse_missing_port() {
+        assert!(parse_host_port("0.0.0.0").is_err());
+    }
 }
