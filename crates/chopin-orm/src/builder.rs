@@ -360,7 +360,7 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
         self
     }
 
-    fn build_query(&self) -> (String, Vec<&PgValue>) {
+    pub(crate) fn build_query(&self) -> (String, Vec<&PgValue>) {
         let mut all_params: Vec<&PgValue> = Vec::new();
         let mut param_idx = 1;
 

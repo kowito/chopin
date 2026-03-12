@@ -7,6 +7,28 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
+/// High-level application builder for Chopin.
+///
+/// Collects routes registered via `#[get]`/`#[post]`/… macros, optionally
+/// mounts OpenAPI documentation, and starts the multi-threaded server.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use chopin_core::{get, Context, Response, Chopin};
+///
+/// #[get("/")]
+/// fn index(_ctx: Context) -> Response {
+///     Response::text("Hello!")
+/// }
+///
+/// fn main() {
+///     Chopin::new()
+///         .mount_all_routes()
+///         .serve("0.0.0.0:8080")
+///         .unwrap();
+/// }
+/// ```
 pub struct Chopin {
     router: Router,
 }
@@ -18,12 +40,14 @@ impl Default for Chopin {
 }
 
 impl Chopin {
+    /// Create a new Chopin application with an empty router.
     pub fn new() -> Self {
         Self {
             router: Router::new(),
         }
     }
 
+    /// Discover and register all routes annotated with `#[get]`, `#[post]`, etc.
     pub fn mount_all_routes(mut self) -> Self {
         for route in inventory::iter::<crate::router::RouteDef> {
             self.router.add(route.method, route.path, route.handler);
@@ -32,24 +56,48 @@ impl Chopin {
         self
     }
 
+    /// Enable the built-in OpenAPI documentation at `/openapi.json` and `/docs`.
     pub fn with_openapi(mut self) -> Self {
         self.router.get("/openapi.json", crate::openapi::openapi_json_handler);
         self.router.get("/docs", crate::openapi::scalar_docs_handler);
         self
     }
 
+    /// Start the server, binding to `host_port` (e.g. `"0.0.0.0:8080"`).
     pub fn serve(self, host_port: &str) -> crate::error::ChopinResult<()> {
         let server = Server::bind(host_port);
         server.serve(self.router)
     }
 }
 
+/// Low-level multi-threaded server.
+///
+/// Use this when you want full control over the [`Router`] (e.g. adding
+/// middleware, merging sub-routers) instead of the macro-driven [`Chopin`]
+/// builder.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use chopin_core::{Router, Server, Context, Response};
+///
+/// fn ping(_ctx: Context) -> Response { Response::text("pong") }
+///
+/// let mut router = Router::new();
+/// router.get("/ping", ping);
+///
+/// Server::bind("0.0.0.0:8080")
+///     .workers(4)
+///     .serve(router)
+///     .unwrap();
+/// ```
 pub struct Server {
     host_port: String,
     workers: usize,
 }
 
 impl Server {
+    /// Bind to the given address. Defaults to one worker per logical CPU.
     pub fn bind(host_port: &str) -> Self {
         Self {
             host_port: host_port.to_string(),
@@ -57,11 +105,14 @@ impl Server {
         }
     }
 
+    /// Set the number of worker threads (defaults to `num_cpus::get()`).
     pub fn workers(mut self, workers: usize) -> Self {
         self.workers = workers;
         self
     }
 
+    /// Start the server with the provided router. Spawns one thread per worker,
+    /// each pinned to a CPU core, and blocks until shutdown.
     pub fn serve(self, mut router: Router) -> crate::error::ChopinResult<()> {
         // Sort children at every trie level for binary-search matching.
         router.finalize();

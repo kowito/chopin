@@ -1,4 +1,28 @@
-// src/lib.rs
+//! # Chopin
+//!
+//! A thread-per-core HTTP framework for Rust with zero async overhead.
+//!
+//! Chopin uses a shared-nothing architecture: each worker thread owns its own
+//! epoll/kqueue event loop, socket accept, router clone, and connection pool.
+//! There are no `Arc`, no `Mutex`, and no async runtimes.
+//!
+//! ## Quick Start
+//!
+//! ```rust,no_run
+//! use chopin_core::{get, Context, Response, Chopin};
+//!
+//! #[get("/")]
+//! fn index(_ctx: Context) -> Response {
+//!     Response::text("Hello, world!")
+//! }
+//!
+//! fn main() {
+//!     Chopin::new()
+//!         .mount_all_routes()
+//!         .serve("0.0.0.0:8080")
+//!         .unwrap();
+//! }
+//! ```
 
 // Use mimalloc as the global allocator for all binaries that link chopin-core.
 // mimalloc significantly outperforms the system allocator under high concurrency

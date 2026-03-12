@@ -10,7 +10,7 @@ pub use chopin_pg::{
 };
 
 pub mod builder;
-pub use builder::QueryBuilder;
+pub use builder::{Condition, QueryBuilder};
 pub mod error;
 pub use error::{OrmError, OrmResult};
 pub mod active_model;
@@ -714,6 +714,164 @@ pub trait HasForeignKey<M: Model> {
     fn foreign_key_info() -> (&'static str, Vec<(&'static str, &'static str)>);
 }
 
+/// Marker trait for models with a `deleted_at` timestamp column.
+///
+/// When implemented, `QueryBuilder` can automatically scope queries to exclude
+/// soft-deleted rows (via `with_soft_delete_scope()`), and the model gains
+/// `soft_delete()` and `restore()` helpers.
+pub trait SoftDelete: Model {
+    /// The column name used for soft-delete timestamps (default: `"deleted_at"`).
+    fn deleted_at_column() -> &'static str {
+        "deleted_at"
+    }
+
+    /// Soft-delete this model by setting `deleted_at = NOW()`.
+    fn soft_delete(&self, executor: &mut impl Executor) -> OrmResult<()> {
+        let pk_cols = Self::primary_key_columns();
+        let pk_vals = self.primary_key_values();
+
+        let mut where_clauses = Vec::new();
+        // Parameter $1 is reserved for the SET clause (not needed for NOW()).
+        for (i, pk_col) in pk_cols.iter().enumerate() {
+            where_clauses.push(format!("{} = ${}", pk_col, i + 1));
+        }
+
+        let query = format!(
+            "UPDATE {} SET {} = NOW() WHERE {}",
+            Self::table_name(),
+            Self::deleted_at_column(),
+            where_clauses.join(" AND ")
+        );
+
+        let params: Vec<&dyn chopin_pg::types::ToSql> = pk_vals.iter().map(|v| v as _).collect();
+        executor.execute(&query, &params)?;
+        Ok(())
+    }
+
+    /// Restore a soft-deleted model by setting `deleted_at = NULL`.
+    fn restore(&self, executor: &mut impl Executor) -> OrmResult<()> {
+        let pk_cols = Self::primary_key_columns();
+        let pk_vals = self.primary_key_values();
+
+        let mut where_clauses = Vec::new();
+        for (i, pk_col) in pk_cols.iter().enumerate() {
+            where_clauses.push(format!("{} = ${}", pk_col, i + 1));
+        }
+
+        let query = format!(
+            "UPDATE {} SET {} = NULL WHERE {}",
+            Self::table_name(),
+            Self::deleted_at_column(),
+            where_clauses.join(" AND ")
+        );
+
+        let params: Vec<&dyn chopin_pg::types::ToSql> = pk_vals.iter().map(|v| v as _).collect();
+        executor.execute(&query, &params)?;
+        Ok(())
+    }
+
+    /// Returns a QueryBuilder pre-scoped to exclude soft-deleted rows.
+    fn find_active() -> QueryBuilder<Self> {
+        QueryBuilder::new().filter(Condition::new(
+            format!("{} IS NULL", Self::deleted_at_column()),
+            vec![],
+        ))
+    }
+
+    /// Returns a QueryBuilder that includes soft-deleted rows.
+    fn find_with_trashed() -> QueryBuilder<Self> {
+        QueryBuilder::new()
+    }
+
+    /// Returns a QueryBuilder scoped to only soft-deleted rows.
+    fn find_only_trashed() -> QueryBuilder<Self> {
+        QueryBuilder::new().filter(Condition::new(
+            format!("{} IS NOT NULL", Self::deleted_at_column()),
+            vec![],
+        ))
+    }
+}
+
+/// Batch insert a slice of models in a single `INSERT` round-trip.
+///
+/// Generates `INSERT INTO t (cols) VALUES ($1,$2),($3,$4),…` with RETURNING
+/// for generated columns. Each model is mutated in-place to receive its
+/// generated values (e.g. auto-increment IDs).
+pub fn batch_insert<M: Model>(
+    models: &mut [M],
+    executor: &mut impl Executor,
+) -> OrmResult<()> {
+    if models.is_empty() {
+        return Ok(());
+    }
+
+    let all_cols = M::columns();
+    let gen_cols = M::generated_columns();
+
+    // Determine insertable columns (non-generated).
+    let insert_cols: Vec<&str> = all_cols
+        .iter()
+        .copied()
+        .filter(|c| !gen_cols.contains(c))
+        .collect();
+
+    let cols_per_row = insert_cols.len();
+
+    // Collect all values in row-major order.
+    let mut all_values: Vec<PgValue> = Vec::with_capacity(models.len() * cols_per_row);
+    let mut value_groups: Vec<String> = Vec::with_capacity(models.len());
+    let mut idx = 1usize;
+
+    for model in models.iter() {
+        let values = model.get_values();
+        let placeholders: Vec<String> = (0..cols_per_row)
+            .map(|_| {
+                let s = format!("${}", idx);
+                idx += 1;
+                s
+            })
+            .collect();
+        value_groups.push(format!("({})", placeholders.join(", ")));
+
+        for (i, col) in all_cols.iter().enumerate() {
+            if !gen_cols.contains(col) {
+                all_values.push(values[i].clone());
+            }
+        }
+    }
+
+    let returning = if gen_cols.is_empty() {
+        String::new()
+    } else {
+        format!(" RETURNING {}", gen_cols.join(", "))
+    };
+
+    let query = format!(
+        "INSERT INTO {} ({}) VALUES {}{}",
+        M::table_name(),
+        insert_cols.join(", "),
+        value_groups.join(", "),
+        returning
+    );
+
+    let params: Vec<&dyn chopin_pg::types::ToSql> = all_values.iter().map(|v| v as _).collect();
+
+    if gen_cols.is_empty() {
+        executor.execute(&query, &params)?;
+    } else {
+        let rows = executor.query(&query, &params)?;
+        for (model, row) in models.iter_mut().zip(rows.iter()) {
+            let mut returned_vals = Vec::with_capacity(gen_cols.len());
+            for i in 0..gen_cols.len() {
+                returned_vals.push(row.get(i)?);
+            }
+            model.set_generated_values(returned_vals)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// A transparent middleware executor that intercepts queries and parameters.
 ///
 /// Under the `log` feature flag, this emits `tracing` debug logs containing executed SQL,
@@ -764,5 +922,179 @@ impl<'a, E: Executor> Executor for LoggedExecutor<'a, E> {
         #[cfg(not(feature = "log"))]
         let _ = elapsed;
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── Minimal test model ──────────────────────────────────────────────────
+
+    struct TestItem {
+        pub id: i32,
+        pub name: String,
+    }
+
+    impl Validate for TestItem {}
+
+    impl FromRow for TestItem {
+        fn from_row(_row: &Row) -> OrmResult<Self> {
+            Ok(Self {
+                id: 0,
+                name: String::new(),
+            })
+        }
+    }
+
+    impl Model for TestItem {
+        fn table_name() -> &'static str {
+            "items"
+        }
+        fn primary_key_columns() -> &'static [&'static str] {
+            &["id"]
+        }
+        fn generated_columns() -> &'static [&'static str] {
+            &["id"]
+        }
+        fn columns() -> &'static [&'static str] {
+            &["id", "name"]
+        }
+        fn primary_key_values(&self) -> Vec<PgValue> {
+            vec![PgValue::Int4(self.id)]
+        }
+        fn set_generated_values(&mut self, mut vals: Vec<PgValue>) -> OrmResult<()> {
+            if let Some(PgValue::Int4(v)) = vals.first() {
+                self.id = *v;
+            }
+            vals.clear();
+            Ok(())
+        }
+        fn get_values(&self) -> Vec<PgValue> {
+            vec![PgValue::Int4(self.id), PgValue::Text(self.name.clone())]
+        }
+        fn create_table_stmt() -> String {
+            String::new()
+        }
+        fn column_definitions() -> Vec<(&'static str, &'static str)> {
+            vec![]
+        }
+    }
+
+    // ─── SoftDelete model ────────────────────────────────────────────────────
+
+    struct SoftItem {
+        pub id: i32,
+    }
+
+    impl Validate for SoftItem {}
+
+    impl FromRow for SoftItem {
+        fn from_row(_row: &Row) -> OrmResult<Self> {
+            Ok(Self { id: 0 })
+        }
+    }
+
+    impl Model for SoftItem {
+        fn table_name() -> &'static str {
+            "soft_items"
+        }
+        fn primary_key_columns() -> &'static [&'static str] {
+            &["id"]
+        }
+        fn generated_columns() -> &'static [&'static str] {
+            &["id"]
+        }
+        fn columns() -> &'static [&'static str] {
+            &["id", "name", "deleted_at"]
+        }
+        fn primary_key_values(&self) -> Vec<PgValue> {
+            vec![PgValue::Int4(self.id)]
+        }
+        fn set_generated_values(&mut self, _vals: Vec<PgValue>) -> OrmResult<()> {
+            Ok(())
+        }
+        fn get_values(&self) -> Vec<PgValue> {
+            vec![]
+        }
+        fn create_table_stmt() -> String {
+            String::new()
+        }
+        fn column_definitions() -> Vec<(&'static str, &'static str)> {
+            vec![]
+        }
+    }
+
+    impl SoftDelete for SoftItem {}
+
+    // ─── Tests ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_soft_delete_find_active_scope() {
+        let qb = SoftItem::find_active();
+        let (sql, _) = qb.build_query();
+        assert_eq!(
+            sql,
+            "SELECT id, name, deleted_at FROM soft_items WHERE deleted_at IS NULL"
+        );
+    }
+
+    #[test]
+    fn test_soft_delete_find_with_trashed() {
+        let qb = SoftItem::find_with_trashed();
+        let (sql, _) = qb.build_query();
+        assert_eq!(sql, "SELECT id, name, deleted_at FROM soft_items");
+    }
+
+    #[test]
+    fn test_soft_delete_find_only_trashed() {
+        let qb = SoftItem::find_only_trashed();
+        let (sql, _) = qb.build_query();
+        assert_eq!(
+            sql,
+            "SELECT id, name, deleted_at FROM soft_items WHERE deleted_at IS NOT NULL"
+        );
+    }
+
+    #[test]
+    fn test_batch_insert_builds_correct_sql() {
+        let mut mock = MockExecutor::new();
+        // Queue two rows of generated IDs.
+        mock.push_result(vec![
+            mock_row!("id" => 1),
+            mock_row!("id" => 2),
+        ]);
+
+        let mut items = vec![
+            TestItem {
+                id: 0,
+                name: "a".into(),
+            },
+            TestItem {
+                id: 0,
+                name: "b".into(),
+            },
+        ];
+
+        batch_insert(&mut items, &mut mock).unwrap();
+
+        // Verify generated IDs were set back.
+        assert_eq!(items[0].id, 1);
+        assert_eq!(items[1].id, 2);
+
+        // Verify the SQL shape.
+        assert_eq!(mock.executed_queries.len(), 1);
+        assert_eq!(
+            mock.executed_queries[0].0,
+            "INSERT INTO items (name) VALUES ($1), ($2) RETURNING id"
+        );
+    }
+
+    #[test]
+    fn test_batch_insert_empty_slice() {
+        let mut mock = MockExecutor::new();
+        let mut items: Vec<TestItem> = vec![];
+        batch_insert(&mut items, &mut mock).unwrap();
+        assert!(mock.executed_queries.is_empty());
     }
 }

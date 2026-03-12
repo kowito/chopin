@@ -730,3 +730,139 @@ Each `Part` exposes:
 - `filename: Option<&str>` — file name from `Content-Disposition`
 - `content_type: Option<&str>` — part-level `Content-Type`
 - `body: &[u8]` — raw part bytes (zero-copy slice into the request body)
+
+---
+
+## Database (`chopin-pg` + `chopin-orm`)
+
+Chopin ships with a synchronous, zero-dependency PostgreSQL driver (`chopin-pg`) and
+a derive-macro ORM (`chopin-orm`) that sits on top of it.
+
+### Direct driver usage (`chopin-pg`)
+
+```toml
+[dependencies]
+chopin-pg = { path = "crates/chopin-pg" }
+```
+
+#### Connecting
+
+```rust
+use chopin_pg::{PgConfig, PgPool};
+
+// From individual parameters
+let config = PgConfig::new("localhost", 5432, "myuser", "mypassword", "mydb");
+let mut pool = PgPool::connect(config, 10)?; // 10 connections
+
+// From a URL
+let config = PgConfig::from_url("postgres://user:pass@localhost:5432/mydb")?;
+let mut pool = PgPool::connect(config, 4)?;
+```
+
+#### Queries
+
+```rust
+let mut conn = pool.get()?;
+
+// Simple query (text protocol)
+let rows = conn.query("SELECT id, name FROM users WHERE active = $1", &[&true])?;
+for row in &rows {
+    let id: i32 = row.get(0);
+    let name: &str = row.get(1);
+    println!("{}: {}", id, name);
+}
+
+// Execute (returns affected row count)
+let affected = conn.execute("UPDATE users SET active = $1 WHERE id = $2", &[&false, &42i32])?;
+```
+
+#### Prepared statements
+
+Statements are cached automatically — the first execution prepares the statement
+and subsequent calls reuse it via an FNV-1a hash lookup.
+
+#### Transactions
+
+```rust
+let mut conn = pool.get()?;
+let mut tx = conn.transaction()?;
+
+tx.execute("INSERT INTO orders (user_id, total) VALUES ($1, $2)", &[&1i32, &99.99f64])?;
+tx.execute("UPDATE inventory SET qty = qty - 1 WHERE item_id = $1", &[&42i32])?;
+
+tx.commit()?;  // or tx.rollback()?
+```
+
+#### COPY protocol
+
+```rust
+// Bulk import
+let mut conn = pool.get()?;
+conn.copy_in("COPY users (name, email) FROM STDIN WITH (FORMAT csv)", |writer| {
+    writer.write_all(b"Alice,alice@example.com\n")?;
+    writer.write_all(b"Bob,bob@example.com\n")?;
+    Ok(())
+})?;
+```
+
+#### LISTEN / NOTIFY
+
+```rust
+let mut conn = pool.get()?;
+conn.execute("LISTEN my_channel", &[])?;
+
+// Poll for notifications (non-blocking)
+if let Some(notification) = conn.poll_notification()? {
+    println!("channel={} payload={}", notification.channel, notification.payload);
+}
+```
+
+### ORM usage (`chopin-orm`)
+
+The ORM section above (under [ORM (`chopin-orm`)](#orm-chopin-orm)) covers model
+definitions, CRUD, queries, and relationships. Here are additional database-specific
+patterns:
+
+#### Batch insert
+
+Insert many records in a single round-trip:
+
+```rust
+use chopin_orm::batch_insert;
+
+let mut users = vec![
+    User { id: 0, name: "Alice".into(), email: "a@ex.com".into(), active: true },
+    User { id: 0, name: "Bob".into(),   email: "b@ex.com".into(), active: true },
+];
+batch_insert(&mut users, &mut pool)?;
+// users[0].id and users[1].id are now populated from RETURNING
+```
+
+#### Soft delete
+
+Implement the `SoftDelete` trait for models with a `deleted_at` column:
+
+```rust
+use chopin_orm::SoftDelete;
+
+impl SoftDelete for User {}
+
+// Soft-delete a record (sets deleted_at = NOW())
+User::soft_delete(42, &mut pool)?;
+
+// Restore a soft-deleted record
+User::restore(42, &mut pool)?;
+
+// Query only active records (WHERE deleted_at IS NULL)
+let active = User::find_active().all(&mut pool)?;
+
+// Include soft-deleted records
+let all = User::find_with_trashed().all(&mut pool)?;
+```
+
+#### Auto-migration
+
+```rust
+User::sync_schema(&mut pool)?;
+// Creates the table if it doesn't exist, or adds missing columns
+```

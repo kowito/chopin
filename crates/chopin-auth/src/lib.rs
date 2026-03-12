@@ -38,10 +38,12 @@ pub mod crypto;
 pub mod extractor;
 pub mod jwt;
 pub mod middleware;
+pub mod oauth;
 pub mod revocation;
 
 pub use crypto::{PasswordHasher, hash_password, verify_password};
 pub use extractor::{Auth, ErrorHandler, init_jwt_manager, set_error_handler};
 pub use jwt::{AuthError, HasJti, JwtConfig, JwtManager};
-pub use middleware::{Role, RoleCheck};
+pub use middleware::{Role, RoleCheck, ScopeCheck};
+pub use oauth::{AuthorizationUrl, TokenPair, code_challenge_s256, code_verifier, token_pair};
 pub use revocation::TokenBlacklist;

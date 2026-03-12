@@ -3,6 +3,9 @@ use crate::headers::{Headers, IntoHeaderValue};
 use crate::syscalls;
 use std::io;
 
+/// HTTP request method.
+///
+/// Uses a `u8` repr for fast array-indexed dispatch in the router.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Method {
@@ -105,6 +108,8 @@ impl Method {
 pub const MAX_HEADERS: usize = 16;
 pub const MAX_PARAMS: usize = 4;
 
+/// A parsed HTTP request. All fields borrow from the connection's read buffer
+/// — no heap allocation occurs during request parsing.
 pub struct Request<'a> {
     pub method: Method,
     pub path: &'a str,
@@ -148,10 +153,18 @@ impl Drop for OwnedFd {
     }
 }
 
+/// The body of an HTTP response.
+///
+/// Supports multiple storage strategies: zero-copy static slices, heap-allocated
+/// bytes, streaming iterators, and kernel-level `sendfile` for files.
 pub enum Body {
+    /// No body content.
     Empty,
+    /// A compile-time static byte slice — zero allocation, zero copy.
     Static(&'static [u8]),
+    /// Heap-allocated byte vector.
     Bytes(Vec<u8>),
+    /// Chunked streaming body — each call to `next()` yields a chunk.
     Stream(Box<dyn Iterator<Item = Vec<u8>> + Send>),
     /// Zero-copy file body — served via `sendfile()` entirely in kernel space.
     /// The fd is owned and will be closed when the response is consumed or dropped.
@@ -197,6 +210,26 @@ impl Body {
     }
 }
 
+/// An HTTP response to be sent to the client.
+///
+/// Construct responses using the factory methods ([`Response::text`],
+/// [`Response::json`], [`Response::file`], etc.) and customise with
+/// [`Response::with_header`] and status code assignment.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Plain text
+/// Response::text("Hello, world!")
+///
+/// // JSON (Schema-JIT serialization)
+/// Response::json(&user)
+///
+/// // Custom status + headers
+/// let mut res = Response::json(&item);
+/// res.status = 201;
+/// res.with_header("Location", "/items/42")
+/// ```
 pub struct Response {
     pub status: u16,
     pub body: Body,
@@ -377,6 +410,40 @@ impl Response {
             headers: Headers::new(),
         }
     }
+
+    /// Compress the response body with gzip encoding.
+    ///
+    /// Works on `Body::Bytes` and `Body::Static` variants — `Stream` and `File`
+    /// bodies are returned unchanged (they have their own delivery paths).
+    /// Adds `Content-Encoding: gzip` and `Vary: Accept-Encoding` headers.
+    #[cfg(feature = "compression")]
+    pub fn gzip(mut self) -> Self {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let raw = match &self.body {
+            Body::Static(b) => *b,
+            Body::Bytes(b) => b.as_slice(),
+            _ => return self,
+        };
+
+        if raw.is_empty() {
+            return self;
+        }
+
+        let mut encoder = GzEncoder::new(Vec::with_capacity(raw.len() / 2), Compression::fast());
+        if encoder.write_all(raw).is_ok() {
+            if let Ok(compressed) = encoder.finish() {
+                if compressed.len() < raw.len() {
+                    self.body = Body::Bytes(compressed);
+                    self.headers.add("Content-Encoding", "gzip");
+                    self.headers.add("Vary", "Accept-Encoding");
+                }
+            }
+        }
+        self
+    }
 }
 
 /// Infer a Content-Type from a file path's extension.
@@ -423,6 +490,10 @@ fn mime_from_path(path: &str) -> &'static str {
     }
 }
 
+/// Trait for types that can be converted into an HTTP [`Response`].
+///
+/// Implemented for `Response`, `String`, `&'static str`, and
+/// `Result<T, E>` where both `T` and `E` implement `IntoResponse`.
 pub trait IntoResponse {
     fn into_response(self) -> Response;
 }
@@ -454,6 +525,27 @@ impl<T: IntoResponse, E: IntoResponse> IntoResponse for Result<T, E> {
     }
 }
 
+/// The request context passed to every handler.
+///
+/// Provides access to the parsed [`Request`], URL path parameters, headers,
+/// and typed extractors via [`Context::extract`].
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// fn handler(ctx: Context) -> Response {
+///     // Path parameter
+///     let id = ctx.param("id").unwrap_or("0");
+///
+///     // Header
+///     let ua = ctx.header("user-agent").unwrap_or("unknown");
+///
+///     // JSON body extractor
+///     let Json(body) = ctx.extract::<Json<MyPayload>>().unwrap();
+///
+///     Response::text("ok")
+/// }
+/// ```
 pub struct Context<'a> {
     pub req: Request<'a>,
     pub params: [(&'a str, &'a str); MAX_PARAMS],

@@ -4,32 +4,151 @@ use std::path::Path;
 use walkdir::WalkDir;
 
 pub fn run_checks(project_dir: &Path) -> Result<()> {
-    println!("{} Running architectural linter...", "🔍".bold());
+    println!("{} Running Chopin project checks...\n", "🔍".bold());
 
-    let mut has_errors = false;
+    let mut pass = 0u32;
+    let mut fail = 0u32;
 
-    // Check 1: Handlers should never import models directly
-    if let Err(e) = check_handlers_models_isolation(project_dir) {
-        println!("{}", e);
-        has_errors = true;
+    // ─── Check 1: Config / env vars ──────────────────────────────────────
+    print!("  Config & env vars ... ");
+    match check_config(project_dir) {
+        Ok(msg) => {
+            println!("{} {}", "✓".green().bold(), msg);
+            pass += 1;
+        }
+        Err(e) => {
+            println!("{} {}", "✗".red().bold(), e);
+            fail += 1;
+        }
     }
 
-    // Check 2: Apps should not have circular dependencies
-    // (We'll do a simple check: apps shouldn't import each other's models directly,
-    // they should go through services, or ideally not import other apps at all).
-    if let Err(e) = check_apps_isolation(project_dir) {
-        println!("{}", e);
-        has_errors = true;
+    // ─── Check 2: Database connectivity ──────────────────────────────────
+    print!("  Database connection . ");
+    match check_database(project_dir) {
+        Ok(msg) => {
+            println!("{} {}", "✓".green().bold(), msg);
+            pass += 1;
+        }
+        Err(e) => {
+            println!("{} {}", "✗".red().bold(), e);
+            fail += 1;
+        }
     }
 
-    if has_errors {
-        println!("\n{} Architectural violations found.", "❌".red().bold());
-        std::process::exit(1);
+    // ─── Check 3: Handler-model isolation ────────────────────────────────
+    print!("  Handler isolation ... ");
+    match check_handlers_models_isolation(project_dir) {
+        Ok(()) => {
+            println!("{}", "✓".green().bold());
+            pass += 1;
+        }
+        Err(e) => {
+            println!("{}\n{}", "✗".red().bold(), e);
+            fail += 1;
+        }
+    }
+
+    // ─── Check 4: App isolation ──────────────────────────────────────────
+    print!("  App isolation ....... ");
+    match check_apps_isolation(project_dir) {
+        Ok(()) => {
+            println!("{}", "✓".green().bold());
+            pass += 1;
+        }
+        Err(e) => {
+            println!("{}\n{}", "✗".red().bold(), e);
+            fail += 1;
+        }
+    }
+
+    // ─── Summary ─────────────────────────────────────────────────────────
+    println!();
+    if fail == 0 {
+        println!(
+            "{} All {} checks passed!",
+            "✓".green().bold(),
+            pass
+        );
     } else {
-        println!("{} All architectural checks passed!", "✓".green().bold());
+        println!(
+            "{} {} passed, {} failed.",
+            "✗".red().bold(),
+            pass,
+            fail
+        );
+        std::process::exit(1);
     }
 
     Ok(())
+}
+
+/// Validate config and environment variables.
+fn check_config(project_dir: &Path) -> Result<String, String> {
+    // Try to load ChopinConfig.
+    let config_path = project_dir.join("Chopin.toml");
+    if !config_path.exists() {
+        // Fall back to DATABASE_URL env var.
+        return match std::env::var("DATABASE_URL") {
+            Ok(_) => Ok("DATABASE_URL set (no Chopin.toml)".into()),
+            Err(_) => Err("No Chopin.toml and DATABASE_URL not set".into()),
+        };
+    }
+    // Config file exists — try to parse it.
+    match crate::config::ChopinConfig::load(project_dir) {
+        Ok(cfg) => {
+            if cfg.database.url.is_empty() {
+                Err("database.url is empty in Chopin.toml".into())
+            } else {
+                Ok(format!("Chopin.toml loaded (db: {})", mask_url(&cfg.database.url)))
+            }
+        }
+        Err(e) => Err(format!("Failed to parse Chopin.toml: {}", e)),
+    }
+}
+
+/// Try connecting to the database.
+fn check_database(project_dir: &Path) -> Result<String, String> {
+    let url = get_database_url(project_dir).map_err(|e| e.to_string())?;
+    let config = chopin_pg::connection::PgConfig::from_url(&url)
+        .map_err(|e| format!("invalid DATABASE_URL: {}", e))?;
+    match chopin_pg::pool::PgPool::connect(config, 1) {
+        Ok(mut pool) => {
+            // Try a simple query.
+            match pool.get() {
+                Ok(mut conn) => {
+                    match conn.execute("SELECT 1", &[]) {
+                        Ok(_) => Ok(format!("connected to {}", mask_url(&url))),
+                        Err(e) => Err(format!("query failed: {}", e)),
+                    }
+                }
+                Err(e) => Err(format!("pool.get() failed: {}", e)),
+            }
+        }
+        Err(e) => Err(format!("connection failed: {}", e)),
+    }
+}
+
+/// Resolve the database URL from config or env.
+fn get_database_url(project_dir: &Path) -> Result<String> {
+    if let Ok(url) = std::env::var("DATABASE_URL") {
+        return Ok(url);
+    }
+    let cfg = crate::config::ChopinConfig::load(project_dir)?;
+    Ok(cfg.database.url)
+}
+
+/// Mask a database URL for safe display (hide password).
+fn mask_url(url: &str) -> String {
+    // postgres://user:password@host:port/db → postgres://user:***@host:port/db
+    if let Some(at) = url.find('@') {
+        if let Some(colon) = url[..at].rfind(':') {
+            let scheme_end = url.find("://").map(|i| i + 3).unwrap_or(0);
+            if colon > scheme_end {
+                return format!("{}***{}", &url[..colon + 1], &url[at..]);
+            }
+        }
+    }
+    url.to_string()
 }
 
 fn check_handlers_models_isolation(project_dir: &Path) -> Result<(), String> {

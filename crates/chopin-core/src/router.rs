@@ -2,10 +2,13 @@
 use crate::http::{Context, MAX_PARAMS, Method, Response};
 use std::sync::Arc;
 
+/// A route handler — a plain function pointer taking a [`Context`] and returning a [`Response`].
 pub type Handler = fn(Context) -> Response;
 
+/// A boxed handler used internally for middleware composition.
 pub type BoxedHandler = Arc<dyn Fn(Context) -> Response + Send + Sync>;
 
+/// A middleware function. Receives the request context and the next handler in the chain.
 pub type MiddlewareFn = fn(Context, BoxedHandler) -> Response;
 
 pub const MAX_MIDDLEWARE: usize = 8;
@@ -20,6 +23,9 @@ pub type RouteMatch<'a> = (
     Option<&'a BoxedHandler>, // pre-composed middleware chain; None when no middleware
 );
 
+/// A static route definition registered via `#[get("/path")]` and friends.
+///
+/// Collected at link time using the `inventory` crate — no manual registration needed.
 #[derive(Clone, Copy)]
 pub struct RouteDef {
     pub method: Method,
@@ -64,6 +70,23 @@ fn method_index(m: Method) -> usize {
     m as usize
 }
 
+/// A trie-based HTTP router with O(path-depth) matching.
+///
+/// Supports static segments, named parameters (`:id`), wildcards (`*path`),
+/// and per-route or global middleware.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use chopin_core::{Router, Method, Context, Response};
+///
+/// fn hello(_ctx: Context) -> Response {
+///     Response::text("hello")
+/// }
+///
+/// let mut router = Router::new();
+/// router.get("/hello", hello);
+/// ```
 #[derive(Clone)]
 pub struct Router {
     pub(crate) root: RouteNode,
@@ -71,6 +94,7 @@ pub struct Router {
 }
 
 impl Router {
+    /// Create a new empty router.
     pub fn new() -> Self {
         Self {
             root: RouteNode::new(String::new()),
@@ -78,6 +102,10 @@ impl Router {
         }
     }
 
+    /// Register a handler for the given HTTP method and path.
+    ///
+    /// Path segments starting with `:` are captured as named parameters;
+    /// segments starting with `*` match the rest of the URL.
     pub fn add(&mut self, method: Method, path: &str, handler: Handler) {
         // Stack-allocated segments — no Vec heap allocation
         let mut seg_buf = [""; MAX_SEGMENTS];
@@ -135,6 +163,10 @@ impl Router {
         current.handlers[method_index(method)] = Some(handler);
     }
 
+    /// Look up a handler for the given method and URL path.
+    ///
+    /// Returns the matched handler, captured path parameters, parameter count,
+    /// and an optional pre-composed middleware chain.
     #[inline]
     pub fn match_route<'a>(&'a self, method: Method, path: &'a str) -> Option<RouteMatch<'a>> {
         // Fast path for root "/" — skip segment splitting entirely
@@ -325,6 +357,7 @@ impl Router {
     }
 
     // ── Modular Routing ───────────────────────────────────────────────────────
+    /// Merge all routes from `other` into this router.
     #[must_use]
     pub fn merge(mut self, other: Router) -> Self {
         Self::merge_nodes(&mut self.root, other.root);
@@ -332,6 +365,7 @@ impl Router {
         self
     }
 
+    /// Mount `other` under `prefix`, e.g. `router.nest("/api/v1", api_router)`.
     #[must_use]
     pub fn nest(mut self, prefix: &str, other: Router) -> Self {
         let mut seg_buf = [""; MAX_SEGMENTS];
@@ -491,28 +525,36 @@ impl Router {
         }
     }
 
-    // Convenience methods
+    // Convenience methods for common HTTP methods.
+    /// Register a `GET` handler.
     pub fn get(&mut self, path: &str, handler: Handler) {
         self.add(Method::Get, path, handler);
     }
+    /// Register a `POST` handler.
     pub fn post(&mut self, path: &str, handler: Handler) {
         self.add(Method::Post, path, handler);
     }
+    /// Register a `PUT` handler.
     pub fn put(&mut self, path: &str, handler: Handler) {
         self.add(Method::Put, path, handler);
     }
+    /// Register a `DELETE` handler.
     pub fn delete(&mut self, path: &str, handler: Handler) {
         self.add(Method::Delete, path, handler);
     }
+    /// Register a `PATCH` handler.
     pub fn patch(&mut self, path: &str, handler: Handler) {
         self.add(Method::Patch, path, handler);
     }
+    /// Register a `HEAD` handler.
     pub fn head(&mut self, path: &str, handler: Handler) {
         self.add(Method::Head, path, handler);
     }
+    /// Register an `OPTIONS` handler.
     pub fn options(&mut self, path: &str, handler: Handler) {
         self.add(Method::Options, path, handler);
     }
+    /// Register a `TRACE` handler.
     pub fn trace(&mut self, path: &str, handler: Handler) {
         self.add(Method::Trace, path, handler);
     }

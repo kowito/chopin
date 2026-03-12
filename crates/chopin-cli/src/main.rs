@@ -70,6 +70,16 @@ enum GenerateCommands {
         /// Name of the handler function
         name: String,
     },
+    /// Generate a model struct + migration from field definitions
+    ///
+    /// Usage: chopin generate model User name:string email:string age:i32
+    Model {
+        /// Model name in PascalCase (e.g., "User")
+        name: String,
+        /// Field definitions as name:type pairs
+        #[arg(required = true)]
+        fields: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -123,12 +133,43 @@ async fn main() -> Result<()> {
         }
         Commands::Dev => {
             println!(
-                "{} Starting {} development server...",
+                "{} Starting {} development server with hot-reload...",
                 "🚀".bold(),
                 "Chopin".cyan()
             );
-            let mut child = std::process::Command::new("cargo").arg("run").spawn()?;
-            child.wait()?;
+            // Try cargo-watch first, fall back to plain cargo run.
+            let has_cargo_watch = std::process::Command::new("cargo")
+                .args(["watch", "--version"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+
+            if has_cargo_watch {
+                println!(
+                    "  {} Using {} for hot-reload (watching src/)",
+                    "→".cyan(),
+                    "cargo-watch".green()
+                );
+                let mut child = std::process::Command::new("cargo")
+                    .args(["watch", "-x", "run", "-w", "src"])
+                    .spawn()?;
+                child.wait()?;
+            } else {
+                println!(
+                    "  {} {} not found — falling back to plain cargo run",
+                    "⚠".yellow(),
+                    "cargo-watch".bold()
+                );
+                println!(
+                    "  {} Install it: {}",
+                    "→".cyan(),
+                    "cargo install cargo-watch".green()
+                );
+                let mut child = std::process::Command::new("cargo").arg("run").spawn()?;
+                child.wait()?;
+            }
         }
         Commands::Build => {
             println!(
@@ -180,6 +221,10 @@ async fn main() -> Result<()> {
             GenerateCommands::Handler { app, name } => {
                 let project_dir = std::env::current_dir()?;
                 generate::generate_handler(&project_dir, &app, &name)?;
+            }
+            GenerateCommands::Model { name, fields } => {
+                let project_dir = std::env::current_dir()?;
+                generate::generate_model(&project_dir, &name, &fields)?;
             }
         },
         Commands::Check => {

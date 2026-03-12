@@ -181,6 +181,113 @@ fn to_pascal_case(s: &str) -> String {
         .collect()
 }
 
+/// Convert PascalCase to snake_case for table names.
+fn to_snake_case(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
+/// Map a shorthand type name to (Rust type, SQL type).
+fn map_field_type(t: &str) -> (&'static str, &'static str) {
+    match t {
+        "string" | "String" | "text" => ("String", "TEXT NOT NULL"),
+        "i32" | "int" | "integer" => ("i32", "INTEGER NOT NULL"),
+        "i64" | "bigint" => ("i64", "BIGINT NOT NULL"),
+        "f32" | "float" => ("f32", "REAL NOT NULL"),
+        "f64" | "double" => ("f64", "DOUBLE PRECISION NOT NULL"),
+        "bool" | "boolean" => ("bool", "BOOLEAN NOT NULL DEFAULT false"),
+        "string?" | "text?" => ("Option<String>", "TEXT"),
+        "i32?" | "int?" => ("Option<i32>", "INTEGER"),
+        "i64?" | "bigint?" => ("Option<i64>", "BIGINT"),
+        "bool?" | "boolean?" => ("Option<bool>", "BOOLEAN"),
+        _ => ("String", "TEXT NOT NULL"), // fallback
+    }
+}
+
+/// Generate a model struct + up/down migrations from field definitions.
+///
+/// Usage: `chopin generate model User name:string email:string age:i32`
+pub fn generate_model(project_dir: &Path, name: &str, field_defs: &[String]) -> Result<()> {
+    let struct_name = to_pascal_case(name);
+    let table_name = to_snake_case(name) + "s"; // simple pluralization
+
+    // Parse field definitions.
+    let mut fields: Vec<(&str, &'static str, &'static str)> = Vec::new(); // (name, rust_type, sql_type)
+    for def in field_defs {
+        let parts: Vec<&str> = def.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            anyhow::bail!(
+                "Invalid field definition '{}'. Expected format: name:type",
+                def
+            );
+        }
+        let (rust_ty, sql_ty) = map_field_type(parts[1]);
+        fields.push((parts[0], rust_ty, sql_ty));
+    }
+
+    // ─── Generate model struct ───────────────────────────────────────────
+    let mut model_code = format!(
+        r#"use chopin_orm::Model;
+use serde::{{Deserialize, Serialize}};
+
+#[derive(Debug, Clone, Model, Serialize, Deserialize)]
+#[model(table_name = "{}")]
+pub struct {} {{
+    #[model(primary_key)]
+    pub id: i32,
+"#,
+        table_name, struct_name
+    );
+
+    for (fname, rust_ty, _) in &fields {
+        model_code.push_str(&format!("    pub {}: {},\n", fname, rust_ty));
+    }
+    model_code.push_str("}\n");
+
+    let models_path = project_dir.join(format!("src/models/{}.rs", to_snake_case(name)));
+    std::fs::create_dir_all(models_path.parent().unwrap())?;
+    std::fs::write(&models_path, &model_code)?;
+
+    // ─── Generate migration ──────────────────────────────────────────────
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
+    let migration_name = format!("{}_{}", timestamp, to_snake_case(name));
+
+    let migrations_dir = project_dir.join("migrations").join(&migration_name);
+    std::fs::create_dir_all(&migrations_dir)?;
+
+    // up.sql
+    let mut up_sql = format!(
+        "CREATE TABLE IF NOT EXISTS {} (\n    id SERIAL PRIMARY KEY",
+        table_name
+    );
+    for (fname, _, sql_ty) in &fields {
+        up_sql.push_str(&format!(",\n    {} {}", fname, sql_ty));
+    }
+    up_sql.push_str("\n);\n");
+    std::fs::write(migrations_dir.join("up.sql"), &up_sql)?;
+
+    // down.sql
+    let down_sql = format!("DROP TABLE IF EXISTS {};\n", table_name);
+    std::fs::write(migrations_dir.join("down.sql"), &down_sql)?;
+
+    println!(
+        "{} Generated model: {}",
+        "✓".green().bold(),
+        struct_name.cyan()
+    );
+    println!("  Created: {}", models_path.display());
+    println!("  Created: migrations/{}/up.sql", migration_name);
+    println!("  Created: migrations/{}/down.sql", migration_name);
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
