@@ -25,6 +25,8 @@ pub struct RouteDef {
     pub method: Method,
     pub path: &'static str,
     pub handler: Handler,
+    pub summary: &'static str,
+    pub description: &'static str,
 }
 
 inventory::collect!(RouteDef);

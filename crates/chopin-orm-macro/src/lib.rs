@@ -214,6 +214,9 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
         column_defs.join(",\n    ")
     );
 
+    let fk_fields: Vec<_> = belongs_to_fks.iter().map(|(f, _)| f.clone()).collect();
+    let fk_models: Vec<_> = belongs_to_fks.iter().map(|(_, m)| m.clone()).collect();
+
     let hm_targets: Vec<_> = has_many_rels.iter().map(|(m, _)| m.clone()).collect();
     let hm_fks: Vec<_> = has_many_rels.iter().map(|(_, fk)| fk.clone()).collect();
     let fetch_hm_names: Vec<_> = hm_targets
@@ -225,60 +228,15 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
             )
         })
         .collect();
-
+    let fetch_bt_names: Vec<_> = fk_fields
+        .iter()
+        .map(|f| {
+            let fname = f.to_string();
+            let base = fname.strip_suffix("_id").unwrap_or(&fname);
+            syn::Ident::new(&format!("fetch_{}", base), proc_macro2::Span::call_site())
+        })
+        .collect();
     let first_pk = pk_fields[0].clone();
-
-    // Group belongs_to fields by related model to support composite keys
-    let mut grouped_fks: std::collections::BTreeMap<String, (syn::Ident, Vec<syn::Ident>)> =
-        std::collections::BTreeMap::new();
-    for (f, r) in &belongs_to_fks {
-        grouped_fks
-            .entry(r.to_string())
-            .or_insert_with(|| (r.clone(), Vec::new()))
-            .1
-            .push(f.clone());
-    }
-
-    let mut bt_models = Vec::new();
-    let mut bt_fields = Vec::new(); // Vec of Vec of idents
-    let mut fetch_methods = Vec::new();
-
-    for (_name_str, (model_ident, fields)) in grouped_fks {
-        let method_name = syn::Ident::new(
-            &format!("fetch_{}", model_ident.to_string().to_lowercase()),
-            proc_macro2::Span::call_site(),
-        );
-        let fields_clone = fields.clone();
-        let model_ident_clone = model_ident.clone();
-
-        fetch_methods.push(quote! {
-            pub fn #method_name(&self, executor: &mut impl chopin_orm::Executor) -> chopin_orm::OrmResult<Option<#model_ident_clone>> {
-                use chopin_pg::types::ToParam;
-
-                let local_cols = vec![#(stringify!(#fields_clone)),*];
-                let remote_cols = <#model_ident_clone as chopin_orm::Model>::primary_key_columns();
-
-                if local_cols.len() != remote_cols.len() {
-                    return Err(chopin_orm::OrmError::ModelError(format!(
-                        "Foreign key column count mismatch for relationship to {}",
-                        stringify!(#model_ident_clone)
-                    )));
-                }
-
-                let mut qb = #model_ident_clone::find();
-                let mut param_idx = 0;
-                #(
-                    let col_name = remote_cols[param_idx];
-                    qb = qb.filter((format!("{} = ${}", col_name, param_idx + 1), vec![self.#fields_clone.to_param()]));
-                    param_idx += 1;
-                )*
-                qb.one(executor)
-            }
-        });
-
-        bt_models.push(model_ident);
-        bt_fields.push(fields);
-    }
 
     let expanded = quote! {
         impl chopin_orm::Model for #name {
@@ -288,25 +246,12 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
 
             fn create_table_stmt() -> String {
                 let mut sql = String::from(#base_sql);
-                // We'll insert FOREIGN KEY constraints before the closing parenthesis.
-                if let Some(pos) = sql.rfind(')') {
-                    sql.truncate(pos);
-                }
-
                 #(
-                    {
-                        let local_cols = vec![#(stringify!(#bt_fields)),*].join(", ");
-                        let remote_cols = <#bt_models as chopin_orm::Model>::primary_key_columns().join(", ");
-                        let fk = format!(",\n    FOREIGN KEY ({}) REFERENCES {} ({})",
-                            local_cols,
-                            <#bt_models as chopin_orm::Model>::table_name(),
-                            remote_cols
-                        );
-                        sql.push_str(&fk);
-                    }
+                    sql.pop(); // Remove closing parenthesis
+                    sql.pop(); // Remove newline
+                    let fk_constraint = format!(",\n    FOREIGN KEY ({}) REFERENCES {} (id)\n)", stringify!(#fk_fields), <#fk_models as chopin_orm::Model>::table_name());
+                    sql.push_str(&fk_constraint);
                 )*
-
-                sql.push_str("\n)");
                 sql
             }
 
@@ -365,21 +310,24 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
                 })
             }
         }
-    };
-
-    let active_expanded = quote! {};
-
-    let final_expanded = quote! {
-        #expanded
-        #active_expanded
 
         impl #name {
-            #(#fetch_methods)*
+            #(
+                pub fn #fetch_bt_names(&self, executor: &mut impl chopin_orm::Executor) -> chopin_orm::OrmResult<Option<#fk_models>> {
+                    use chopin_pg::types::ToSql;
+                    use chopin_pg::types::ToParam;
+                    let qb = #fk_models::find().filter((
+                        format!("{} = $1", <#fk_models as chopin_orm::Model>::primary_key_columns()[0]),
+                        vec![self.#fk_fields.to_param()]
+                    ));
+                    qb.one(executor)
+                }
+            )*
 
             #(
                 pub fn #fetch_hm_names(&self, executor: &mut impl chopin_orm::Executor) -> chopin_orm::OrmResult<Vec<#hm_targets>> {
+                    use chopin_pg::types::ToSql;
                     use chopin_pg::types::ToParam;
-                    // For has_many, we currently assume a single field FK on the target
                     let target_pk: chopin_pg::PgValue = self.#first_pk.clone().to_param();
                     let qb = #hm_targets::find().filter((
                         format!("{} = $1", #hm_fks),
@@ -403,16 +351,25 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
                 }
             }
         }
+    };
+
+    let active_expanded = quote! {};
+
+    let mut belongs_to_field_names = Vec::new();
+    let mut belongs_to_related_models = Vec::new();
+    for (f, r) in &belongs_to_fks {
+        belongs_to_field_names.push(f.clone());
+        belongs_to_related_models.push(r.clone());
+    }
+
+    let final_expanded = quote! {
+        #expanded
+        #active_expanded
 
         #(
-            impl chopin_orm::HasForeignKey<#bt_models> for #name {
+            impl chopin_orm::HasForeignKey<#belongs_to_related_models> for #name {
                 fn foreign_key_info() -> (&'static str, Vec<(&'static str, &'static str)>) {
-                    let local_cols = vec![#(stringify!(#bt_fields)),*];
-                    let remote_cols = <#bt_models as chopin_orm::Model>::primary_key_columns();
-                    (
-                        <Self as chopin_orm::Model>::table_name(),
-                        local_cols.into_iter().zip(remote_cols.iter().cloned()).collect()
-                    )
+                    (<Self as chopin_orm::Model>::table_name(), vec![(stringify!(#belongs_to_field_names), "id")])
                 }
             }
         )*

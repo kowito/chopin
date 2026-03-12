@@ -44,6 +44,12 @@ pub struct Conn {
     pub body_sent: u32,  // bytes already flushed
     pub body_owned: Option<Box<[u8]>>, // owns Body::Bytes allocation; None for Static/empty
 
+    // io_uring: tracks which operation is currently in-flight for this connection.
+    // Prevents double-submission (e.g. submitting OP_READ while previous OP_READ pending).
+    // 0 = no pending op.
+    #[cfg(feature = "io-uring")]
+    pub pending_op: u8,
+
     pub read_buf: [u8; READ_BUF_SIZE],
     pub write_buf: [u8; WRITE_BUF_SIZE],
 }
@@ -67,6 +73,8 @@ impl Conn {
             body_total: 0,
             body_sent: 0,
             body_owned: None,
+            #[cfg(feature = "io-uring")]
+            pending_op: 0,
             read_buf: [0; READ_BUF_SIZE],
             write_buf: [0; WRITE_BUF_SIZE],
         }

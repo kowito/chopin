@@ -930,3 +930,549 @@ pub fn writev_nonblocking(fd: c_int, bufs: &[&[u8]]) -> ChopinResult<usize> {
         }
     }
 }
+
+// ---- io_uring Backend (Linux only, feature-gated) ----
+
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
+pub mod uring {
+    use libc::{c_int, c_long, c_uint, c_void};
+    use std::io;
+    use std::ptr;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    // ---- io_uring syscall numbers (x86_64) ----
+    const SYS_IO_URING_SETUP: c_long = 425;
+    const SYS_IO_URING_ENTER: c_long = 426;
+    const SYS_IO_URING_REGISTER: c_long = 427;
+
+    // ---- io_uring setup flags ----
+    pub const IORING_SETUP_SQPOLL: u32 = 1 << 1;
+    pub const IORING_SETUP_COOP_TASKRUN: u32 = 1 << 8;
+    pub const IORING_SETUP_SINGLE_ISSUER: u32 = 1 << 12;
+
+    // ---- io_uring enter flags ----
+    const IORING_ENTER_GETEVENTS: c_uint = 1;
+    const IORING_ENTER_SQ_WAKEUP: c_uint = 1 << 1;
+
+    // ---- io_uring op codes ----
+    pub const IORING_OP_NOP: u8 = 0;
+    pub const IORING_OP_READV: u8 = 1;
+    pub const IORING_OP_WRITEV: u8 = 2;
+    pub const IORING_OP_READ: u8 = 22;
+    pub const IORING_OP_WRITE: u8 = 23;
+    pub const IORING_OP_ACCEPT: u8 = 13;
+    pub const IORING_OP_CLOSE: u8 = 19;
+    pub const IORING_OP_SEND: u8 = 26;
+    pub const IORING_OP_SPLICE: u8 = 30;
+    pub const IORING_OP_SEND_ZC: u8 = 57;
+
+    // ---- io_uring SQE flags ----
+    pub const IOSQE_FIXED_FILE: u8 = 1;
+    pub const IOSQE_IO_LINK: u8 = 1 << 2;
+
+    // ---- io_uring accept flags ----
+    pub const IORING_ACCEPT_MULTISHOT: u16 = 1;
+
+    // ---- io_uring CQE flags ----
+    pub const IORING_CQE_F_MORE: u32 = 1 << 1;
+
+    // ---- io_uring SQ ring flags ----
+    const IORING_SQ_NEED_WAKEUP: u32 = 1;
+
+    // ---- io_uring register opcodes ----
+    pub const IORING_REGISTER_BUFFERS: c_uint = 0;
+    pub const IORING_UNREGISTER_BUFFERS: c_uint = 1;
+
+    // ---- mmap offsets ----
+    const IORING_OFF_SQ_RING: u64 = 0;
+    const IORING_OFF_CQ_RING: u64 = 0x8000000;
+    const IORING_OFF_SQES: u64 = 0x10000000;
+
+    // ---- User-data encoding for operation type ----
+    pub const OP_TYPE_ACCEPT: u8 = 0;
+    pub const OP_TYPE_READ: u8 = 1;
+    pub const OP_TYPE_WRITE: u8 = 2;
+    pub const OP_TYPE_WRITEV: u8 = 3;
+    pub const OP_TYPE_CLOSE: u8 = 4;
+    pub const OP_TYPE_SENDFILE: u8 = 5;
+
+    /// Sentinel connection index for accept operations
+    pub const ACCEPT_CONN_IDX: u64 = 0x00FF_FFFF;
+
+    #[inline(always)]
+    pub fn encode_user_data(conn_idx: usize, op_type: u8) -> u64 {
+        ((conn_idx as u64) << 8) | op_type as u64
+    }
+
+    #[inline(always)]
+    pub fn decode_user_data(user_data: u64) -> (usize, u8) {
+        let conn_idx = (user_data >> 8) as usize;
+        let op_type = (user_data & 0xFF) as u8;
+        (conn_idx, op_type)
+    }
+
+    // ---- Kernel ABI structures ----
+
+    #[repr(C)]
+    pub struct io_uring_sqe {
+        pub opcode: u8,
+        pub flags: u8,
+        pub ioprio: u16,
+        pub fd: i32,
+        pub off_or_addr2: u64,  // union: off, addr2
+        pub addr_or_splice: u64, // union: addr, splice_off_in
+        pub len: u32,
+        pub op_flags: u32,      // union: rw_flags, fsync_flags, poll_events, etc.
+        pub user_data: u64,
+        pub buf_index_or_group: u16, // union: buf_index, buf_group
+        pub personality: u16,
+        pub splice_fd_in_or_file_index: i32, // union
+        pub addr3: u64,
+        pub __pad2: [u64; 1],
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct io_uring_cqe {
+        pub user_data: u64,
+        pub res: i32,
+        pub flags: u32,
+    }
+
+    #[repr(C)]
+    struct io_sqring_offsets {
+        head: u32,
+        tail: u32,
+        ring_mask: u32,
+        ring_entries: u32,
+        flags: u32,
+        dropped: u32,
+        array: u32,
+        resv1: u32,
+        user_addr: u64,
+    }
+
+    #[repr(C)]
+    struct io_cqring_offsets {
+        head: u32,
+        tail: u32,
+        ring_mask: u32,
+        ring_entries: u32,
+        overflow: u32,
+        cqes: u32,
+        flags: u32,
+        resv1: u32,
+        user_addr: u64,
+    }
+
+    #[repr(C)]
+    struct io_uring_params {
+        sq_entries: u32,
+        cq_entries: u32,
+        flags: u32,
+        sq_thread_cpu: u32,
+        sq_thread_idle: u32,
+        features: u32,
+        wq_fd: u32,
+        resv: [u32; 3],
+        sq_off: io_sqring_offsets,
+        cq_off: io_cqring_offsets,
+    }
+
+    /// Raw io_uring ring managing mmap'd SQ and CQ ring buffers.
+    /// All operations are zero-allocation and operate on shared memory with the kernel.
+    pub struct UringRing {
+        ring_fd: c_int,
+
+        // SQ ring pointers (mmap'd, shared with kernel)
+        sq_ring_ptr: *mut u8,
+        sq_ring_size: usize,
+        sq_head: *const AtomicU32,
+        sq_tail: *mut AtomicU32,
+        sq_mask: u32,
+        sq_flags: *const AtomicU32,
+        sq_array: *mut u32,
+
+        // SQE array (separate mmap)
+        sqes_ptr: *mut io_uring_sqe,
+        sqes_size: usize,
+        sq_entries: u32,
+
+        // CQ ring pointers (mmap'd alongside SQ ring or separate)
+        cq_ring_ptr: *mut u8,
+        cq_ring_size: usize,
+        cq_head: *mut AtomicU32,
+        cq_tail: *const AtomicU32,
+        cq_mask: u32,
+        cq_cqes: *const io_uring_cqe,
+        cq_overflow: *const AtomicU32,
+    }
+
+    // SAFETY: UringRing is used single-threaded per worker (shared-nothing model).
+    // The mmap'd memory is only accessed by the owning thread and the kernel.
+    unsafe impl Send for UringRing {}
+
+    impl UringRing {
+        /// Create a new io_uring instance with the specified number of entries and flags.
+        ///
+        /// Common flags:
+        /// - `IORING_SETUP_SQPOLL`: Kernel thread polls SQ ring (zero-syscall submission)
+        /// - `IORING_SETUP_SINGLE_ISSUER`: Hint that only one thread submits (performance gain)
+        /// - `IORING_SETUP_COOP_TASKRUN`: Cooperative task running (reduces IPIs)
+        pub fn new(entries: u32, flags: u32) -> io::Result<Self> {
+            let mut params: io_uring_params = unsafe { std::mem::zeroed() };
+            params.flags = flags;
+
+            // For SQPOLL: kernel thread sleeps after 1000ms idle, then needs wakeup
+            if (flags & IORING_SETUP_SQPOLL) != 0 {
+                params.sq_thread_idle = 1000;
+            }
+
+            let ring_fd = unsafe {
+                libc::syscall(SYS_IO_URING_SETUP, entries, &mut params as *mut _) as c_int
+            };
+            if ring_fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+
+            let sq_entries = params.sq_entries;
+            let cq_entries = params.cq_entries;
+
+            // mmap SQ ring
+            let sq_ring_size = params.sq_off.array as usize
+                + (sq_entries as usize) * std::mem::size_of::<u32>();
+            let sq_ring_ptr = unsafe {
+                libc::mmap(
+                    ptr::null_mut(),
+                    sq_ring_size,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED | libc::MAP_POPULATE,
+                    ring_fd,
+                    IORING_OFF_SQ_RING as libc::off_t,
+                ) as *mut u8
+            };
+            if sq_ring_ptr == libc::MAP_FAILED as *mut u8 {
+                unsafe { libc::close(ring_fd); }
+                return Err(io::Error::last_os_error());
+            }
+
+            // mmap CQ ring
+            let cq_ring_size = params.cq_off.cqes as usize
+                + (cq_entries as usize) * std::mem::size_of::<io_uring_cqe>();
+            let cq_ring_ptr = unsafe {
+                libc::mmap(
+                    ptr::null_mut(),
+                    cq_ring_size,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED | libc::MAP_POPULATE,
+                    ring_fd,
+                    IORING_OFF_CQ_RING as libc::off_t,
+                ) as *mut u8
+            };
+            if cq_ring_ptr == libc::MAP_FAILED as *mut u8 {
+                unsafe {
+                    libc::munmap(sq_ring_ptr as *mut c_void, sq_ring_size);
+                    libc::close(ring_fd);
+                }
+                return Err(io::Error::last_os_error());
+            }
+
+            // mmap SQE array
+            let sqes_size = (sq_entries as usize) * std::mem::size_of::<io_uring_sqe>();
+            let sqes_ptr = unsafe {
+                libc::mmap(
+                    ptr::null_mut(),
+                    sqes_size,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED | libc::MAP_POPULATE,
+                    ring_fd,
+                    IORING_OFF_SQES as libc::off_t,
+                ) as *mut io_uring_sqe
+            };
+            if sqes_ptr == libc::MAP_FAILED as *mut io_uring_sqe {
+                unsafe {
+                    libc::munmap(cq_ring_ptr as *mut c_void, cq_ring_size);
+                    libc::munmap(sq_ring_ptr as *mut c_void, sq_ring_size);
+                    libc::close(ring_fd);
+                }
+                return Err(io::Error::last_os_error());
+            }
+
+            // Extract ring pointers from offsets
+            let sq_head = unsafe { sq_ring_ptr.add(params.sq_off.head as usize) as *const AtomicU32 };
+            let sq_tail = unsafe { sq_ring_ptr.add(params.sq_off.tail as usize) as *mut AtomicU32 };
+            let sq_mask_val = unsafe { *(sq_ring_ptr.add(params.sq_off.ring_mask as usize) as *const u32) };
+            let sq_flags = unsafe { sq_ring_ptr.add(params.sq_off.flags as usize) as *const AtomicU32 };
+            let sq_array = unsafe { sq_ring_ptr.add(params.sq_off.array as usize) as *mut u32 };
+
+            let cq_head = unsafe { cq_ring_ptr.add(params.cq_off.head as usize) as *mut AtomicU32 };
+            let cq_tail = unsafe { cq_ring_ptr.add(params.cq_off.tail as usize) as *const AtomicU32 };
+            let cq_mask_val = unsafe { *(cq_ring_ptr.add(params.cq_off.ring_mask as usize) as *const u32) };
+            let cq_cqes = unsafe { cq_ring_ptr.add(params.cq_off.cqes as usize) as *const io_uring_cqe };
+            let cq_overflow = unsafe { cq_ring_ptr.add(params.cq_off.overflow as usize) as *const AtomicU32 };
+
+            Ok(Self {
+                ring_fd,
+                sq_ring_ptr,
+                sq_ring_size,
+                sq_head,
+                sq_tail,
+                sq_mask: sq_mask_val,
+                sq_flags,
+                sq_array,
+                sqes_ptr,
+                sqes_size,
+                sq_entries,
+                cq_ring_ptr,
+                cq_ring_size,
+                cq_head,
+                cq_tail,
+                cq_mask: cq_mask_val,
+                cq_cqes,
+                cq_overflow,
+            })
+        }
+
+        /// Get the next available SQE slot. Returns None if the SQ ring is full.
+        #[inline(always)]
+        pub fn get_sqe(&mut self) -> Option<&mut io_uring_sqe> {
+            let head = unsafe { (*self.sq_head).load(Ordering::Acquire) };
+            let tail = unsafe { (*self.sq_tail).load(Ordering::Relaxed) };
+            let next = tail.wrapping_add(1);
+
+            if next.wrapping_sub(head) > self.sq_entries {
+                return None; // SQ ring full
+            }
+
+            let idx = tail & self.sq_mask;
+            // Write the SQE index into the SQ array
+            unsafe { *self.sq_array.add(idx as usize) = idx; }
+            let sqe = unsafe { &mut *self.sqes_ptr.add(idx as usize) };
+            // Zero-init the SQE
+            unsafe { ptr::write_bytes(sqe as *mut io_uring_sqe, 0, 1); }
+            // Advance SQ tail
+            unsafe { (*self.sq_tail).store(next, Ordering::Release); }
+            Some(sqe)
+        }
+
+        /// Submit all pending SQEs to the kernel. Returns number of SQEs submitted.
+        /// For SQPOLL mode, this may not need to enter the kernel if the polling thread
+        /// is still active.
+        #[inline]
+        pub fn submit(&self) -> io::Result<usize> {
+            // With SQPOLL, check if kernel thread needs wakeup
+            let flags = unsafe { (*self.sq_flags).load(Ordering::Acquire) };
+            let enter_flags = if (flags & IORING_SQ_NEED_WAKEUP) != 0 {
+                IORING_ENTER_SQ_WAKEUP
+            } else {
+                0
+            };
+
+            // If SQPOLL is active and kernel thread is running, no syscall needed
+            if enter_flags == 0 {
+                // Check if there's anything to submit
+                let head = unsafe { (*self.sq_head).load(Ordering::Acquire) };
+                let tail = unsafe { (*self.sq_tail).load(Ordering::Relaxed) };
+                return Ok(tail.wrapping_sub(head) as usize);
+            }
+
+            let to_submit = {
+                let head = unsafe { (*self.sq_head).load(Ordering::Acquire) };
+                let tail = unsafe { (*self.sq_tail).load(Ordering::Relaxed) };
+                tail.wrapping_sub(head)
+            };
+
+            let ret = unsafe {
+                libc::syscall(
+                    SYS_IO_URING_ENTER,
+                    self.ring_fd,
+                    to_submit,
+                    0u32,          // min_complete
+                    enter_flags,
+                    ptr::null::<c_void>(),
+                    0usize,        // sigset size
+                ) as c_int
+            };
+            if ret < 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    return Ok(0);
+                }
+                return Err(err);
+            }
+            Ok(ret as usize)
+        }
+
+        /// Submit all pending SQEs and wait for at least `min_complete` CQEs.
+        /// This is the primary blocking call in the event loop.
+        #[inline]
+        pub fn submit_and_wait(&self, min_complete: u32) -> io::Result<usize> {
+            let to_submit = {
+                let head = unsafe { (*self.sq_head).load(Ordering::Acquire) };
+                let tail = unsafe { (*self.sq_tail).load(Ordering::Relaxed) };
+                tail.wrapping_sub(head)
+            };
+
+            let mut enter_flags = IORING_ENTER_GETEVENTS;
+
+            // Check SQPOLL wakeup
+            let sq_flags = unsafe { (*self.sq_flags).load(Ordering::Acquire) };
+            if (sq_flags & IORING_SQ_NEED_WAKEUP) != 0 {
+                enter_flags |= IORING_ENTER_SQ_WAKEUP;
+            }
+
+            let ret = unsafe {
+                libc::syscall(
+                    SYS_IO_URING_ENTER,
+                    self.ring_fd,
+                    to_submit,
+                    min_complete,
+                    enter_flags,
+                    ptr::null::<c_void>(),
+                    0usize,
+                ) as c_int
+            };
+            if ret < 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    return Ok(0);
+                }
+                return Err(err);
+            }
+            Ok(ret as usize)
+        }
+
+        /// Non-blocking peek at the next CQE. Returns None if no completions available.
+        #[inline(always)]
+        pub fn peek_cqe(&self) -> Option<io_uring_cqe> {
+            let head = unsafe { (*self.cq_head).load(Ordering::Acquire) };
+            let tail = unsafe { (*self.cq_tail).load(Ordering::Acquire) };
+            if head == tail {
+                return None;
+            }
+            let idx = head & self.cq_mask;
+            let cqe = unsafe { *self.cq_cqes.add(idx as usize) };
+            Some(cqe)
+        }
+
+        /// Advance the CQ head by `count` entries after processing CQEs.
+        #[inline(always)]
+        pub fn advance_cq(&self, count: u32) {
+            let head = unsafe { (*self.cq_head).load(Ordering::Relaxed) };
+            unsafe { (*self.cq_head).store(head.wrapping_add(count), Ordering::Release) };
+        }
+
+        /// Check for CQ overflow (kernel dropped CQEs).
+        #[inline]
+        pub fn cq_overflow(&self) -> u32 {
+            unsafe { (*self.cq_overflow).load(Ordering::Relaxed) }
+        }
+
+        /// Register pre-allocated buffers with the ring for OP_READ_FIXED/OP_WRITE_FIXED.
+        pub fn register_buffers(&self, iovecs: &[libc::iovec]) -> io::Result<()> {
+            let ret = unsafe {
+                libc::syscall(
+                    SYS_IO_URING_REGISTER,
+                    self.ring_fd,
+                    IORING_REGISTER_BUFFERS,
+                    iovecs.as_ptr(),
+                    iovecs.len() as c_uint,
+                ) as c_int
+            };
+            if ret < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+
+        /// Get the ring file descriptor (for probing features).
+        pub fn fd(&self) -> c_int {
+            self.ring_fd
+        }
+    }
+
+    impl Drop for UringRing {
+        fn drop(&mut self) {
+            unsafe {
+                libc::munmap(self.sqes_ptr as *mut c_void, self.sqes_size);
+                libc::munmap(self.cq_ring_ptr as *mut c_void, self.cq_ring_size);
+                libc::munmap(self.sq_ring_ptr as *mut c_void, self.sq_ring_size);
+                libc::close(self.ring_fd);
+            }
+        }
+    }
+
+    // ---- SQE Preparation Helpers ----
+    // All inline, zero-allocation, write directly into SQE memory.
+
+    /// Prepare an accept SQE. The accepted fd is returned in the CQE res field.
+    #[inline(always)]
+    pub fn prep_accept(sqe: &mut io_uring_sqe, listen_fd: i32, user_data: u64) {
+        sqe.opcode = IORING_OP_ACCEPT;
+        sqe.fd = listen_fd;
+        sqe.user_data = user_data;
+        // addr=NULL, addrlen=NULL → don't care about peer address
+    }
+
+    /// Prepare a multi-shot accept SQE (kernel ≥5.19).
+    /// Generates one CQE per accepted connection without re-submission.
+    /// CQE will have IORING_CQE_F_MORE flag set if more accepts will follow.
+    #[inline(always)]
+    pub fn prep_accept_multishot(sqe: &mut io_uring_sqe, listen_fd: i32, user_data: u64) {
+        sqe.opcode = IORING_OP_ACCEPT;
+        sqe.fd = listen_fd;
+        sqe.user_data = user_data;
+        sqe.ioprio = IORING_ACCEPT_MULTISHOT;
+    }
+
+    /// Prepare a read SQE. Reads into the buffer at `buf_ptr` up to `len` bytes.
+    #[inline(always)]
+    pub fn prep_read(sqe: &mut io_uring_sqe, fd: i32, buf_ptr: *mut u8, len: u32, user_data: u64) {
+        sqe.opcode = IORING_OP_READ;
+        sqe.fd = fd;
+        sqe.addr_or_splice = buf_ptr as u64;
+        sqe.len = len;
+        sqe.user_data = user_data;
+    }
+
+    /// Prepare a write SQE.
+    #[inline(always)]
+    pub fn prep_write(sqe: &mut io_uring_sqe, fd: i32, buf_ptr: *const u8, len: u32, user_data: u64) {
+        sqe.opcode = IORING_OP_WRITE;
+        sqe.fd = fd;
+        sqe.addr_or_splice = buf_ptr as u64;
+        sqe.len = len;
+        sqe.user_data = user_data;
+    }
+
+    /// Prepare a writev SQE (scatter-gather write).
+    #[inline(always)]
+    pub fn prep_writev(
+        sqe: &mut io_uring_sqe,
+        fd: i32,
+        iovecs: *const libc::iovec,
+        iov_count: u32,
+        user_data: u64,
+    ) {
+        sqe.opcode = IORING_OP_WRITEV;
+        sqe.fd = fd;
+        sqe.addr_or_splice = iovecs as u64;
+        sqe.len = iov_count;
+        sqe.user_data = user_data;
+    }
+
+    /// Prepare a close SQE (async close — avoids blocking).
+    #[inline(always)]
+    pub fn prep_close(sqe: &mut io_uring_sqe, fd: i32, user_data: u64) {
+        sqe.opcode = IORING_OP_CLOSE;
+        sqe.fd = fd;
+        sqe.user_data = user_data;
+    }
+
+    /// Prepare a NOP SQE (useful for testing / wakeup).
+    #[inline(always)]
+    pub fn prep_nop(sqe: &mut io_uring_sqe, user_data: u64) {
+        sqe.opcode = IORING_OP_NOP;
+        sqe.user_data = user_data;
+    }
+}

@@ -11,6 +11,7 @@ description = "The extremely fast, zero-overhead HTTP engine for the Chopin fram
 [features]
 default = ["catch-panic"]
 catch-panic = []
+io-uring = []
 
 [dependencies]
 arrayvec = "0.7"

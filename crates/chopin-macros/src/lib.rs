@@ -54,6 +54,27 @@ fn generate_route(method: &str, attr: TokenStream, item: TokenStream) -> TokenSt
     let fn_name = &input_fn.sig.ident;
     let method_ident = syn::Ident::new(method, proc_macro2::Span::call_site());
 
+    // Extract doc comments
+    let mut docs = Vec::new();
+    for attr in &input_fn.attrs {
+        if attr.path().is_ident("doc")
+            && let syn::Meta::NameValue(nv) = &attr.meta
+            && let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = &nv.value
+        {
+            docs.push(s.value().trim().to_string());
+        }
+    }
+
+    let summary = docs.first().cloned().unwrap_or_default();
+    let description = if docs.len() > 1 {
+        docs[1..].join("\n")
+    } else {
+        String::new()
+    };
+
     let expanded = quote! {
         #input_fn
 
@@ -62,6 +83,8 @@ fn generate_route(method: &str, attr: TokenStream, item: TokenStream) -> TokenSt
                 method: ::chopin_core::http::Method::#method_ident,
                 path: #path,
                 handler: #fn_name,
+                summary: #summary,
+                description: #description,
             }
         }
     };
