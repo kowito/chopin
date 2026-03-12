@@ -37,6 +37,7 @@ pub mod error;
 pub mod extract;
 pub mod headers;
 pub mod http;
+pub mod http2;
 pub mod http_date;
 pub mod json;
 pub mod metrics;
@@ -48,6 +49,7 @@ pub mod server;
 pub mod slab;
 pub mod syscalls;
 pub mod timer;
+pub mod websocket;
 pub mod worker;
 
 // Re-exports for users

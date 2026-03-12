@@ -1924,6 +1924,221 @@ fn hex_digit(b: u8) -> u8 {
     }
 }
 
+// ─── C.2: Custom Type Registry ───────────────────────────────
+
+/// Function type for encoding a custom type to text format.
+pub type CustomEncoder = Box<dyn Fn(&PgValue) -> Option<Vec<u8>> + Send + Sync>;
+/// Function type for decoding a custom type from text format.
+pub type CustomDecoder = Box<dyn Fn(&[u8]) -> PgResult<PgValue> + Send + Sync>;
+
+/// A registry mapping PostgreSQL OIDs to custom encode/decode functions.
+///
+/// This allows extensions, custom enums, and composite types to be handled
+/// transparently by `PgValue::from_text` and `PgValue::to_text_bytes`.
+///
+/// # Example
+/// ```ignore
+/// use chopin_pg::types::{TypeRegistry, PgValue};
+///
+/// let mut registry = TypeRegistry::new();
+/// // Register a custom enum type at OID 12345
+/// registry.register_enum(12345, &["active", "inactive", "pending"]);
+/// let val = registry.decode(12345, b"active").unwrap();
+/// ```
+pub struct TypeRegistry {
+    decoders: std::collections::HashMap<u32, CustomDecoder>,
+    encoders: std::collections::HashMap<u32, CustomEncoder>,
+}
+
+impl TypeRegistry {
+    /// Create an empty type registry.
+    pub fn new() -> Self {
+        Self {
+            decoders: std::collections::HashMap::new(),
+            encoders: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register custom encode and decode functions for a given OID.
+    pub fn register(
+        &mut self,
+        type_oid: u32,
+        encoder: CustomEncoder,
+        decoder: CustomDecoder,
+    ) {
+        self.encoders.insert(type_oid, encoder);
+        self.decoders.insert(type_oid, decoder);
+    }
+
+    /// Decode a value using the registered decoder for the given OID.
+    /// Returns `None` if no decoder is registered for this OID.
+    pub fn decode(&self, type_oid: u32, data: &[u8]) -> Option<PgResult<PgValue>> {
+        self.decoders.get(&type_oid).map(|f| f(data))
+    }
+
+    /// Encode a value using the registered encoder for the given OID.
+    /// Returns `None` if no encoder is registered for this OID.
+    pub fn encode(&self, type_oid: u32, value: &PgValue) -> Option<Option<Vec<u8>>> {
+        self.encoders.get(&type_oid).map(|f| f(value))
+    }
+
+    /// Check if a decoder is registered for the given OID.
+    pub fn has_decoder(&self, type_oid: u32) -> bool {
+        self.decoders.contains_key(&type_oid)
+    }
+
+    // ── C.3: Custom PostgreSQL Enum Support ─────────────────────
+
+    /// Register a PostgreSQL enum type.
+    ///
+    /// Enum values are stored as `PgValue::Text` and validated against the
+    /// provided variant list on decode. Encoding just returns the text bytes.
+    ///
+    /// # Arguments
+    /// * `type_oid` — The OID of the enum type (query `pg_type` to find it).
+    /// * `variants` — The valid variant labels for this enum.
+    pub fn register_enum(&mut self, type_oid: u32, variants: &[&str]) {
+        let variants_owned: Vec<String> = variants.iter().map(|s| s.to_string()).collect();
+
+        let decode_variants = variants_owned.clone();
+        let decoder: CustomDecoder = Box::new(move |data: &[u8]| {
+            let text = std::str::from_utf8(data)
+                .map_err(|_| PgError::Protocol("Invalid UTF-8 in enum value".to_string()))?;
+            if !decode_variants.iter().any(|v| v == text) {
+                return Err(PgError::Protocol(format!(
+                    "Unknown enum variant: '{}' (expected one of: {:?})",
+                    text, decode_variants
+                )));
+            }
+            Ok(PgValue::Text(text.to_string()))
+        });
+
+        let encoder: CustomEncoder = Box::new(|value: &PgValue| {
+            match value {
+                PgValue::Text(s) => Some(s.as_bytes().to_vec()),
+                _ => None,
+            }
+        });
+
+        self.register(type_oid, encoder, decoder);
+    }
+
+    // ── C.4: Composite / Record Type Support ────────────────────
+
+    /// Register a composite type with named fields and their OIDs.
+    ///
+    /// Composite values are decoded from PostgreSQL's text representation
+    /// (parenthesized, comma-separated fields) and stored as `PgValue::Array`
+    /// (one element per field). Fields are decoded using their respective OIDs
+    /// via `PgValue::from_text`.
+    ///
+    /// # Arguments
+    /// * `type_oid` — The OID of the composite type.
+    /// * `field_oids` — The OIDs of each field in order.
+    pub fn register_composite(&mut self, type_oid: u32, field_oids: &[u32]) {
+        let oids = field_oids.to_vec();
+
+        let decoder: CustomDecoder = Box::new(move |data: &[u8]| {
+            let text = std::str::from_utf8(data)
+                .map_err(|_| PgError::Protocol("Invalid UTF-8 in composite value".to_string()))?;
+            // PostgreSQL text format: (val1,val2,val3)
+            let inner = text.trim();
+            let inner = if inner.starts_with('(') && inner.ends_with(')') {
+                &inner[1..inner.len() - 1]
+            } else {
+                inner
+            };
+
+            let fields = parse_composite_fields(inner);
+            if fields.len() != oids.len() {
+                return Err(PgError::Protocol(format!(
+                    "Composite field count mismatch: expected {}, got {}",
+                    oids.len(),
+                    fields.len()
+                )));
+            }
+
+            let mut values = Vec::with_capacity(oids.len());
+            for (field_val, &field_oid) in fields.iter().zip(oids.iter()) {
+                if field_val.is_empty() {
+                    values.push(PgValue::Null);
+                } else {
+                    values.push(PgValue::from_text(field_oid, field_val.as_bytes())?);
+                }
+            }
+            Ok(PgValue::Array(values))
+        });
+
+        let encoder: CustomEncoder = Box::new(|value: &PgValue| {
+            match value {
+                PgValue::Array(fields) => {
+                    let mut out = String::from("(");
+                    for (i, field) in fields.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        match field {
+                            PgValue::Null => {} // empty field
+                            PgValue::Text(s) => out.push_str(s),
+                            other => {
+                                if let Some(bytes) = other.to_text_bytes() {
+                                    if let Ok(s) = std::str::from_utf8(&bytes) {
+                                        out.push_str(s);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    out.push(')');
+                    Some(out.into_bytes())
+                }
+                _ => None,
+            }
+        });
+
+        self.register(type_oid, encoder, decoder);
+    }
+}
+
+impl Default for TypeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Parse composite field values from the inner text (without surrounding parens).
+/// Handles quoted fields and escaped characters.
+fn parse_composite_fields(input: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    // Escaped quote
+                    chars.next();
+                    current.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                current.push(ch);
+            }
+        } else if ch == '"' {
+            in_quotes = true;
+        } else if ch == ',' {
+            fields.push(std::mem::take(&mut current));
+        } else {
+            current.push(ch);
+        }
+    }
+    fields.push(current);
+    fields
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2860,5 +3075,116 @@ mod tests {
     fn test_point_prefers_binary() {
         let val = PgValue::Point { x: 0.0, y: 0.0 };
         assert!(val.prefers_binary());
+    }
+
+    // ─── C.2: TypeRegistry tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_type_registry_custom_codec() {
+        let mut registry = TypeRegistry::new();
+        let oid = 99999;
+        registry.register(
+            oid,
+            Box::new(|v| match v { PgValue::Text(s) => Some(s.as_bytes().to_vec()), _ => None }),
+            Box::new(|data| {
+                let s = std::str::from_utf8(data).map_err(|_| PgError::Protocol("bad utf8".into()))?;
+                Ok(PgValue::Text(s.to_uppercase()))
+            }),
+        );
+        assert!(registry.has_decoder(oid));
+        let decoded = registry.decode(oid, b"hello").unwrap().unwrap();
+        assert_eq!(decoded, PgValue::Text("HELLO".to_string()));
+
+        let encoded = registry.encode(oid, &PgValue::Text("world".to_string())).unwrap();
+        assert_eq!(encoded, Some(b"world".to_vec()));
+    }
+
+    #[test]
+    fn test_type_registry_unknown_oid() {
+        let registry = TypeRegistry::new();
+        assert!(registry.decode(12345, b"data").is_none());
+        assert!(registry.encode(12345, &PgValue::Null).is_none());
+        assert!(!registry.has_decoder(12345));
+    }
+
+    // ─── C.3: Custom Enum tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_register_enum_decode_valid() {
+        let mut registry = TypeRegistry::new();
+        registry.register_enum(50001, &["active", "inactive", "pending"]);
+        let val = registry.decode(50001, b"active").unwrap().unwrap();
+        assert_eq!(val, PgValue::Text("active".to_string()));
+    }
+
+    #[test]
+    fn test_register_enum_decode_invalid_variant() {
+        let mut registry = TypeRegistry::new();
+        registry.register_enum(50001, &["active", "inactive"]);
+        let result = registry.decode(50001, b"deleted");
+        assert!(result.unwrap().is_err());
+    }
+
+    #[test]
+    fn test_register_enum_encode() {
+        let mut registry = TypeRegistry::new();
+        registry.register_enum(50001, &["active", "inactive"]);
+        let encoded = registry.encode(50001, &PgValue::Text("active".to_string())).unwrap();
+        assert_eq!(encoded, Some(b"active".to_vec()));
+    }
+
+    // ─── C.4: Composite type tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_register_composite_decode() {
+        let mut registry = TypeRegistry::new();
+        // Composite with (int4, text, bool) fields
+        registry.register_composite(60001, &[oid::INT4, oid::TEXT, oid::BOOL]);
+        let val = registry.decode(60001, b"(42,hello,t)").unwrap().unwrap();
+        match val {
+            PgValue::Array(fields) => {
+                assert_eq!(fields.len(), 3);
+                assert_eq!(fields[0], PgValue::Int4(42));
+                assert_eq!(fields[1], PgValue::Text("hello".to_string()));
+                assert_eq!(fields[2], PgValue::Bool(true));
+            }
+            other => panic!("Expected Array, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_register_composite_with_nulls() {
+        let mut registry = TypeRegistry::new();
+        registry.register_composite(60002, &[oid::INT4, oid::TEXT]);
+        let val = registry.decode(60002, b"(42,)").unwrap().unwrap();
+        match val {
+            PgValue::Array(fields) => {
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0], PgValue::Int4(42));
+                assert_eq!(fields[1], PgValue::Null);
+            }
+            other => panic!("Expected Array, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_register_composite_encode() {
+        let mut registry = TypeRegistry::new();
+        registry.register_composite(60001, &[oid::INT4, oid::TEXT]);
+        let val = PgValue::Array(vec![PgValue::Int4(42), PgValue::Text("hello".to_string())]);
+        let encoded = registry.encode(60001, &val).unwrap();
+        assert_eq!(encoded, Some(b"(42,hello)".to_vec()));
+    }
+
+    #[test]
+    fn test_parse_composite_fields_quoted() {
+        let fields = parse_composite_fields(r#"42,"hello, world",t"#);
+        assert_eq!(fields, vec!["42", "hello, world", "t"]);
+    }
+
+    #[test]
+    fn test_parse_composite_fields_escaped_quote() {
+        let fields = parse_composite_fields(r#""say ""hi""",42"#);
+        assert_eq!(fields, vec![r#"say "hi""#, "42"]);
     }
 }

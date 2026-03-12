@@ -4,6 +4,8 @@
 //! Uses raw SHA-256 and HMAC implementations to stay zero-dependency.
 
 /// SCRAM-SHA-256 client state machine.
+///
+/// Supports both plain SCRAM-SHA-256 and SCRAM-SHA-256-PLUS (channel binding).
 pub struct ScramClient {
     username: String,
     password: String,
@@ -14,6 +16,9 @@ pub struct ScramClient {
     iterations: u32,
     auth_message: String,
     salted_password: [u8; 32],
+    /// Channel binding data for SCRAM-SHA-256-PLUS (tls-server-end-point).
+    /// When `Some`, the GS2 header uses `p=tls-server-end-point,,` instead of `n,,`.
+    channel_binding: Option<Vec<u8>>,
 }
 
 impl ScramClient {
@@ -29,13 +34,39 @@ impl ScramClient {
             iterations: 0,
             auth_message: String::new(),
             salted_password: [0u8; 32],
+            channel_binding: None,
+        }
+    }
+
+    /// Create a SCRAM client with channel binding data for SCRAM-SHA-256-PLUS.
+    ///
+    /// `cb_data` should be the SHA-256 hash of the server's DER-encoded certificate
+    /// (tls-server-end-point per RFC 5929).
+    pub fn new_with_channel_binding(username: &str, password: &str, cb_data: Vec<u8>) -> Self {
+        let nonce = generate_nonce();
+        Self {
+            username: username.to_string(),
+            password: password.to_string(),
+            nonce,
+            client_first_bare: String::new(),
+            server_nonce: String::new(),
+            salt: Vec::new(),
+            iterations: 0,
+            auth_message: String::new(),
+            salted_password: [0u8; 32],
+            channel_binding: Some(cb_data),
         }
     }
 
     /// Build the client-first-message to send in SASLInitialResponse.
     pub fn client_first_message(&mut self) -> Vec<u8> {
         self.client_first_bare = format!("n={},r={}", self.username, self.nonce);
-        let msg = format!("n,,{}", self.client_first_bare);
+        let gs2_header = if self.channel_binding.is_some() {
+            "p=tls-server-end-point,,"
+        } else {
+            "n,,"
+        };
+        let msg = format!("{}{}", gs2_header, self.client_first_bare);
         msg.into_bytes()
     }
 
@@ -72,8 +103,19 @@ impl ScramClient {
         // Derive salted password
         self.salted_password = hi(self.password.as_bytes(), &self.salt, self.iterations);
 
+        // Build channel binding data for client-final
+        // For SCRAM-SHA-256-PLUS: c = base64("p=tls-server-end-point,," + cb_data)
+        // For plain SCRAM-SHA-256: c = base64("n,,") = "biws"
+        let cb_b64 = if let Some(ref cb_data) = self.channel_binding {
+            let mut cb_input = b"p=tls-server-end-point,,".to_vec();
+            cb_input.extend_from_slice(cb_data);
+            base64_encode(&cb_input)
+        } else {
+            "biws".to_string()
+        };
+
         // Build client-final-message-without-proof
-        let client_final_without_proof = format!("c=biws,r={}", self.server_nonce);
+        let client_final_without_proof = format!("c={},r={}", cb_b64, self.server_nonce);
 
         // Auth message
         self.auth_message = format!(
@@ -895,5 +937,46 @@ mod tests {
         let r1 = md5_password_hash("user", "pass", &[0x01, 0x02, 0x03, 0x04]);
         let r2 = md5_password_hash("user", "pass", &[0x05, 0x06, 0x07, 0x08]);
         assert_ne!(r1, r2, "Different salts must produce different hashes");
+    }
+
+    // ─── SCRAM-SHA-256-PLUS channel binding (B.3) ────────────────────────────
+
+    #[test]
+    fn test_scram_plus_client_first_uses_p_header() {
+        let cb_data = sha256(b"fake-server-cert-der");
+        let mut client = ScramClient::new_with_channel_binding("user", "pass", cb_data.to_vec());
+        let msg = client.client_first_message();
+        let s = std::str::from_utf8(&msg).unwrap();
+        assert!(
+            s.starts_with("p=tls-server-end-point,,"),
+            "SCRAM-PLUS must use p= GS2 header: {}",
+            s
+        );
+        assert!(s.contains("n=user"), "must contain username");
+    }
+
+    #[test]
+    fn test_scram_plus_client_final_has_channel_binding() {
+        let cb_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let mut client = ScramClient::new_with_channel_binding("user", "pass", cb_data);
+        let first_msg = client.client_first_message();
+        let first_str = std::str::from_utf8(&first_msg).unwrap();
+        let client_nonce =
+            first_str.split(',').find(|p| p.starts_with("r=")).unwrap()["r=".len()..].to_string();
+
+        let server_nonce = format!("{}ServerExtra", client_nonce);
+        let server_first = format!("r={},s=c2FsdA==,i=4096", server_nonce);
+        let final_msg = client.process_server_first(server_first.as_bytes()).unwrap();
+        let final_str = std::str::from_utf8(&final_msg).unwrap();
+
+        // Must NOT start with "c=biws" (that's the no-binding value)
+        assert!(
+            !final_str.starts_with("c=biws"),
+            "SCRAM-PLUS must have channel binding data, not biws: {}",
+            final_str
+        );
+        // Must start with "c=" followed by the binding data
+        assert!(final_str.starts_with("c="), "must have c= prefix: {}", final_str);
+        assert!(final_str.contains(",p="), "must contain proof: {}", final_str);
     }
 }

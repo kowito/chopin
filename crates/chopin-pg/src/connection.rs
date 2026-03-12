@@ -114,6 +114,16 @@ impl PgStream {
             PgStream::Tls(s) => s.as_raw_fd(),
         }
     }
+
+    /// Get the SHA-256 hash of the server's TLS certificate for channel binding.
+    /// Returns `None` if the connection is not TLS or no cert is available.
+    #[cfg(feature = "tls")]
+    fn tls_server_cert_hash(&self) -> Option<Vec<u8>> {
+        match self {
+            PgStream::Tls(s) => s.server_cert_hash(),
+            _ => None,
+        }
+    }
 }
 
 /// Connection configuration.
@@ -503,11 +513,23 @@ impl PgConnection {
                                     .map_err(PgError::Io)?;
                             }
                             Some(AuthType::SASLInit) => {
-                                let mut scram = ScramClient::new(&config.user, &config.password);
+                                // B.3: Use SCRAM-SHA-256-PLUS with channel binding when TLS is active
+                                #[cfg(feature = "tls")]
+                                let (mut scram, mechanism) = if let Some(cb_data) = self.stream.tls_server_cert_hash() {
+                                    (
+                                        ScramClient::new_with_channel_binding(&config.user, &config.password, cb_data),
+                                        "SCRAM-SHA-256-PLUS",
+                                    )
+                                } else {
+                                    (ScramClient::new(&config.user, &config.password), "SCRAM-SHA-256")
+                                };
+                                #[cfg(not(feature = "tls"))]
+                                let (mut scram, mechanism) = (ScramClient::new(&config.user, &config.password), "SCRAM-SHA-256");
+
                                 let client_first = scram.client_first_message();
                                 let n = codec::encode_sasl_initial(
                                     &mut self.write_buf,
-                                    "SCRAM-SHA-256",
+                                    mechanism,
                                     &client_first,
                                 );
                                 self.stream

@@ -997,6 +997,7 @@ pub mod uring {
     pub const OP_TYPE_WRITEV: u8 = 3;
     pub const OP_TYPE_CLOSE: u8 = 4;
     pub const OP_TYPE_SENDFILE: u8 = 5;
+    pub const OP_TYPE_SPLICE: u8 = 6;
 
     /// Sentinel connection index for accept operations
     pub const ACCEPT_CONN_IDX: u64 = 0x00FF_FFFF;

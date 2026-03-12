@@ -220,4 +220,14 @@ impl TlsStream {
         }
         Ok(())
     }
+
+    /// Extract the SHA-256 hash of the server's DER-encoded certificate
+    /// for SCRAM-SHA-256-PLUS channel binding (tls-server-end-point, RFC 5929).
+    ///
+    /// Returns `None` if the server didn't present a certificate.
+    pub(crate) fn server_cert_hash(&self) -> Option<Vec<u8>> {
+        let certs = self.tls.peer_certificates()?;
+        let first = certs.first()?;
+        Some(crate::auth::sha256(first.as_ref()).to_vec())
+    }
 }

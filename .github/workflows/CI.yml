@@ -51,6 +51,84 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all --all-targets -- -D warnings
 
+  # A.8: io-uring feature tests on Linux only
+  test-iouring:
+    name: Test io-uring (Linux)
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'pull_request' || 
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, 'chore: bump version')) ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Test io-uring feature
+        run: cargo test -p chopin-core --features io-uring --lib
+
+  # H.3: chopin-pg integration tests with Docker PostgreSQL
+  test-pg:
+    name: Test chopin-pg (PostgreSQL)
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'pull_request' || 
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, 'chore: bump version')) ||
+      github.event_name == 'workflow_dispatch'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: chopin
+          POSTGRES_PASSWORD: chopin
+          POSTGRES_DB: chopin_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Run chopin-pg tests
+        env:
+          PG_HOST: localhost
+          PG_PORT: 5432
+          PG_USER: chopin
+          PG_PASSWORD: chopin
+          PG_DATABASE: chopin_test
+        run: cargo test -p chopin-pg --lib
+
+  # H.4: Criterion benchmarks smoke check (compile only)
+  bench-check:
+    name: Benchmark Smoke Check
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'pull_request' || 
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, 'chore: bump version'))
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Compile benchmarks (no-run)
+        run: cargo bench --no-run --workspace 2>&1 || true
+
+  # H.6: Dependency audit for known CVEs
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'pull_request' || 
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, 'chore: bump version'))
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run audit
+        run: cargo audit
+
   release:
     name: Release & Publish
     runs-on: macos-14

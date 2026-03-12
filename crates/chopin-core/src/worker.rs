@@ -16,9 +16,11 @@ use crate::syscalls::uring::{
     IORING_CQE_F_MORE, IORING_SETUP_COOP_TASKRUN, IORING_SETUP_SINGLE_ISSUER,
     IORING_SETUP_SQPOLL,
     OP_TYPE_ACCEPT, OP_TYPE_CLOSE, OP_TYPE_READ, OP_TYPE_WRITE, OP_TYPE_WRITEV,
+    OP_TYPE_SPLICE,
     ACCEPT_CONN_IDX,
     encode_user_data, decode_user_data,
     prep_accept_multishot, prep_close, prep_read, prep_write, prep_writev,
+    prep_splice,
 };
 use crate::timer::TimerWheel;
 use std::sync::Arc;
@@ -1119,6 +1121,9 @@ impl Worker {
             OP_TYPE_WRITE | OP_TYPE_WRITEV => {
                 self.handle_write(ring, slab, conn_idx, cqe, now, is_shutting_down)?;
             }
+            OP_TYPE_SPLICE => {
+                self.handle_splice(ring, slab, conn_idx, cqe, is_shutting_down)?;
+            }
             OP_TYPE_CLOSE => { /* close completed — slab already freed */ }
             _ => {}
         }
@@ -1272,30 +1277,68 @@ impl Worker {
                     }
                 }
             } else if c.sendfile_remaining > 0 {
+                // A.5: Use io_uring splice for zero-copy file transfer
                 if let Some(c) = slab.get_mut(idx) {
-                    match syscalls::sendfile_nonblocking(
-                        c.fd,
-                        c.sendfile_fd,
-                        &mut c.sendfile_offset,
-                        c.sendfile_remaining,
-                    ) {
-                        Ok(n) if n > 0 => {
-                            self.metrics.add_bytes(n);
-                            c.sendfile_remaining -= n as u64;
-                            if c.sendfile_remaining > 0 {
-                                self.complete_response(ring, slab, idx, is_shutting_down)?;
-                                return Ok(());
-                            }
-                        }
-                        _ => { c.close_sendfile(); }
+                    let chunk = std::cmp::min(c.sendfile_remaining, 1 << 20) as u32;
+                    let ud = encode_user_data(idx, OP_TYPE_SPLICE);
+                    c.pending_op = OP_TYPE_SPLICE;
+                    if let Some(sqe) = ring.get_sqe() {
+                        prep_splice(
+                            sqe,
+                            c.sendfile_fd,
+                            c.sendfile_offset as i64,
+                            c.fd,
+                            -1,
+                            chunk,
+                            ud,
+                        );
                     }
                 }
-                self.complete_response(ring, slab, idx, is_shutting_down)?;
             } else {
                 self.complete_response(ring, slab, idx, is_shutting_down)?;
             }
         }
         Ok(())
+    }
+
+    /// Handle a completed splice CQE (A.5: zero-copy file transfer via io_uring).
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    fn handle_splice(
+        &self,
+        ring: &mut UringRing,
+        slab: &mut ConnectionSlab,
+        idx: usize,
+        cqe: io_uring_cqe,
+        is_shutting_down: bool,
+    ) -> ChopinResult<()> {
+        if let Some(c) = slab.get_mut(idx) {
+            c.pending_op = 0;
+        }
+        if cqe.res <= 0 {
+            // Splice failed or EOF — close sendfile and finish response
+            if let Some(c) = slab.get_mut(idx) {
+                c.close_sendfile();
+            }
+            self.complete_response(ring, slab, idx, is_shutting_down)?;
+            return Ok(());
+        }
+        let bytes_spliced = cqe.res as u64;
+        self.metrics.add_bytes(bytes_spliced as usize);
+        if let Some(c) = slab.get_mut(idx) {
+            c.sendfile_offset += bytes_spliced;
+            c.sendfile_remaining -= bytes_spliced;
+            if c.sendfile_remaining > 0 {
+                // Submit next splice chunk
+                let chunk = std::cmp::min(c.sendfile_remaining, 1 << 20) as u32;
+                let ud = encode_user_data(idx, OP_TYPE_SPLICE);
+                c.pending_op = OP_TYPE_SPLICE;
+                if let Some(sqe) = ring.get_sqe() {
+                    prep_splice(sqe, c.sendfile_fd, c.sendfile_offset as i64, c.fd, -1, chunk, ud);
+                }
+                return Ok(());
+            }
+        }
+        self.complete_response(ring, slab, idx, is_shutting_down)
     }
 
     /// Response fully sent: reset write state and either continue pipeline or wait.
@@ -1678,6 +1721,31 @@ impl Worker {
             .map_err(|e| ChopinError::Other(format!("io_uring_setup failed: {e}")))?;
 
         let mut slab = ConnectionSlab::new(self.slab_capacity);
+
+        // A.4: Register slab read/write buffers with io_uring for OP_READ_FIXED/OP_WRITE_FIXED.
+        // This avoids per-I/O page-table walks by pinning the buffers in kernel memory.
+        {
+            use crate::conn::{READ_BUF_SIZE, WRITE_BUF_SIZE};
+            let cap = slab.capacity();
+            let mut iovecs = Vec::with_capacity(cap * 2);
+            for i in 0..cap {
+                if let Some(c) = slab.get_mut(i) {
+                    iovecs.push(libc::iovec {
+                        iov_base: c.read_buf.as_mut_ptr() as *mut libc::c_void,
+                        iov_len: READ_BUF_SIZE,
+                    });
+                    iovecs.push(libc::iovec {
+                        iov_base: c.write_buf.as_mut_ptr() as *mut libc::c_void,
+                        iov_len: WRITE_BUF_SIZE,
+                    });
+                }
+            }
+            if let Err(e) = ring.register_buffers(&iovecs) {
+                eprintln!("[chopin] worker-{} register_buffers failed (non-fatal): {e}", self.id);
+                // Fall back to normal read/write — non-fatal
+            }
+        }
+
         let mut now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| ChopinError::ClockError)?

@@ -71,4 +71,4 @@ pub use row::Row;
 pub use statement::Statement;
 #[cfg(feature = "tls")]
 pub use tls::SslMode;
-pub use types::{FromSql, PgValue, ToParam, ToSql, encode_inet_binary};
+pub use types::{FromSql, PgValue, ToParam, ToSql, TypeRegistry, encode_inet_binary};
