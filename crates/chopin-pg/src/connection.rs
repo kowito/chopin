@@ -27,6 +27,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::auth::ScramClient;
+#[cfg(feature = "tls")]
+use crate::tls;
 use crate::codec;
 use crate::error::{PgError, PgResult};
 use crate::protocol::*;
@@ -39,11 +41,13 @@ const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ─── Stream Abstraction ──────────────────────────────────────
 
-/// Unified stream type supporting both TCP and Unix domain sockets.
+/// Unified stream type supporting TCP, Unix domain sockets, and TLS.
 enum PgStream {
     Tcp(TcpStream),
     #[cfg(unix)]
     Unix(UnixStream),
+    #[cfg(feature = "tls")]
+    Tls(tls::TlsStream),
 }
 
 impl Read for PgStream {
@@ -52,6 +56,8 @@ impl Read for PgStream {
             PgStream::Tcp(s) => s.read(buf),
             #[cfg(unix)]
             PgStream::Unix(s) => s.read(buf),
+            #[cfg(feature = "tls")]
+            PgStream::Tls(s) => s.read(buf),
         }
     }
 }
@@ -62,6 +68,8 @@ impl Write for PgStream {
             PgStream::Tcp(s) => s.write(buf),
             #[cfg(unix)]
             PgStream::Unix(s) => s.write(buf),
+            #[cfg(feature = "tls")]
+            PgStream::Tls(s) => s.write(buf),
         }
     }
 
@@ -70,6 +78,8 @@ impl Write for PgStream {
             PgStream::Tcp(s) => s.flush(),
             #[cfg(unix)]
             PgStream::Unix(s) => s.flush(),
+            #[cfg(feature = "tls")]
+            PgStream::Tls(s) => s.flush(),
         }
     }
 
@@ -78,6 +88,8 @@ impl Write for PgStream {
             PgStream::Tcp(s) => s.write_all(buf),
             #[cfg(unix)]
             PgStream::Unix(s) => s.write_all(buf),
+            #[cfg(feature = "tls")]
+            PgStream::Tls(s) => s.write_all(buf),
         }
     }
 }
@@ -88,6 +100,8 @@ impl PgStream {
             PgStream::Tcp(s) => s.set_nonblocking(nonblocking),
             #[cfg(unix)]
             PgStream::Unix(s) => s.set_nonblocking(nonblocking),
+            #[cfg(feature = "tls")]
+            PgStream::Tls(s) => s.set_nonblocking(nonblocking),
         }
     }
 
@@ -96,6 +110,8 @@ impl PgStream {
         match self {
             PgStream::Tcp(s) => s.as_raw_fd(),
             PgStream::Unix(s) => s.as_raw_fd(),
+            #[cfg(feature = "tls")]
+            PgStream::Tls(s) => s.as_raw_fd(),
         }
     }
 }
@@ -111,6 +127,10 @@ pub struct PgConfig {
     /// Optional Unix domain socket directory.
     /// When set, connect via `<socket_dir>/.s.PGSQL.<port>` instead of TCP.
     pub socket_dir: Option<String>,
+    /// SSL/TLS mode. Only effective when the `tls` feature is enabled.
+    /// Default: `Prefer` (try TLS, fall back to plaintext).
+    #[cfg(feature = "tls")]
+    pub ssl_mode: tls::SslMode,
 }
 
 impl PgConfig {
@@ -122,6 +142,8 @@ impl PgConfig {
             password: password.to_string(),
             database: database.to_string(),
             socket_dir: None,
+            #[cfg(feature = "tls")]
+            ssl_mode: tls::SslMode::default(),
         }
     }
 
@@ -129,6 +151,13 @@ impl PgConfig {
     /// The actual socket path will be `<dir>/.s.PGSQL.<port>`.
     pub fn with_socket_dir(mut self, dir: &str) -> Self {
         self.socket_dir = Some(dir.to_string());
+        self
+    }
+
+    /// Set the SSL/TLS mode for the connection.
+    #[cfg(feature = "tls")]
+    pub fn with_ssl_mode(mut self, mode: tls::SslMode) -> Self {
+        self.ssl_mode = mode;
         self
     }
 
@@ -156,14 +185,22 @@ impl PgConfig {
             .split_once('/')
             .ok_or_else(|| PgError::Protocol("Missing database in URL".to_string()))?;
 
-        // Parse query params for socket dir
+        // Parse query params for socket dir and sslmode
         let mut socket_dir: Option<String> = None;
+        #[cfg(feature = "tls")]
+        let mut ssl_mode = tls::SslMode::default();
         if !query_part.is_empty() {
             for param in query_part.split('&') {
                 if let Some(value) = param.strip_prefix("host=")
                     && value.starts_with('/')
                 {
                     socket_dir = Some(value.to_string());
+                }
+                #[cfg(feature = "tls")]
+                if let Some(value) = param.strip_prefix("sslmode=") {
+                    if let Some(mode) = tls::SslMode::parse(value) {
+                        ssl_mode = mode;
+                    }
                 }
             }
         }
@@ -201,6 +238,8 @@ impl PgConfig {
             password: password.to_string(),
             database: database.to_string(),
             socket_dir,
+            #[cfg(feature = "tls")]
+            ssl_mode,
         })
     }
 }
@@ -304,6 +343,36 @@ impl PgConnection {
             let tcp = TcpStream::connect(&addr).map_err(PgError::Io)?;
             // Disable Nagle's algorithm for lower latency
             let _ = tcp.set_nodelay(true);
+
+            // TLS negotiation (when feature enabled)
+            #[cfg(feature = "tls")]
+            {
+                match config.ssl_mode {
+                    tls::SslMode::Disable => PgStream::Tcp(tcp),
+                    tls::SslMode::Prefer => match tls::negotiate(tcp, &config.host) {
+                        Ok(tls::TlsNegotiateResult::Tls(tls_stream)) => {
+                            PgStream::Tls(tls_stream)
+                        }
+                        Ok(tls::TlsNegotiateResult::Rejected(tcp)) => PgStream::Tcp(tcp),
+                        Err(_) => {
+                            // TLS negotiation failed — reconnect plain-text
+                            let tcp = TcpStream::connect(&addr).map_err(PgError::Io)?;
+                            let _ = tcp.set_nodelay(true);
+                            PgStream::Tcp(tcp)
+                        }
+                    },
+                    tls::SslMode::Require => match tls::negotiate(tcp, &config.host)? {
+                        tls::TlsNegotiateResult::Tls(tls_stream) => PgStream::Tls(tls_stream),
+                        tls::TlsNegotiateResult::Rejected(_) => {
+                            return Err(PgError::Protocol(
+                                "Server does not support SSL (sslmode=require)".to_string(),
+                            ));
+                        }
+                    },
+                }
+            }
+
+            #[cfg(not(feature = "tls"))]
             PgStream::Tcp(tcp)
         };
 
@@ -452,9 +521,22 @@ impl PgConnection {
                                 continue;
                             }
                             Some(AuthType::MD5Password) => {
-                                return Err(PgError::Auth(
-                                    "MD5 auth not fully implemented, use SCRAM-SHA-256".to_string(),
-                                ));
+                                // Salt is 4 bytes following the auth_type int32
+                                if body.len() < 8 {
+                                    return Err(PgError::Protocol(
+                                        "MD5Password message too short".to_string(),
+                                    ));
+                                }
+                                let salt: [u8; 4] = [body[4], body[5], body[6], body[7]];
+                                let hash = crate::auth::md5_password_hash(
+                                    &config.user,
+                                    &config.password,
+                                    &salt,
+                                );
+                                let n = codec::encode_password(&mut self.write_buf, &hash);
+                                self.stream
+                                    .write_all(&self.write_buf[..n])
+                                    .map_err(PgError::Io)?;
                             }
                             _ => {
                                 return Err(PgError::Auth(format!(

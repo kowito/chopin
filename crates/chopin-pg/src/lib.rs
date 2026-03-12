@@ -60,6 +60,8 @@ pub mod pool;
 pub mod protocol;
 pub mod row;
 pub mod statement;
+#[cfg(feature = "tls")]
+pub mod tls;
 pub mod types;
 
 pub use connection::{CopyReader, CopyWriter, Notification, PgConfig, PgConnection, Transaction};
@@ -67,4 +69,6 @@ pub use error::{ErrorClass, PgError, PgResult};
 pub use pool::{ConnectionGuard, PgPool, PgPoolConfig, PoolStats};
 pub use row::Row;
 pub use statement::Statement;
+#[cfg(feature = "tls")]
+pub use tls::SslMode;
 pub use types::{FromSql, PgValue, ToParam, ToSql, encode_inet_binary};

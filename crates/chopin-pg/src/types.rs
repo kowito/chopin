@@ -44,6 +44,13 @@ pub mod oid {
     pub const FLOAT4_ARRAY: u32 = 1021;
     pub const FLOAT8_ARRAY: u32 = 1022;
     pub const VARCHAR_ARRAY: u32 = 1015;
+    pub const UUID_ARRAY: u32 = 2951;
+    pub const JSONB_ARRAY: u32 = 3807;
+    pub const JSON_ARRAY: u32 = 199;
+
+    // Bit string types
+    pub const BIT: u32 = 1560;
+    pub const VARBIT: u32 = 1562;
 
     // Range types
     pub const INT4RANGE: u32 = 3904;
@@ -95,6 +102,10 @@ pub enum PgValue {
         x: f64,
         y: f64,
     },
+    /// MAC address stored as 8 bytes (EUI-64).
+    MacAddr8([u8; 8]),
+    /// Bit string: number of bits + packed bytes.
+    Bit { len: u32, data: Vec<u8> },
     /// Range value (stored as text representation).
     /// Examples: `"[1,10)"`, `"[2024-01-01,2024-12-31]"`, `"empty"`.
     Range(String),
@@ -137,6 +148,27 @@ impl PgValue {
                 .into_bytes(),
             ),
             PgValue::Point { x, y } => Some(format!("({},{})", x, y).into_bytes()),
+            PgValue::MacAddr8(bytes) => Some(
+                format!(
+                    "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    bytes[0], bytes[1], bytes[2], bytes[3],
+                    bytes[4], bytes[5], bytes[6], bytes[7]
+                )
+                .into_bytes(),
+            ),
+            PgValue::Bit { len, data } => {
+                let mut s = String::with_capacity(*len as usize);
+                for i in 0..*len as usize {
+                    let byte_idx = i / 8;
+                    let bit_idx = 7 - (i % 8);
+                    if byte_idx < data.len() && (data[byte_idx] >> bit_idx) & 1 == 1 {
+                        s.push('1');
+                    } else {
+                        s.push('0');
+                    }
+                }
+                Some(s.into_bytes())
+            }
             PgValue::Range(s) => Some(s.as_bytes().to_vec()),
             PgValue::Array(values) => {
                 let inner: Vec<String> = values
@@ -202,6 +234,14 @@ impl PgValue {
                 Some(s.as_bytes().to_vec())
             }
             PgValue::MacAddr(bytes) => Some(bytes.to_vec()),
+            PgValue::MacAddr8(bytes) => Some(bytes.to_vec()),
+            PgValue::Bit { len, data } => {
+                // Binary format: 4-byte bit length (big-endian) + packed bytes
+                let mut buf = Vec::with_capacity(4 + data.len());
+                buf.extend_from_slice(&(*len as i32).to_be_bytes());
+                buf.extend_from_slice(data);
+                Some(buf)
+            }
             PgValue::Point { x, y } => {
                 let mut buf = Vec::with_capacity(16);
                 buf.extend_from_slice(&x.to_be_bytes());
@@ -313,6 +353,24 @@ impl PgValue {
                 // Parse "xx:xx:xx:xx:xx:xx" text format
                 let bytes = parse_macaddr_text(s)?;
                 Ok(PgValue::MacAddr(bytes))
+            }
+            oid::MACADDR8 => {
+                // Parse "xx:xx:xx:xx:xx:xx:xx:xx" text format
+                let bytes = parse_macaddr8_text(s)?;
+                Ok(PgValue::MacAddr8(bytes))
+            }
+            oid::BIT | oid::VARBIT => {
+                // Text format: string of '0' and '1' characters
+                let len = s.len() as u32;
+                let mut data = vec![0u8; (len as usize + 7) / 8];
+                for (i, ch) in s.chars().enumerate() {
+                    if ch == '1' {
+                        let byte_idx = i / 8;
+                        let bit_idx = 7 - (i % 8);
+                        data[byte_idx] |= 1 << bit_idx;
+                    }
+                }
+                Ok(PgValue::Bit { len, data })
             }
             oid::POINT => {
                 // Parse "(x,y)" text format
@@ -461,6 +519,17 @@ impl PgValue {
                 bytes.copy_from_slice(&data[..6]);
                 Ok(PgValue::MacAddr(bytes))
             }
+            oid::MACADDR8 if data.len() >= 8 => {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&data[..8]);
+                Ok(PgValue::MacAddr8(bytes))
+            }
+            oid::BIT | oid::VARBIT if data.len() >= 4 => {
+                // Binary format: 4-byte bit length + packed bytes
+                let bit_len = i32::from_be_bytes([data[0], data[1], data[2], data[3]]) as u32;
+                let packed = data[4..].to_vec();
+                Ok(PgValue::Bit { len: bit_len, data: packed })
+            }
             oid::POINT if data.len() >= 16 => {
                 let x = f64::from_be_bytes([
                     data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
@@ -477,7 +546,10 @@ impl PgValue {
             | oid::FLOAT4_ARRAY
             | oid::FLOAT8_ARRAY
             | oid::TEXT_ARRAY
-            | oid::VARCHAR_ARRAY => parse_binary_array(data),
+            | oid::VARCHAR_ARRAY
+            | oid::UUID_ARRAY
+            | oid::JSONB_ARRAY
+            | oid::JSON_ARRAY => parse_binary_array(data),
             _ => {
                 // Fallback: treat as text
                 Ok(PgValue::Text(String::from_utf8_lossy(data).to_string()))
@@ -1215,6 +1287,33 @@ fn parse_macaddr_text(s: &str) -> PgResult<[u8; 6]> {
     for (i, part) in parts.iter().enumerate() {
         bytes[i] = u8::from_str_radix(part, 16)
             .map_err(|_| PgError::TypeConversion(format!("Invalid MAC address hex: {}", part)))?;
+    }
+    Ok(bytes)
+}
+
+/// Parse a MACADDR8 from text format "xx:xx:xx:xx:xx:xx:xx:xx".
+fn parse_macaddr8_text(s: &str) -> PgResult<[u8; 8]> {
+    let parts: Vec<&str> = if s.contains(':') {
+        s.split(':').collect()
+    } else if s.contains('-') {
+        s.split('-').collect()
+    } else {
+        return Err(PgError::TypeConversion(format!(
+            "Invalid MACADDR8 format: {}",
+            s
+        )));
+    };
+    if parts.len() != 8 {
+        return Err(PgError::TypeConversion(format!(
+            "Invalid MACADDR8: {}",
+            s
+        )));
+    }
+    let mut bytes = [0u8; 8];
+    for (i, part) in parts.iter().enumerate() {
+        bytes[i] = u8::from_str_radix(part, 16).map_err(|_| {
+            PgError::TypeConversion(format!("Invalid MACADDR8 hex: {}", part))
+        })?;
     }
     Ok(bytes)
 }

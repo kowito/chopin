@@ -275,6 +275,129 @@ fn hi(password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32] {
     result
 }
 
+// ─── MD5 Authentication ───────────────────────────────────────
+
+/// Compute the PostgreSQL MD5 password hash.
+///
+/// Format: `"md5" + hex(md5(hex(md5(password + username)) + salt))`
+///
+/// Used for the legacy `AuthenticationMD5Password` (auth type 5) flow.
+pub fn md5_password_hash(user: &str, password: &str, salt: &[u8; 4]) -> String {
+    // Step 1: md5(password + username)
+    let mut inner_input = Vec::with_capacity(password.len() + user.len());
+    inner_input.extend_from_slice(password.as_bytes());
+    inner_input.extend_from_slice(user.as_bytes());
+    let inner_hash = md5(&inner_input);
+    let inner_hex = hex_encode_lower(&inner_hash);
+
+    // Step 2: md5(inner_hex + salt)
+    let mut outer_input = Vec::with_capacity(inner_hex.len() + 4);
+    outer_input.extend_from_slice(inner_hex.as_bytes());
+    outer_input.extend_from_slice(salt);
+    let outer_hash = md5(&outer_input);
+    let outer_hex = hex_encode_lower(&outer_hash);
+
+    // "md5" + 32 hex chars
+    format!("md5{}", outer_hex)
+}
+
+/// Lowercase hex encoding.
+fn hex_encode_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        s.push(HEX[(b >> 4) as usize] as char);
+        s.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    s
+}
+
+/// MD5 hash function (RFC 1321).
+fn md5(data: &[u8]) -> [u8; 16] {
+    let mut a0: u32 = 0x67452301;
+    let mut b0: u32 = 0xefcdab89;
+    let mut c0: u32 = 0x98badcfe;
+    let mut d0: u32 = 0x10325476;
+
+    // Pad the message: append 0x80, then zeros until 56 mod 64, then 8-byte LE length
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0x00);
+    }
+    msg.extend_from_slice(&bit_len.to_le_bytes());
+
+    // Per-round shift amounts
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+        5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+        4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+        6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+
+    // Pre-computed constants: floor(2^32 × |sin(i+1)|)
+    const K: [u32; 64] = [
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee,
+        0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
+        0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa,
+        0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
+        0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05,
+        0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039,
+        0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1,
+        0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+    ];
+
+    for chunk in msg.chunks_exact(64) {
+        let mut m = [0u32; 16];
+        for (i, word) in chunk.chunks_exact(4).enumerate() {
+            m[i] = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+        }
+
+        let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
+
+        for i in 0u32..64 {
+            let (f, g) = match i {
+                0..=15 => ((b & c) | (!b & d), i as usize),
+                16..=31 => ((d & b) | (!d & c), ((5 * i + 1) % 16) as usize),
+                32..=47 => (b ^ c ^ d, ((3 * i + 5) % 16) as usize),
+                _ => (c ^ (b | !d), ((7 * i) % 16) as usize),
+            };
+
+            let temp = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(
+                (a.wrapping_add(f)
+                    .wrapping_add(K[i as usize])
+                    .wrapping_add(m[g]))
+                .rotate_left(S[i as usize]),
+            );
+            a = temp;
+        }
+
+        a0 = a0.wrapping_add(a);
+        b0 = b0.wrapping_add(b);
+        c0 = c0.wrapping_add(c);
+        d0 = d0.wrapping_add(d);
+    }
+
+    let mut result = [0u8; 16];
+    result[0..4].copy_from_slice(&a0.to_le_bytes());
+    result[4..8].copy_from_slice(&b0.to_le_bytes());
+    result[8..12].copy_from_slice(&c0.to_le_bytes());
+    result[12..16].copy_from_slice(&d0.to_le_bytes());
+    result
+}
+
 // ─── Base64 (minimal implementation) ──────────────────────────
 
 const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -719,5 +842,58 @@ mod tests {
         // Missing v= prefix
         let result = client.verify_server_final(b"NOPREFIXHERE");
         assert!(result.is_err(), "Missing v= prefix must return Err");
+    }
+
+    // ─── MD5 Authentication ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_md5_empty() {
+        // RFC 1321 test vector: md5("") = d41d8cd98f00b204e9800998ecf8427e
+        let hash = md5(b"");
+        let hex = hex_encode_lower(&hash);
+        assert_eq!(hex, "d41d8cd98f00b204e9800998ecf8427e");
+    }
+
+    #[test]
+    fn test_md5_abc() {
+        // RFC 1321: md5("abc") = 900150983cd24fb0d6963f7d28e17f72
+        let hash = md5(b"abc");
+        let hex = hex_encode_lower(&hash);
+        assert_eq!(hex, "900150983cd24fb0d6963f7d28e17f72");
+    }
+
+    #[test]
+    fn test_md5_message_digest() {
+        // RFC 1321: md5("message digest") = f96b697d7cb7938d525a2f31aaf161d0
+        let hash = md5(b"message digest");
+        let hex = hex_encode_lower(&hash);
+        assert_eq!(hex, "f96b697d7cb7938d525a2f31aaf161d0");
+    }
+
+    #[test]
+    fn test_md5_alphabet() {
+        // RFC 1321: md5("abcdefghijklmnopqrstuvwxyz") = c3fcd3d76192e4007dfb496cca67e13b
+        let hash = md5(b"abcdefghijklmnopqrstuvwxyz");
+        let hex = hex_encode_lower(&hash);
+        assert_eq!(hex, "c3fcd3d76192e4007dfb496cca67e13b");
+    }
+
+    #[test]
+    fn test_md5_password_hash_known_vector() {
+        // PostgreSQL MD5 format: "md5" + md5(md5(password + user) + salt)
+        // User: "user", Password: "pass", Salt: [0x01, 0x02, 0x03, 0x04]
+        let result = md5_password_hash("user", "pass", &[0x01, 0x02, 0x03, 0x04]);
+        assert!(result.starts_with("md5"), "Must start with 'md5'");
+        assert_eq!(result.len(), 35, "md5 + 32 hex chars");
+        // Verify determinism
+        let result2 = md5_password_hash("user", "pass", &[0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(result, result2);
+    }
+
+    #[test]
+    fn test_md5_password_hash_different_salts_differ() {
+        let r1 = md5_password_hash("user", "pass", &[0x01, 0x02, 0x03, 0x04]);
+        let r2 = md5_password_hash("user", "pass", &[0x05, 0x06, 0x07, 0x08]);
+        assert_ne!(r1, r2, "Different salts must produce different hashes");
     }
 }
