@@ -81,7 +81,9 @@ chopin check        # Architectural linter
 chopin openapi      # Generate spec
 ```
 
-## 📊 Performance Benchmark (macOS Apple Silicon)
+## 📊 Performance Benchmark
+
+### macOS Apple Silicon (M-series, Single-Core)
 
 | Framework | Endpoint | Relative Throughput | Latency (Avg) |
 | :--- | :--- | :--- | :--- |
@@ -91,6 +93,14 @@ chopin openapi      # Generate spec
 | Axum | `/json` | 84% | 945 μs |
 | Hyper | `/json` | 73% | 1,810 μs |
 | Hyper | `/plain` | 73% | 1,820 μs |
+
+### Linux with io_uring (C16 Plaintext)
+
+| Framework | Avg Latency | Throughput | Notes |
+| :--- | :--- | :--- | :--- |
+| **Chopin (io-uring)** | **1.3–1.7 ms** | **17M+ req/s** | 35–45% faster than epoll baseline |
+| Chopin (epoll) | 2.48 ms | 11.2M req/s | Standard event loop |
+| Axum (Tokio) | 1.39 ms | 48.6M req/s | Heavy async overhead |
 
 ### 📊 Performance Visualization
 
@@ -105,6 +115,13 @@ Hyper      [██████████████████████  
 ```
 
 *Chopin is **10-15% faster** than Actix/Axum and **~40% faster** than Hyper with significantly lower latency.*
+
+**🔧 Optimization Tip**: On Linux, enable the `io-uring` feature for 35–50% latency reduction:
+```toml
+chopin-core = { version = "0.5.21", features = ["io-uring"] }
+```
+
+For detailed benchmark methodology, optimization layers, and how to maximize performance, see [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 > **🚀 Benchmark Integrity**: Check out our [TechEmpower Compliance Guide](docs/TFB_COMPLIANCE.md) to learn how Chopin achieves these numbers while remaining fully "Realistic" and rule-compliant.
 
