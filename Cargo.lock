@@ -331,7 +331,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chopin-auth"
-version = "0.5.19"
+version = "0.5.20"
 dependencies = [
  "argon2",
  "chopin-core",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-cli"
-version = "0.5.19"
+version = "0.5.20"
 dependencies = [
  "anyhow",
  "chopin-orm",
@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-core"
-version = "0.5.19"
+version = "0.5.20"
 dependencies = [
  "arrayvec",
  "chopin-macros",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-macros"
-version = "0.5.19"
+version = "0.5.20"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-orm"
-version = "0.5.19"
+version = "0.5.20"
 dependencies = [
  "async-trait",
  "chopin-orm-macro",
@@ -415,7 +415,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-orm-macro"
-version = "0.5.19"
+version = "0.5.20"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -424,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "chopin-pg"
-version = "0.5.19"
+version = "0.5.20"
 dependencies = [
  "chrono",
  "libc",
@@ -1491,9 +1491,9 @@ dependencies = [
 
 [[package]]
 name = "kowito-json"
-version = "0.2.11"
+version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "285cb8993db10310b96455e68eef215be10578abaa6612db75301ed3bf188d6e"
+checksum = "359ea27b5be6df275e22dfda33b6d2bc6e6db9b4ef7d5cf30ab8fd7f9589fefe"
 dependencies = [
  "fxhash",
  "itoa",
@@ -1505,9 +1505,9 @@ dependencies = [
 
 [[package]]
 name = "kowito-json-derive"
-version = "0.2.9"
+version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cc53ecf75cdef8fbab5dbf25efd64c625b31a70b500c327480bda3e9079d172"
+checksum = "37b1f73b2f0c290aba14d170f8e4fa14fb28c3d5294fff013de4b3de67ca6049"
 dependencies = [
  "itoa",
  "proc-macro2",
