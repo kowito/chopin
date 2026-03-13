@@ -54,7 +54,7 @@ Enable with the `io-uring` feature flag. At runtime, Chopin automatically switch
 ```toml
 # Cargo.toml
 [dependencies]
-chopin-core = { path = "crates/chopin-core", features = ["io-uring"] }
+chopin-core = { version = "0.5.21", features = ["io-uring"] }
 ```
 
 Or at build time:

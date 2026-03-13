@@ -23,9 +23,9 @@ Add the crates to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-chopin-core = { path = "crates/chopin-core" }
-chopin-orm  = { path = "crates/chopin-orm" }   # optional — PostgreSQL ORM
-chopin-auth = { path = "crates/chopin-auth" }   # optional — JWT auth
+chopin-core = "0.5.21"
+chopin-orm  = "0.5.21"   # optional — PostgreSQL ORM
+chopin-auth = "0.5.21"   # optional — JWT auth
 ```
 
 ### Minimal server
@@ -386,8 +386,8 @@ router.get("/users", list_users);
 **Cargo.toml:**
 ```toml
 [dependencies]
-chopin-orm = { path = "crates/chopin-orm" }
-chopin-pg  = { path = "crates/chopin-pg" }
+chopin-orm = "0.5.21"
+chopin-pg  = "0.5.21"
 ```
 
 ### Defining a model
@@ -599,7 +599,7 @@ let users = User::find().join_child::<Post>().all(&mut pool)?;
 **Cargo.toml:**
 ```toml
 [dependencies]
-chopin-auth = { path = "crates/chopin-auth" }
+chopin-auth = "0.5.21"
 ```
 
 ### Setup — `JwtManager`
@@ -742,7 +742,7 @@ a derive-macro ORM (`chopin-orm`) that sits on top of it.
 
 ```toml
 [dependencies]
-chopin-pg = { path = "crates/chopin-pg" }
+chopin-pg = "0.5.21"
 ```
 
 #### Connecting
