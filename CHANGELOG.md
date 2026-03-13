@@ -48,6 +48,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `chopin-core` — `Connection-close` header handling; partial-write loop for large responses
 - `chopin-core` — `Content-Length` correctness for `Body::Static` variant
 - `chopin-core` — timer-wheel slot collision under high concurrency
+- `chopin-core` — E0499 borrow checker error in request pipeline: transmute `Request<'_>` to `Request<'static>` to allow second `slab.get_mut()` in response serialization; `ConnectionSlab` uses heap-pinned `Box<[Conn]>` so buffers remain valid across the full event-loop iteration
+- `chopin-core` — undefined `next_state` and out-of-scope variable references in `Body::Raw` handler
+- `chopin-core` — unused import warning on io-uring builds: gate `use crate::syscalls` with `#[cfg(not(io-uring))]`
 - `chopin-pg` — statement cache eviction race under connection reuse
 
 ---
