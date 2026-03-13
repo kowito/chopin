@@ -1508,6 +1508,7 @@ impl Worker {
             };
 
             if let Some(c) = slab.get_mut(idx) {
+                let rl = c.read_len as usize;
                 let mut ctx = crate::http::Context {
                     req,
                     params: [("", ""); crate::http::MAX_PARAMS],
@@ -1591,14 +1592,12 @@ impl Worker {
                     w!(raw_bytes);
                     if overflow {
                         c.write_len = (wstart + pos) as u16;
-                        next_state = ConnState::Writing;
                         break;
                     }
                     c.write_len = (wstart + pos) as u16;
                     c.read_len = (rl - consumed) as u16;
                     if !keep_alive {
                         c.flags &= !crate::conn::CONN_KEEP_ALIVE;
-                        next_state = ConnState::Writing;
                         break;
                     }
                     continue;
