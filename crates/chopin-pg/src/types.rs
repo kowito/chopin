@@ -105,7 +105,10 @@ pub enum PgValue {
     /// MAC address stored as 8 bytes (EUI-64).
     MacAddr8([u8; 8]),
     /// Bit string: number of bits + packed bytes.
-    Bit { len: u32, data: Vec<u8> },
+    Bit {
+        len: u32,
+        data: Vec<u8>,
+    },
     /// Range value (stored as text representation).
     /// Examples: `"[1,10)"`, `"[2024-01-01,2024-12-31]"`, `"empty"`.
     Range(String),
@@ -151,8 +154,7 @@ impl PgValue {
             PgValue::MacAddr8(bytes) => Some(
                 format!(
                     "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                    bytes[0], bytes[1], bytes[2], bytes[3],
-                    bytes[4], bytes[5], bytes[6], bytes[7]
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]
                 )
                 .into_bytes(),
             ),
@@ -528,7 +530,10 @@ impl PgValue {
                 // Binary format: 4-byte bit length + packed bytes
                 let bit_len = i32::from_be_bytes([data[0], data[1], data[2], data[3]]) as u32;
                 let packed = data[4..].to_vec();
-                Ok(PgValue::Bit { len: bit_len, data: packed })
+                Ok(PgValue::Bit {
+                    len: bit_len,
+                    data: packed,
+                })
             }
             oid::POINT if data.len() >= 16 => {
                 let x = f64::from_be_bytes([
@@ -1304,16 +1309,12 @@ fn parse_macaddr8_text(s: &str) -> PgResult<[u8; 8]> {
         )));
     };
     if parts.len() != 8 {
-        return Err(PgError::TypeConversion(format!(
-            "Invalid MACADDR8: {}",
-            s
-        )));
+        return Err(PgError::TypeConversion(format!("Invalid MACADDR8: {}", s)));
     }
     let mut bytes = [0u8; 8];
     for (i, part) in parts.iter().enumerate() {
-        bytes[i] = u8::from_str_radix(part, 16).map_err(|_| {
-            PgError::TypeConversion(format!("Invalid MACADDR8 hex: {}", part))
-        })?;
+        bytes[i] = u8::from_str_radix(part, 16)
+            .map_err(|_| PgError::TypeConversion(format!("Invalid MACADDR8 hex: {}", part)))?;
     }
     Ok(bytes)
 }
@@ -1960,12 +1961,7 @@ impl TypeRegistry {
     }
 
     /// Register custom encode and decode functions for a given OID.
-    pub fn register(
-        &mut self,
-        type_oid: u32,
-        encoder: CustomEncoder,
-        decoder: CustomDecoder,
-    ) {
+    pub fn register(&mut self, type_oid: u32, encoder: CustomEncoder, decoder: CustomDecoder) {
         self.encoders.insert(type_oid, encoder);
         self.decoders.insert(type_oid, decoder);
     }
@@ -2013,11 +2009,9 @@ impl TypeRegistry {
             Ok(PgValue::Text(text.to_string()))
         });
 
-        let encoder: CustomEncoder = Box::new(|value: &PgValue| {
-            match value {
-                PgValue::Text(s) => Some(s.as_bytes().to_vec()),
-                _ => None,
-            }
+        let encoder: CustomEncoder = Box::new(|value: &PgValue| match value {
+            PgValue::Text(s) => Some(s.as_bytes().to_vec()),
+            _ => None,
         });
 
         self.register(type_oid, encoder, decoder);
@@ -2081,8 +2075,10 @@ impl TypeRegistry {
                             PgValue::Null => {} // empty field
                             PgValue::Text(s) => out.push_str(s),
                             other => {
-                                if let Some(bytes) = other.to_text_bytes().and_then(|b| std::str::from_utf8(&b).ok()) {
-                                    out.push_str(bytes);
+                                if let Some(bytes) = other.to_text_bytes() {
+                                    if let Ok(s) = std::str::from_utf8(&bytes) {
+                                        out.push_str(s);
+                                    }
                                 }
                             }
                         }
@@ -3083,9 +3079,13 @@ mod tests {
         let oid = 99999;
         registry.register(
             oid,
-            Box::new(|v| match v { PgValue::Text(s) => Some(s.as_bytes().to_vec()), _ => None }),
+            Box::new(|v| match v {
+                PgValue::Text(s) => Some(s.as_bytes().to_vec()),
+                _ => None,
+            }),
             Box::new(|data| {
-                let s = std::str::from_utf8(data).map_err(|_| PgError::Protocol("bad utf8".into()))?;
+                let s =
+                    std::str::from_utf8(data).map_err(|_| PgError::Protocol("bad utf8".into()))?;
                 Ok(PgValue::Text(s.to_uppercase()))
             }),
         );
@@ -3093,7 +3093,9 @@ mod tests {
         let decoded = registry.decode(oid, b"hello").unwrap().unwrap();
         assert_eq!(decoded, PgValue::Text("HELLO".to_string()));
 
-        let encoded = registry.encode(oid, &PgValue::Text("world".to_string())).unwrap();
+        let encoded = registry
+            .encode(oid, &PgValue::Text("world".to_string()))
+            .unwrap();
         assert_eq!(encoded, Some(b"world".to_vec()));
     }
 
@@ -3127,7 +3129,9 @@ mod tests {
     fn test_register_enum_encode() {
         let mut registry = TypeRegistry::new();
         registry.register_enum(50001, &["active", "inactive"]);
-        let encoded = registry.encode(50001, &PgValue::Text("active".to_string())).unwrap();
+        let encoded = registry
+            .encode(50001, &PgValue::Text("active".to_string()))
+            .unwrap();
         assert_eq!(encoded, Some(b"active".to_vec()));
     }
 
