@@ -261,8 +261,23 @@ mod tests {
 
     #[test]
     fn test_parse_too_large_content_length() {
-        // Content-Length exceeds MAX_REQUEST_SIZE → TooLarge
+        // Content-Length exceeds MAX_REQUEST_SIZE but body is missing.
+        // Parser should wait for body bytes first.
         let mut req = b"POST / HTTP/1.1\r\nContent-Length: 2000000\r\n\r\n".to_vec();
+        assert!(matches!(parse_request(&mut req), Err(ParseError::Incomplete)));
+    }
+
+    #[test]
+    fn test_parse_too_large_content_length_with_complete_body() {
+        // Once full body bytes are present, oversized requests are rejected.
+        let body = vec![b'a'; MAX_REQUEST_SIZE + 1];
+        let mut req = format!(
+            "POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        req.extend_from_slice(&body);
+
         assert!(matches!(parse_request(&mut req), Err(ParseError::TooLarge)));
     }
 
