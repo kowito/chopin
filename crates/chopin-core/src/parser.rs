@@ -260,10 +260,7 @@ mod tests {
     fn test_parse_too_large_content_length() {
         // Content-Length exceeds MAX_REQUEST_SIZE → TooLarge
         let mut req = b"POST / HTTP/1.1\r\nContent-Length: 2000000\r\n\r\n".to_vec();
-        assert!(matches!(
-            parse_request(&mut req),
-            Err(ParseError::TooLarge)
-        ));
+        assert!(matches!(parse_request(&mut req), Err(ParseError::TooLarge)));
     }
 
     #[test]

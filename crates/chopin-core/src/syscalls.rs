@@ -1022,10 +1022,10 @@ pub mod uring {
         pub flags: u8,
         pub ioprio: u16,
         pub fd: i32,
-        pub off_or_addr2: u64,  // union: off, addr2
+        pub off_or_addr2: u64,   // union: off, addr2
         pub addr_or_splice: u64, // union: addr, splice_off_in
         pub len: u32,
-        pub op_flags: u32,      // union: rw_flags, fsync_flags, poll_events, etc.
+        pub op_flags: u32, // union: rw_flags, fsync_flags, poll_events, etc.
         pub user_data: u64,
         pub buf_index_or_group: u16, // union: buf_index, buf_group
         pub personality: u16,
@@ -1142,8 +1142,8 @@ pub mod uring {
             let cq_entries = params.cq_entries;
 
             // mmap SQ ring
-            let sq_ring_size = params.sq_off.array as usize
-                + (sq_entries as usize) * std::mem::size_of::<u32>();
+            let sq_ring_size =
+                params.sq_off.array as usize + (sq_entries as usize) * std::mem::size_of::<u32>();
             let sq_ring_ptr = unsafe {
                 libc::mmap(
                     ptr::null_mut(),
@@ -1155,7 +1155,9 @@ pub mod uring {
                 ) as *mut u8
             };
             if sq_ring_ptr == libc::MAP_FAILED as *mut u8 {
-                unsafe { libc::close(ring_fd); }
+                unsafe {
+                    libc::close(ring_fd);
+                }
                 return Err(io::Error::last_os_error());
             }
 
@@ -1202,17 +1204,24 @@ pub mod uring {
             }
 
             // Extract ring pointers from offsets
-            let sq_head = unsafe { sq_ring_ptr.add(params.sq_off.head as usize) as *const AtomicU32 };
+            let sq_head =
+                unsafe { sq_ring_ptr.add(params.sq_off.head as usize) as *const AtomicU32 };
             let sq_tail = unsafe { sq_ring_ptr.add(params.sq_off.tail as usize) as *mut AtomicU32 };
-            let sq_mask_val = unsafe { *(sq_ring_ptr.add(params.sq_off.ring_mask as usize) as *const u32) };
-            let sq_flags = unsafe { sq_ring_ptr.add(params.sq_off.flags as usize) as *const AtomicU32 };
+            let sq_mask_val =
+                unsafe { *(sq_ring_ptr.add(params.sq_off.ring_mask as usize) as *const u32) };
+            let sq_flags =
+                unsafe { sq_ring_ptr.add(params.sq_off.flags as usize) as *const AtomicU32 };
             let sq_array = unsafe { sq_ring_ptr.add(params.sq_off.array as usize) as *mut u32 };
 
             let cq_head = unsafe { cq_ring_ptr.add(params.cq_off.head as usize) as *mut AtomicU32 };
-            let cq_tail = unsafe { cq_ring_ptr.add(params.cq_off.tail as usize) as *const AtomicU32 };
-            let cq_mask_val = unsafe { *(cq_ring_ptr.add(params.cq_off.ring_mask as usize) as *const u32) };
-            let cq_cqes = unsafe { cq_ring_ptr.add(params.cq_off.cqes as usize) as *const io_uring_cqe };
-            let cq_overflow = unsafe { cq_ring_ptr.add(params.cq_off.overflow as usize) as *const AtomicU32 };
+            let cq_tail =
+                unsafe { cq_ring_ptr.add(params.cq_off.tail as usize) as *const AtomicU32 };
+            let cq_mask_val =
+                unsafe { *(cq_ring_ptr.add(params.cq_off.ring_mask as usize) as *const u32) };
+            let cq_cqes =
+                unsafe { cq_ring_ptr.add(params.cq_off.cqes as usize) as *const io_uring_cqe };
+            let cq_overflow =
+                unsafe { cq_ring_ptr.add(params.cq_off.overflow as usize) as *const AtomicU32 };
 
             Ok(Self {
                 ring_fd,
@@ -1249,12 +1258,18 @@ pub mod uring {
 
             let idx = tail & self.sq_mask;
             // Write the SQE index into the SQ array
-            unsafe { *self.sq_array.add(idx as usize) = idx; }
+            unsafe {
+                *self.sq_array.add(idx as usize) = idx;
+            }
             let sqe = unsafe { &mut *self.sqes_ptr.add(idx as usize) };
             // Zero-init the SQE
-            unsafe { ptr::write_bytes(sqe as *mut io_uring_sqe, 0, 1); }
+            unsafe {
+                ptr::write_bytes(sqe as *mut io_uring_sqe, 0, 1);
+            }
             // Advance SQ tail
-            unsafe { (*self.sq_tail).store(next, Ordering::Release); }
+            unsafe {
+                (*self.sq_tail).store(next, Ordering::Release);
+            }
             Some(sqe)
         }
 
@@ -1290,10 +1305,10 @@ pub mod uring {
                     SYS_IO_URING_ENTER,
                     self.ring_fd,
                     to_submit,
-                    0u32,          // min_complete
+                    0u32, // min_complete
                     enter_flags,
                     ptr::null::<c_void>(),
-                    0usize,        // sigset size
+                    0usize, // sigset size
                 ) as c_int
             };
             if ret < 0 {
@@ -1442,8 +1457,13 @@ pub mod uring {
     /// `buf_index` is the index into the array passed to `register_buffers()`.
     #[inline(always)]
     pub fn prep_read_fixed(
-        sqe: &mut io_uring_sqe, fd: i32, buf_ptr: *mut u8, len: u32,
-        offset: u64, buf_index: u16, user_data: u64,
+        sqe: &mut io_uring_sqe,
+        fd: i32,
+        buf_ptr: *mut u8,
+        len: u32,
+        offset: u64,
+        buf_index: u16,
+        user_data: u64,
     ) {
         sqe.opcode = IORING_OP_READ_FIXED;
         sqe.fd = fd;
@@ -1456,7 +1476,13 @@ pub mod uring {
 
     /// Prepare a write SQE.
     #[inline(always)]
-    pub fn prep_write(sqe: &mut io_uring_sqe, fd: i32, buf_ptr: *const u8, len: u32, user_data: u64) {
+    pub fn prep_write(
+        sqe: &mut io_uring_sqe,
+        fd: i32,
+        buf_ptr: *const u8,
+        len: u32,
+        user_data: u64,
+    ) {
         sqe.opcode = IORING_OP_WRITE;
         sqe.fd = fd;
         sqe.addr_or_splice = buf_ptr as u64;
@@ -1467,8 +1493,13 @@ pub mod uring {
     /// Prepare a write from a pre-registered buffer (A.4: fixed buffers).
     #[inline(always)]
     pub fn prep_write_fixed(
-        sqe: &mut io_uring_sqe, fd: i32, buf_ptr: *const u8, len: u32,
-        offset: u64, buf_index: u16, user_data: u64,
+        sqe: &mut io_uring_sqe,
+        fd: i32,
+        buf_ptr: *const u8,
+        len: u32,
+        offset: u64,
+        buf_index: u16,
+        user_data: u64,
     ) {
         sqe.opcode = IORING_OP_WRITE_FIXED;
         sqe.fd = fd;

@@ -168,11 +168,7 @@ pub enum Body {
     Stream(Box<dyn Iterator<Item = Vec<u8>> + Send>),
     /// Zero-copy file body — served via `sendfile()` entirely in kernel space.
     /// The fd is owned and will be closed when the response is consumed or dropped.
-    File {
-        fd: OwnedFd,
-        offset: u64,
-        len: u64,
-    },
+    File { fd: OwnedFd, offset: u64, len: u64 },
 }
 
 impl Body {
@@ -418,8 +414,8 @@ impl Response {
     /// Adds `Content-Encoding: gzip` and `Vary: Accept-Encoding` headers.
     #[cfg(feature = "compression")]
     pub fn gzip(mut self) -> Self {
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         use std::io::Write;
 
         let raw = match &self.body {

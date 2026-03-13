@@ -58,8 +58,10 @@ impl Chopin {
 
     /// Enable the built-in OpenAPI documentation at `/openapi.json` and `/docs`.
     pub fn with_openapi(mut self) -> Self {
-        self.router.get("/openapi.json", crate::openapi::openapi_json_handler);
-        self.router.get("/docs", crate::openapi::scalar_docs_handler);
+        self.router
+            .get("/openapi.json", crate::openapi::openapi_json_handler);
+        self.router
+            .get("/docs", crate::openapi::scalar_docs_handler);
         self
     }
 

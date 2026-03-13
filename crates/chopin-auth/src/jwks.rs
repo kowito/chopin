@@ -92,22 +92,26 @@ fn parse_jwk(jwk: &Jwk) -> Result<ParsedKey, AuthError> {
 
     let decoding_key = match jwk.kty.as_str() {
         "RSA" => {
-            let n = jwk.n.as_deref().ok_or_else(|| {
-                AuthError::Internal("RSA JWK missing 'n' parameter".into())
-            })?;
-            let e = jwk.e.as_deref().ok_or_else(|| {
-                AuthError::Internal("RSA JWK missing 'e' parameter".into())
-            })?;
+            let n = jwk
+                .n
+                .as_deref()
+                .ok_or_else(|| AuthError::Internal("RSA JWK missing 'n' parameter".into()))?;
+            let e = jwk
+                .e
+                .as_deref()
+                .ok_or_else(|| AuthError::Internal("RSA JWK missing 'e' parameter".into()))?;
             DecodingKey::from_rsa_components(n, e)
                 .map_err(|err| AuthError::Internal(format!("RSA JWK parse error: {err}")))?
         }
         "EC" => {
-            let x = jwk.x.as_deref().ok_or_else(|| {
-                AuthError::Internal("EC JWK missing 'x' parameter".into())
-            })?;
-            let y = jwk.y.as_deref().ok_or_else(|| {
-                AuthError::Internal("EC JWK missing 'y' parameter".into())
-            })?;
+            let x = jwk
+                .x
+                .as_deref()
+                .ok_or_else(|| AuthError::Internal("EC JWK missing 'x' parameter".into()))?;
+            let y = jwk
+                .y
+                .as_deref()
+                .ok_or_else(|| AuthError::Internal("EC JWK missing 'y' parameter".into()))?;
             DecodingKey::from_ec_components(x, y)
                 .map_err(|err| AuthError::Internal(format!("EC JWK parse error: {err}")))?
         }
@@ -231,10 +235,9 @@ impl JwksProvider {
                 .get(kid.as_str())
                 .ok_or_else(|| AuthError::InvalidToken(format!("unknown kid: {kid}")))?
         } else {
-            guard
-                .default_key
-                .as_ref()
-                .ok_or(AuthError::InvalidToken("no kid in token and no default key".into()))?
+            guard.default_key.as_ref().ok_or(AuthError::InvalidToken(
+                "no kid in token and no default key".into(),
+            ))?
         };
 
         let mut validation = Validation::new(*alg);
@@ -452,14 +455,8 @@ mod tests {
     #[test]
     fn test_base64url_decode() {
         // Standard base64url decoding
-        assert_eq!(
-            base64url_decode("SGVsbG8").unwrap(),
-            b"Hello"
-        );
-        assert_eq!(
-            base64url_decode("SGVsbG8gV29ybGQ").unwrap(),
-            b"Hello World"
-        );
+        assert_eq!(base64url_decode("SGVsbG8").unwrap(), b"Hello");
+        assert_eq!(base64url_decode("SGVsbG8gV29ybGQ").unwrap(), b"Hello World");
     }
 
     #[test]

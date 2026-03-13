@@ -193,7 +193,12 @@ pub fn decode_frame(buf: &[u8]) -> Result<(WsFrame, usize), WsError> {
         if buf.len() < offset + 4 {
             return Err(WsError::Incomplete);
         }
-        let key = [buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]];
+        let key = [
+            buf[offset],
+            buf[offset + 1],
+            buf[offset + 2],
+            buf[offset + 3],
+        ];
         offset += 4;
         Some(key)
     } else {
@@ -589,10 +594,7 @@ mod tests {
     fn test_decode_reserved_bits() {
         // RSV1 set without extension negotiation
         let frame = [0xC1, 0x00]; // FIN + RSV1 + TEXT, len=0
-        assert!(matches!(
-            decode_frame(&frame),
-            Err(WsError::Protocol(_))
-        ));
+        assert!(matches!(decode_frame(&frame), Err(WsError::Protocol(_))));
     }
 
     #[test]

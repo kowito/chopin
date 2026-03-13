@@ -64,11 +64,7 @@ impl<M> Condition<M> {
     /// DSL methods in `ColumnTrait` are safe, using `Condition::Raw` with unsanitized
     /// user input in the clause string can lead to SQL injection. Always use `{}`
     /// for values and pass them via the `params` vector.
-    fn resolve<'a>(
-        &'a self,
-        param_idx: &mut usize,
-        params_out: &mut Vec<&'a PgValue>,
-    ) -> String {
+    fn resolve<'a>(&'a self, param_idx: &mut usize, params_out: &mut Vec<&'a PgValue>) -> String {
         match self {
             Condition::Raw(clause, params, _) => {
                 let mut resolved = String::with_capacity(clause.len());
@@ -306,12 +302,16 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
         let join_on = mappings
             .iter()
             .map(|(child_col, parent_col)| {
-                format!("{}.{} = {}.{}", other_table, child_col, my_table, parent_col)
+                format!(
+                    "{}.{} = {}.{}",
+                    other_table, child_col, my_table, parent_col
+                )
             })
             .collect::<Vec<_>>()
             .join(" AND ");
 
-        self.joins.push(format!("JOIN {} ON {}", other_table, join_on));
+        self.joins
+            .push(format!("JOIN {} ON {}", other_table, join_on));
         self
     }
 
@@ -326,12 +326,16 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
         let join_on = mappings
             .iter()
             .map(|(local_col, parent_col)| {
-                format!("{}.{} = {}.{}", other_table, parent_col, my_table, local_col)
+                format!(
+                    "{}.{} = {}.{}",
+                    other_table, parent_col, my_table, local_col
+                )
             })
             .collect::<Vec<_>>()
             .join(" AND ");
 
-        self.joins.push(format!("JOIN {} ON {}", other_table, join_on));
+        self.joins
+            .push(format!("JOIN {} ON {}", other_table, join_on));
         self
     }
 

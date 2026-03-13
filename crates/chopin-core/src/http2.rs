@@ -112,8 +112,10 @@ impl FrameHeader {
         let length = ((buf[0] as u32) << 16) | ((buf[1] as u32) << 8) | (buf[2] as u32);
         let frame_type = buf[3];
         let flags = buf[4];
-        let stream_id =
-            ((buf[5] as u32) << 24) | ((buf[6] as u32) << 16) | ((buf[7] as u32) << 8) | (buf[8] as u32);
+        let stream_id = ((buf[5] as u32) << 24)
+            | ((buf[6] as u32) << 16)
+            | ((buf[7] as u32) << 8)
+            | (buf[8] as u32);
         // Clear the reserved bit (R)
         let stream_id = stream_id & 0x7FFF_FFFF;
 
@@ -230,7 +232,9 @@ impl Settings {
     /// Each setting is a 16-bit identifier + 32-bit value (6 bytes).
     pub fn from_payload(payload: &[u8]) -> Result<Self, H2Error> {
         if !payload.len().is_multiple_of(6) {
-            return Err(H2Error::ProtocolError("SETTINGS payload must be multiple of 6 bytes"));
+            return Err(H2Error::ProtocolError(
+                "SETTINGS payload must be multiple of 6 bytes",
+            ));
         }
 
         let mut s = Self::default();
@@ -350,9 +354,7 @@ mod tests {
     #[test]
     fn test_is_h2_preface() {
         assert!(is_h2_preface(CONNECTION_PREFACE));
-        assert!(is_h2_preface(
-            b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\nextra data"
-        ));
+        assert!(is_h2_preface(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\nextra data"));
         assert!(!is_h2_preface(b"GET / HTTP/1.1\r\n"));
         assert!(!is_h2_preface(b"PRI *"));
     }

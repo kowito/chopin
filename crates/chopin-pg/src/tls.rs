@@ -92,10 +92,7 @@ pub(crate) fn negotiate(mut tcp: TcpStream, host: &str) -> PgResult<TlsNegotiate
     let tls_conn = ClientConnection::new(Arc::new(config), server_name)
         .map_err(|e| PgError::Protocol(format!("TLS connection init failed: {}", e)))?;
 
-    let mut stream = TlsStream {
-        tcp,
-        tls: tls_conn,
-    };
+    let mut stream = TlsStream { tcp, tls: tls_conn };
 
     // Complete the TLS handshake (blocking)
     stream.complete_handshake()?;
@@ -121,17 +118,12 @@ impl TlsStream {
         while self.tls.is_handshaking() {
             // Write pending TLS data to socket
             while self.tls.wants_write() {
-                self.tls
-                    .write_tls(&mut self.tcp)
-                    .map_err(PgError::Io)?;
+                self.tls.write_tls(&mut self.tcp).map_err(PgError::Io)?;
             }
 
             // Read more TLS data if handshake needs it
             if self.tls.is_handshaking() {
-                let n = self
-                    .tls
-                    .read_tls(&mut self.tcp)
-                    .map_err(PgError::Io)?;
+                let n = self.tls.read_tls(&mut self.tcp).map_err(PgError::Io)?;
                 if n == 0 {
                     return Err(PgError::ConnectionClosed);
                 }
@@ -143,9 +135,7 @@ impl TlsStream {
 
         // Flush any remaining TLS data
         while self.tls.wants_write() {
-            self.tls
-                .write_tls(&mut self.tcp)
-                .map_err(PgError::Io)?;
+            self.tls.write_tls(&mut self.tcp).map_err(PgError::Io)?;
         }
 
         Ok(())

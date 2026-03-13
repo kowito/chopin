@@ -1,27 +1,22 @@
 // src/worker.rs — unified worker: epoll/kqueue (default) + io_uring (Linux, feature = "io-uring")
 
-use crate::conn::ConnState;
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
-use crate::conn as conn;
+use crate::conn;
+use crate::conn::ConnState;
 use crate::error::{ChopinError, ChopinResult};
 use crate::http_date::format_http_date;
 use crate::slab::ConnectionSlab;
 use crate::syscalls;
-#[cfg(not(all(target_os = "linux", feature = "io-uring")))]
-use crate::syscalls::{EPOLLIN, EPOLLOUT, Epoll, epoll_event};
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 #[allow(unused_imports)]
 use crate::syscalls::uring::{
-    UringRing, io_uring_cqe,
-    IORING_CQE_F_MORE, IORING_SETUP_COOP_TASKRUN, IORING_SETUP_SINGLE_ISSUER,
-    IORING_SETUP_SQPOLL,
-    OP_TYPE_ACCEPT, OP_TYPE_CLOSE, OP_TYPE_READ, OP_TYPE_WRITE, OP_TYPE_WRITEV,
-    OP_TYPE_SPLICE,
-    ACCEPT_CONN_IDX,
-    encode_user_data, decode_user_data,
-    prep_accept_multishot, prep_close, prep_read, prep_write, prep_writev,
-    prep_splice,
+    ACCEPT_CONN_IDX, IORING_CQE_F_MORE, IORING_SETUP_COOP_TASKRUN, IORING_SETUP_SINGLE_ISSUER,
+    IORING_SETUP_SQPOLL, OP_TYPE_ACCEPT, OP_TYPE_CLOSE, OP_TYPE_READ, OP_TYPE_SPLICE,
+    OP_TYPE_WRITE, OP_TYPE_WRITEV, UringRing, decode_user_data, encode_user_data, io_uring_cqe,
+    prep_accept_multishot, prep_close, prep_read, prep_splice, prep_write, prep_writev,
 };
+#[cfg(not(all(target_os = "linux", feature = "io-uring")))]
+use crate::syscalls::{EPOLLIN, EPOLLOUT, Epoll, epoll_event};
 use crate::timer::TimerWheel;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -696,7 +691,8 @@ impl Worker {
                                             let wstart = conn.write_len as usize;
                                             let end = wstart + err_413.len();
                                             if end <= crate::conn::WRITE_BUF_SIZE {
-                                                conn.write_buf[wstart..end].copy_from_slice(err_413);
+                                                conn.write_buf[wstart..end]
+                                                    .copy_from_slice(err_413);
                                                 conn.write_len = end as u16;
                                             }
                                             conn.flags &= !crate::conn::CONN_KEEP_ALIVE;
@@ -1082,12 +1078,7 @@ impl Worker {
     /// Free slob slot and submit async close SQE.
     #[cfg(all(target_os = "linux", feature = "io-uring"))]
     #[inline]
-    fn close_connection(
-        &self,
-        ring: &mut UringRing,
-        slab: &mut ConnectionSlab,
-        idx: usize,
-    ) {
+    fn close_connection(&self, ring: &mut UringRing, slab: &mut ConnectionSlab, idx: usize) {
         if let Some(conn) = slab.get_mut(idx) {
             conn.close_sendfile();
             conn.body_clear();
@@ -1116,7 +1107,15 @@ impl Worker {
                 self.handle_accept(ring, slab, timer_wheel, cqe, now, is_shutting_down)?;
             }
             OP_TYPE_READ => {
-                self.handle_read(ring, slab, timer_wheel, conn_idx, cqe, now, is_shutting_down)?;
+                self.handle_read(
+                    ring,
+                    slab,
+                    timer_wheel,
+                    conn_idx,
+                    cqe,
+                    now,
+                    is_shutting_down,
+                )?;
             }
             OP_TYPE_WRITE | OP_TYPE_WRITEV => {
                 self.handle_write(ring, slab, conn_idx, cqe, now, is_shutting_down)?;
@@ -1155,12 +1154,16 @@ impl Worker {
             libc::fcntl(client_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
             let one: libc::c_int = 1;
             libc::setsockopt(
-                client_fd, libc::IPPROTO_TCP, libc::TCP_NODELAY,
+                client_fd,
+                libc::IPPROTO_TCP,
+                libc::TCP_NODELAY,
                 &one as *const _ as *const libc::c_void,
                 std::mem::size_of_val(&one) as libc::socklen_t,
             );
             libc::setsockopt(
-                client_fd, libc::IPPROTO_TCP, libc::TCP_QUICKACK,
+                client_fd,
+                libc::IPPROTO_TCP,
+                libc::TCP_QUICKACK,
                 &one as *const _ as *const libc::c_void,
                 std::mem::size_of_val(&one) as libc::socklen_t,
             );
@@ -1333,7 +1336,15 @@ impl Worker {
                 let ud = encode_user_data(idx, OP_TYPE_SPLICE);
                 c.pending_op = OP_TYPE_SPLICE;
                 if let Some(sqe) = ring.get_sqe() {
-                    prep_splice(sqe, c.sendfile_fd, c.sendfile_offset as i64, c.fd, -1, chunk, ud);
+                    prep_splice(
+                        sqe,
+                        c.sendfile_fd,
+                        c.sendfile_offset as i64,
+                        c.fd,
+                        -1,
+                        chunk,
+                        ud,
+                    );
                 }
                 return Ok(());
             }
@@ -1365,7 +1376,14 @@ impl Worker {
                         .duration_since(UNIX_EPOCH)
                         .map_err(|_| ChopinError::ClockError)?
                         .as_secs() as u32;
-                    self.pipeline_and_write(ring, slab, &mut TimerWheel::new(now), idx, now, is_shutting_down)?;
+                    self.pipeline_and_write(
+                        ring,
+                        slab,
+                        &mut TimerWheel::new(now),
+                        idx,
+                        now,
+                        is_shutting_down,
+                    )?;
                 } else {
                     c.state = ConnState::Reading;
                     drop(c);
@@ -1407,7 +1425,9 @@ impl Worker {
             } else {
                 return Ok(());
             };
-            if should_flush { break; }
+            if should_flush {
+                break;
+            }
 
             // Parse a request
             let parse_result = if let Some(c) = slab.get_mut(idx) {
@@ -1425,7 +1445,8 @@ impl Worker {
                                 if let Some(c) = slab.get_mut(idx) {
                                     let remaining = c.read_len as usize;
                                     if remaining > 0 {
-                                        c.read_buf.copy_within(read_offset..read_offset + remaining, 0);
+                                        c.read_buf
+                                            .copy_within(read_offset..read_offset + remaining, 0);
                                     }
                                 }
                             }
@@ -1456,7 +1477,9 @@ impl Worker {
                 return Ok(());
             };
 
-            let Some((req, consumed)) = parse_result else { break; };
+            let Some((req, consumed)) = parse_result else {
+                break;
+            };
 
             if let Some(c) = slab.get_mut(idx) {
                 let mut ctx = crate::http::Context {
@@ -1494,18 +1517,24 @@ impl Worker {
                         ctx.param_count = param_count;
                         let handler_ptr = *handler;
                         #[cfg(feature = "catch-panic")]
-                        let result = std::panic::catch_unwind(
-                            std::panic::AssertUnwindSafe(|| {
-                                if let Some(co) = composed { (**co)(ctx) } else { handler_ptr(ctx) }
-                            }),
-                        );
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            if let Some(co) = composed {
+                                (**co)(ctx)
+                            } else {
+                                handler_ptr(ctx)
+                            }
+                        }));
                         #[cfg(feature = "catch-panic")]
                         let response = match result {
                             Ok(r) => r,
                             Err(_) => crate::http::Response::server_error(),
                         };
                         #[cfg(not(feature = "catch-panic"))]
-                        let response = if let Some(co) = composed { (**co)(ctx) } else { handler_ptr(ctx) };
+                        let response = if let Some(co) = composed {
+                            (**co)(ctx)
+                        } else {
+                            handler_ptr(ctx)
+                        };
                         response
                     }
                     None => crate::http::Response::not_found(),
@@ -1533,10 +1562,22 @@ impl Worker {
 
                 let ct_written = if response.status == 200 {
                     match response.content_type {
-                        "application/json" => { w!(FAST_200_JSON); true }
-                        "text/plain"       => { w!(FAST_200_TEXT); true }
-                        "text/html; charset=utf-8" => { w!(FAST_200_HTML); true }
-                        _ => { w!(STATUS_200_PREFIX); false }
+                        "application/json" => {
+                            w!(FAST_200_JSON);
+                            true
+                        }
+                        "text/plain" => {
+                            w!(FAST_200_TEXT);
+                            true
+                        }
+                        "text/html; charset=utf-8" => {
+                            w!(FAST_200_HTML);
+                            true
+                        }
+                        _ => {
+                            w!(STATUS_200_PREFIX);
+                            false
+                        }
                     }
                 } else {
                     let mut sl_buf = [0u8; 40];
@@ -1556,9 +1597,13 @@ impl Worker {
 
                 if !ct_written {
                     match response.content_type {
-                        "text/plain"       => w!(CT_TEXT_PLAIN),
+                        "text/plain" => w!(CT_TEXT_PLAIN),
                         "application/json" => w!(CT_APP_JSON),
-                        ct => { w!(b"Content-Type: "); w!(ct.as_bytes()); w!(b"\r\n"); }
+                        ct => {
+                            w!(b"Content-Type: ");
+                            w!(ct.as_bytes());
+                            w!(b"\r\n");
+                        }
                     }
                 }
 
@@ -1571,10 +1616,16 @@ impl Worker {
                     let mut itoa_buf = [0u8; 10];
                     let itoa_len = {
                         let mut n = body_len;
-                        if n == 0 { itoa_buf[0] = b'0'; 1 }
-                        else {
+                        if n == 0 {
+                            itoa_buf[0] = b'0';
+                            1
+                        } else {
                             let mut i = 0;
-                            while n > 0 { itoa_buf[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
+                            while n > 0 {
+                                itoa_buf[i] = b'0' + (n % 10) as u8;
+                                n /= 10;
+                                i += 1;
+                            }
                             itoa_buf[..i].reverse();
                             i
                         }
@@ -1583,12 +1634,17 @@ impl Worker {
                     w!(b"\r\n");
                 }
 
-                if keep_alive { w!(b"Connection: keep-alive\r\n"); }
-                else          { w!(b"Connection: close\r\n"); }
+                if keep_alive {
+                    w!(b"Connection: keep-alive\r\n");
+                } else {
+                    w!(b"Connection: close\r\n");
+                }
 
                 for header in response.headers.iter() {
-                    w!(header.name.as_bytes()); w!(b": ");
-                    w!(header.value.as_str().as_bytes()); w!(b"\r\n");
+                    w!(header.name.as_bytes());
+                    w!(b": ");
+                    w!(header.value.as_str().as_bytes());
+                    w!(b"\r\n");
                 }
                 w!(b"\r\n");
 
@@ -1599,7 +1655,9 @@ impl Worker {
                             if wstart == 0 && pos + b.len() <= conn::WRITE_BUF_SIZE {
                                 c.body_ptr = b.as_ptr() as usize;
                                 c.body_total = b.len() as u32;
-                            } else { w!(b); }
+                            } else {
+                                w!(b);
+                            }
                         }
                         crate::http::Body::Bytes(b) => {
                             if wstart == 0 && pos + b.len() <= conn::WRITE_BUF_SIZE {
@@ -1607,7 +1665,9 @@ impl Worker {
                                 c.body_ptr = boxed.as_ptr() as usize;
                                 c.body_total = boxed.len() as u32;
                                 c.body_owned = Some(boxed);
-                            } else { w!(b.as_slice()); }
+                            } else {
+                                w!(b.as_slice());
+                            }
                         }
                         crate::http::Body::Stream(mut iter) => {
                             for chunk in iter.by_ref() {
@@ -1615,23 +1675,33 @@ impl Worker {
                                     let mut n = chunk.len();
                                     let mut hex_buf = [0u8; 8];
                                     let mut i = 0;
-                                    if n == 0 { hex_buf[0] = b'0'; i = 1; }
-                                    else {
+                                    if n == 0 {
+                                        hex_buf[0] = b'0';
+                                        i = 1;
+                                    } else {
                                         while n > 0 {
                                             let d = (n % 16) as u8;
-                                            hex_buf[i] = if d < 10 { b'0' + d } else { b'A' + d - 10 };
-                                            n /= 16; i += 1;
+                                            hex_buf[i] =
+                                                if d < 10 { b'0' + d } else { b'A' + d - 10 };
+                                            n /= 16;
+                                            i += 1;
                                         }
                                         hex_buf[..i].reverse();
                                     }
                                     (hex_buf, i)
                                 };
-                                w!(&hex_len.0[..hex_len.1]); w!(b"\r\n");
-                                w!(chunk.as_slice()); w!(b"\r\n");
+                                w!(&hex_len.0[..hex_len.1]);
+                                w!(b"\r\n");
+                                w!(chunk.as_slice());
+                                w!(b"\r\n");
                             }
                             w!(b"0\r\n\r\n");
                         }
-                        crate::http::Body::File { mut fd, offset, len } => {
+                        crate::http::Body::File {
+                            mut fd,
+                            offset,
+                            len,
+                        } => {
                             c.sendfile_fd = fd.take();
                             c.sendfile_offset = offset;
                             c.sendfile_remaining = len;
@@ -1640,7 +1710,9 @@ impl Worker {
                 }
 
                 if overflow {
-                    if wstart > 0 { break; } // Flush queued responses first
+                    if wstart > 0 {
+                        break;
+                    } // Flush queued responses first
                     let mut pos_err = 0;
                     let err_prefix = b"HTTP/1.1 500 Internal Server Error\r\n";
                     wbuf[pos_err..pos_err + err_prefix.len()].copy_from_slice(err_prefix);
@@ -1653,7 +1725,8 @@ impl Worker {
                     let date_len = format_http_date(error_now, &mut date_buf_err);
                     wbuf[pos_err..pos_err + date_len].copy_from_slice(&date_buf_err[..date_len]);
                     pos_err += date_len;
-                    let err_suffix = b"Content-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error";
+                    let err_suffix =
+                        b"Content-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error";
                     wbuf[pos_err..pos_err + err_suffix.len()].copy_from_slice(err_suffix);
                     pos = pos_err + err_suffix.len();
                     keep_alive = false;
@@ -1667,7 +1740,9 @@ impl Worker {
                     c.flags &= !conn::CONN_KEEP_ALIVE;
                     break;
                 }
-                if c.body_ptr != 0 { break; } // Need writev, stop pipelining
+                if c.body_ptr != 0 {
+                    break;
+                } // Need writev, stop pipelining
             } else {
                 return Ok(());
             }
@@ -1678,7 +1753,8 @@ impl Worker {
             if let Some(c) = slab.get_mut(idx) {
                 let remaining = c.read_len as usize;
                 if remaining > 0 {
-                    c.read_buf.copy_within(read_offset..read_offset + remaining, 0);
+                    c.read_buf
+                        .copy_within(read_offset..read_offset + remaining, 0);
                 }
             }
         }
@@ -1693,8 +1769,14 @@ impl Worker {
                     std::slice::from_raw_parts(c.body_ptr as *const u8, c.body_total as usize)
                 };
                 let iovecs = [
-                    libc::iovec { iov_base: header_slice.as_ptr() as *mut libc::c_void, iov_len: header_slice.len() },
-                    libc::iovec { iov_base: body_slice.as_ptr() as *mut libc::c_void,   iov_len: body_slice.len()   },
+                    libc::iovec {
+                        iov_base: header_slice.as_ptr() as *mut libc::c_void,
+                        iov_len: header_slice.len(),
+                    },
+                    libc::iovec {
+                        iov_base: body_slice.as_ptr() as *mut libc::c_void,
+                        iov_len: body_slice.len(),
+                    },
                 ];
                 self.submit_writev_headers_body(ring, slab, idx, &iovecs);
             } else if wt > ws {
@@ -1741,7 +1823,10 @@ impl Worker {
                 }
             }
             if let Err(e) = ring.register_buffers(&iovecs) {
-                eprintln!("[chopin] worker-{} register_buffers failed (non-fatal): {e}", self.id);
+                eprintln!(
+                    "[chopin] worker-{} register_buffers failed (non-fatal): {e}",
+                    self.id
+                );
                 // Fall back to normal read/write — non-fatal
             }
         }
@@ -1782,7 +1867,14 @@ impl Worker {
             while let Some(cqe) = ring.peek_cqe() {
                 ring.advance_cq(1);
                 cqe_count += 1;
-                self.process_cqe(&mut ring, &mut slab, &mut timer_wheel, cqe, now, is_shutting_down)?;
+                self.process_cqe(
+                    &mut ring,
+                    &mut slab,
+                    &mut timer_wheel,
+                    cqe,
+                    now,
+                    is_shutting_down,
+                )?;
                 if cqe_count >= 64 {
                     ring.submit()?;
                     cqe_count = 0;
@@ -1798,7 +1890,9 @@ impl Worker {
                 if c.state != ConnState::Free {
                     c.close_sendfile();
                     c.body_clear();
-                    unsafe { libc::close(c.fd); }
+                    unsafe {
+                        libc::close(c.fd);
+                    }
                 }
             }
         }
@@ -1819,9 +1913,13 @@ impl Worker {
                 for idx in indices {
                     let (timed_out, last_active) = {
                         if let Some(c) = slab.get(idx) {
-                            if c.state == ConnState::Free { continue; }
+                            if c.state == ConnState::Free {
+                                continue;
+                            }
                             (now.wrapping_sub(c.last_active) > TIMEOUT, c.last_active)
-                        } else { continue; }
+                        } else {
+                            continue;
+                        }
                     };
                     if timed_out {
                         self.close_connection(ring, slab, idx);

@@ -27,13 +27,13 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::auth::ScramClient;
-#[cfg(feature = "tls")]
-use crate::tls;
 use crate::codec;
 use crate::error::{PgError, PgResult};
 use crate::protocol::*;
 use crate::row::Row;
 use crate::statement::StatementCache;
+#[cfg(feature = "tls")]
+use crate::tls;
 use crate::types::{PgValue, ToSql};
 
 /// Default I/O timeout for poll operations (5 seconds).
@@ -360,9 +360,7 @@ impl PgConnection {
                 match config.ssl_mode {
                     tls::SslMode::Disable => PgStream::Tcp(tcp),
                     tls::SslMode::Prefer => match tls::negotiate(tcp, &config.host) {
-                        Ok(tls::TlsNegotiateResult::Tls(tls_stream)) => {
-                            PgStream::Tls(tls_stream)
-                        }
+                        Ok(tls::TlsNegotiateResult::Tls(tls_stream)) => PgStream::Tls(tls_stream),
                         Ok(tls::TlsNegotiateResult::Rejected(tcp)) => PgStream::Tcp(tcp),
                         Err(_) => {
                             // TLS negotiation failed — reconnect plain-text
@@ -515,16 +513,27 @@ impl PgConnection {
                             Some(AuthType::SASLInit) => {
                                 // B.3: Use SCRAM-SHA-256-PLUS with channel binding when TLS is active
                                 #[cfg(feature = "tls")]
-                                let (mut scram, mechanism) = if let Some(cb_data) = self.stream.tls_server_cert_hash() {
-                                    (
-                                        ScramClient::new_with_channel_binding(&config.user, &config.password, cb_data),
-                                        "SCRAM-SHA-256-PLUS",
-                                    )
-                                } else {
-                                    (ScramClient::new(&config.user, &config.password), "SCRAM-SHA-256")
-                                };
+                                let (mut scram, mechanism) =
+                                    if let Some(cb_data) = self.stream.tls_server_cert_hash() {
+                                        (
+                                            ScramClient::new_with_channel_binding(
+                                                &config.user,
+                                                &config.password,
+                                                cb_data,
+                                            ),
+                                            "SCRAM-SHA-256-PLUS",
+                                        )
+                                    } else {
+                                        (
+                                            ScramClient::new(&config.user, &config.password),
+                                            "SCRAM-SHA-256",
+                                        )
+                                    };
                                 #[cfg(not(feature = "tls"))]
-                                let (mut scram, mechanism) = (ScramClient::new(&config.user, &config.password), "SCRAM-SHA-256");
+                                let (mut scram, mechanism) = (
+                                    ScramClient::new(&config.user, &config.password),
+                                    "SCRAM-SHA-256",
+                                );
 
                                 let client_first = scram.client_first_message();
                                 let n = codec::encode_sasl_initial(

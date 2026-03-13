@@ -1,6 +1,6 @@
 use crate::http::{Context, Method, Response};
 use crate::router::RouteDef;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 /// Generates the OpenAPI 3.0.0 JSON specification for all registered routes.
@@ -65,10 +65,16 @@ pub fn generate_spec() -> Value {
         });
 
         if !parameters.is_empty() {
-            operation.as_object_mut().unwrap().insert("parameters".to_string(), json!(parameters));
+            operation
+                .as_object_mut()
+                .unwrap()
+                .insert("parameters".to_string(), json!(parameters));
         }
 
-        paths.entry(openapi_path).or_default().insert(method.to_string(), operation);
+        paths
+            .entry(openapi_path)
+            .or_default()
+            .insert(method.to_string(), operation);
     }
 
     json!({

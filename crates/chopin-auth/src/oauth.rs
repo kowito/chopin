@@ -320,7 +320,10 @@ mod tests {
         // 32 random bytes → 43 base64url chars
         assert_eq!(v.len(), 43);
         // All characters are valid base64url (no padding)
-        assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            v.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
     }
 
     #[test]

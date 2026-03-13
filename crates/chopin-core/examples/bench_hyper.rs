@@ -18,8 +18,8 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use std::{io, mem, thread};
 use std::os::unix::io::FromRawFd;
+use std::{io, mem, thread};
 use tokio::net::TcpListener;
 
 fn listen_port() -> u16 {
@@ -104,17 +104,17 @@ fn make_reuseport_listener(port: u16) -> io::Result<std::net::TcpListener> {
         #[cfg(target_os = "linux")]
         let sin = libc::sockaddr_in {
             sin_family: libc::AF_INET as libc::sa_family_t,
-            sin_port:   port.to_be(),
-            sin_addr:   libc::in_addr { s_addr: 0 }, // INADDR_ANY
-            sin_zero:   [0; 8],
+            sin_port: port.to_be(),
+            sin_addr: libc::in_addr { s_addr: 0 }, // INADDR_ANY
+            sin_zero: [0; 8],
         };
         #[cfg(not(target_os = "linux"))]
         let sin = libc::sockaddr_in {
-            sin_len:    mem::size_of::<libc::sockaddr_in>() as u8,
+            sin_len: mem::size_of::<libc::sockaddr_in>() as u8,
             sin_family: libc::AF_INET as libc::sa_family_t,
-            sin_port:   port.to_be(),
-            sin_addr:   libc::in_addr { s_addr: 0 },
-            sin_zero:   [0; 8],
+            sin_port: port.to_be(),
+            sin_addr: libc::in_addr { s_addr: 0 },
+            sin_zero: [0; 8],
         };
 
         if libc::bind(
@@ -149,8 +149,7 @@ fn run_worker(port: u16) {
         .expect("tokio runtime build failed");
 
     rt.block_on(async move {
-        let listener =
-            TcpListener::from_std(std_listener).expect("TcpListener conversion failed");
+        let listener = TcpListener::from_std(std_listener).expect("TcpListener conversion failed");
         loop {
             match listener.accept().await {
                 Ok((stream, _)) => {
@@ -184,7 +183,9 @@ fn main() {
         .unwrap_or_else(num_cpus::get);
     let port = listen_port();
 
-    println!("Hyper server listening on 0.0.0.0:{port} with {workers} worker threads (SO_REUSEPORT)");
+    println!(
+        "Hyper server listening on 0.0.0.0:{port} with {workers} worker threads (SO_REUSEPORT)"
+    );
 
     // Spawn N-1 worker threads; current thread becomes the last worker.
     for i in 1..workers {

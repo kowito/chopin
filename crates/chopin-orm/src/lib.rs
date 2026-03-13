@@ -637,20 +637,13 @@ impl ExtractValue for chrono::NaiveDateTime {
                 chrono::DateTime::from_timestamp(secs, nsecs)
                     .map(|dt| dt.naive_utc())
                     .ok_or_else(|| {
-                        OrmError::Extraction(format!(
-                            "Invalid timestamp microseconds: {}",
-                            micros
-                        ))
+                        OrmError::Extraction(format!("Invalid timestamp microseconds: {}", micros))
                     })
             }
             PgValue::Text(s) | PgValue::Json(s) => {
                 chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
-                    .or_else(|_| {
-                        chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")
-                    })
-                    .or_else(|_| {
-                        chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
-                    })
+                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f"))
+                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S"))
                     .map_err(|e| {
                         OrmError::Extraction(format!(
                             "Cannot parse '{}' as NaiveDateTime: {}",
@@ -687,14 +680,14 @@ impl ExtractValue for rust_decimal::Decimal {
                     OrmError::Extraction(format!("Cannot parse '{}' as Decimal: {}", s, e))
                 })
             }
-            PgValue::Float8(v) => rust_decimal::Decimal::from_f64_retain(v)
-                .ok_or_else(|| {
-                    OrmError::Extraction(format!("Cannot convert f64 {} to Decimal", v))
-                }),
-            PgValue::Float4(v) => rust_decimal::Decimal::from_f64_retain(v as f64)
-                .ok_or_else(|| {
+            PgValue::Float8(v) => rust_decimal::Decimal::from_f64_retain(v).ok_or_else(|| {
+                OrmError::Extraction(format!("Cannot convert f64 {} to Decimal", v))
+            }),
+            PgValue::Float4(v) => {
+                rust_decimal::Decimal::from_f64_retain(v as f64).ok_or_else(|| {
                     OrmError::Extraction(format!("Cannot convert f32 {} to Decimal", v))
-                }),
+                })
+            }
             PgValue::Int4(n) => Ok(rust_decimal::Decimal::from(n)),
             PgValue::Int8(n) => Ok(rust_decimal::Decimal::from(n)),
             PgValue::Int2(n) => Ok(rust_decimal::Decimal::from(n)),
@@ -797,10 +790,7 @@ pub trait SoftDelete: Model {
 /// Generates `INSERT INTO t (cols) VALUES ($1,$2),($3,$4),…` with RETURNING
 /// for generated columns. Each model is mutated in-place to receive its
 /// generated values (e.g. auto-increment IDs).
-pub fn batch_insert<M: Model>(
-    models: &mut [M],
-    executor: &mut impl Executor,
-) -> OrmResult<()> {
+pub fn batch_insert<M: Model>(models: &mut [M], executor: &mut impl Executor) -> OrmResult<()> {
     if models.is_empty() {
         return Ok(());
     }
@@ -1060,10 +1050,7 @@ mod tests {
     fn test_batch_insert_builds_correct_sql() {
         let mut mock = MockExecutor::new();
         // Queue two rows of generated IDs.
-        mock.push_result(vec![
-            mock_row!("id" => 1),
-            mock_row!("id" => 2),
-        ]);
+        mock.push_result(vec![mock_row!("id" => 1), mock_row!("id" => 2)]);
 
         let mut items = vec![
             TestItem {
