@@ -4,7 +4,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.5.18"
+version = "0.5.19"
 edition = "2024"
 license = "MIT"
 authors = ["kowito"]
@@ -15,13 +15,13 @@ keywords = ["chopin", "http", "performance", "web"]
 readme = "README.md"
 
 [workspace.dependencies]
-chopin-core = { version = "0.5.18", path = "crates/chopin-core" }
-chopin-auth = { version = "0.5.18", path = "crates/chopin-auth" }
-chopin-pg = { version = "0.5.18", path = "crates/chopin-pg" }
-chopin-orm = { version = "0.5.18", path = "crates/chopin-orm" }
-chopin-macros = { version = "0.5.18", path = "crates/chopin-macros" }
-chopin-orm-macro = { version = "0.5.18", path = "crates/chopin-orm-macro" }
-chopin-cli = { version = "0.5.18", path = "crates/chopin-cli" }
+chopin-core = { version = "0.5.19", path = "crates/chopin-core" }
+chopin-auth = { version = "0.5.19", path = "crates/chopin-auth" }
+chopin-pg = { version = "0.5.19", path = "crates/chopin-pg" }
+chopin-orm = { version = "0.5.19", path = "crates/chopin-orm" }
+chopin-macros = { version = "0.5.19", path = "crates/chopin-macros" }
+chopin-orm-macro = { version = "0.5.19", path = "crates/chopin-orm-macro" }
+chopin-cli = { version = "0.5.19", path = "crates/chopin-cli" }
 kowito-json = "0.2.11"
 mimalloc = { version = "0.1", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
