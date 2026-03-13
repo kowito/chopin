@@ -106,5 +106,8 @@ Hyper      [██████████████████████  
 
 *Chopin is **10-15% faster** than Actix/Axum and **~40% faster** than Hyper with significantly lower latency.*
 
+> **🚀 Benchmark Integrity**: Check out our [TechEmpower Compliance Guide](docs/TFB_COMPLIANCE.md) to learn how Chopin achieves these numbers while remaining fully "Realistic" and rule-compliant.
+
+
 ---
 "Simple as a melody, fast as a nocturne." - *nocturne-op9-no2*

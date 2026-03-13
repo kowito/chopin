@@ -7,6 +7,7 @@
 | [USAGE_GUIDE.md](USAGE_GUIDE.md) | Practical usage: routing, extractors, responses, middleware, ORM, auth |
 | [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) | In-depth API development guide from hello-world to production |
 | [BENCHMARKS.md](BENCHMARKS.md) | Benchmark results and how to maximize performance |
+| [TFB_COMPLIANCE.md](TFB_COMPLIANCE.md) | How to write "Realistic" and rule-compliant TFB implementations |
 
 ## Release Notes
 
