@@ -64,18 +64,9 @@ pub fn run_checks(project_dir: &Path) -> Result<()> {
     // ─── Summary ─────────────────────────────────────────────────────────
     println!();
     if fail == 0 {
-        println!(
-            "{} All {} checks passed!",
-            "✓".green().bold(),
-            pass
-        );
+        println!("{} All {} checks passed!", "✓".green().bold(), pass);
     } else {
-        println!(
-            "{} {} passed, {} failed.",
-            "✗".red().bold(),
-            pass,
-            fail
-        );
+        println!("{} {} passed, {} failed.", "✗".red().bold(), pass, fail);
         std::process::exit(1);
     }
 
@@ -99,7 +90,10 @@ fn check_config(project_dir: &Path) -> Result<String, String> {
             if cfg.database.url.is_empty() {
                 Err("database.url is empty in Chopin.toml".into())
             } else {
-                Ok(format!("Chopin.toml loaded (db: {})", mask_url(&cfg.database.url)))
+                Ok(format!(
+                    "Chopin.toml loaded (db: {})",
+                    mask_url(&cfg.database.url)
+                ))
             }
         }
         Err(e) => Err(format!("Failed to parse Chopin.toml: {}", e)),
@@ -115,12 +109,10 @@ fn check_database(project_dir: &Path) -> Result<String, String> {
         Ok(mut pool) => {
             // Try a simple query.
             match pool.get() {
-                Ok(mut conn) => {
-                    match conn.execute("SELECT 1", &[]) {
-                        Ok(_) => Ok(format!("connected to {}", mask_url(&url))),
-                        Err(e) => Err(format!("query failed: {}", e)),
-                    }
-                }
+                Ok(mut conn) => match conn.execute("SELECT 1", &[]) {
+                    Ok(_) => Ok(format!("connected to {}", mask_url(&url))),
+                    Err(e) => Err(format!("query failed: {}", e)),
+                },
                 Err(e) => Err(format!("pool.get() failed: {}", e)),
             }
         }
@@ -140,12 +132,12 @@ fn get_database_url(project_dir: &Path) -> Result<String> {
 /// Mask a database URL for safe display (hide password).
 fn mask_url(url: &str) -> String {
     // postgres://user:password@host:port/db → postgres://user:***@host:port/db
-    if let Some(at) = url.find('@') {
-        if let Some(colon) = url[..at].rfind(':') {
-            let scheme_end = url.find("://").map(|i| i + 3).unwrap_or(0);
-            if colon > scheme_end {
-                return format!("{}***{}", &url[..colon + 1], &url[at..]);
-            }
+    if let Some(at) = url.find('@')
+        && let Some(colon) = url[..at].rfind(':')
+    {
+        let scheme_end = url.find("://").map(|i| i + 3).unwrap_or(0);
+        if colon > scheme_end {
+            return format!("{}***{}", &url[..colon + 1], &url[at..]);
         }
     }
     url.to_string()
