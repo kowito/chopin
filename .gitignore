@@ -25,3 +25,15 @@ Temporary Items
 .apdisk
 Thumbs.db
 Desktop.ini
+
+# --- Benchmarks ---
+# Raw wrk / perf output files kept locally, not in VCS.
+# Structured results live in benchmarks/results/ (ignored by its own .gitignore).
+bench_results/
+benchmarks/results/*.txt
+benchmarks/results/*.data
+benchmarks/results/*.folded
+benchmarks/results/*.svg
+profile_*.txt
+perf.data
+perf.data.old

@@ -1,0 +1,4 @@
+# Ignore all benchmark result files but keep this directory in git.
+*
+!.gitignore
+!.gitkeep
