@@ -10,8 +10,28 @@ benchmarks/
 ├── compare.sh      — Side-by-side epoll vs io_uring comparison
 ├── profile.sh      — CPU profiling (macOS sample / Linux perf)
 ├── http_bench.py   — Dependency-free Python load generator
+├── docs/
+│   ├── chopin-pg-benchmarks.md    — PostgreSQL driver benchmark methodology
+│   └── running-pg-benchmarks.md   — Step-by-step guide to run pg benchmarks
 └── results/        — Timestamped output files (git-ignored)
 ```
+
+## Criterion micro-benchmarks (Rust)
+
+Hot-path micro-benchmarks live alongside each crate and use [criterion](https://bheisler.github.io/criterion.rs/):
+
+```bash
+# Date header pipeline (chopin-core)
+cargo bench --bench date_header -p chopin-core
+
+# HTTP request processing pipeline (chopin-core)
+cargo bench --bench request_pipeline -p chopin-core
+
+# ORM query builder (chopin-orm — requires a running PostgreSQL)
+cargo bench --bench orm_bench -p chopin-orm
+```
+
+Criterion HTML reports are written to `target/criterion/`.
 
 ## Prerequisites
 

@@ -40,3 +40,12 @@ chopin-pg = { workspace = true }
 chopin-orm = { workspace = true }
 lazy_static = "1.4.0"
 thiserror = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "date_header"
+harness = false
+
+[[bench]]
+name = "request_pipeline"
+harness = false
