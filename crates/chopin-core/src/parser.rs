@@ -142,10 +142,9 @@ pub fn parse_request(buf_mut: &mut [u8]) -> Result<(Request<'_>, usize), ParseEr
         }
     }
 
-    // D.1: Reject requests whose declared body would exceed the size limit.
-    if header_end + expected_len > MAX_REQUEST_SIZE {
-        return Err(ParseError::TooLarge);
-    }
+    // For Content-Length requests, we'll check size limits when the body is complete.
+    // For chunked requests, size limits are enforced during chunk processing.
+    // This prevents rejecting legitimate requests that haven't sent their body yet.
 
     let consumed;
     let final_body;
@@ -203,6 +202,10 @@ pub fn parse_request(buf_mut: &mut [u8]) -> Result<(Request<'_>, usize), ParseEr
     } else {
         if remaining.len() < expected_len {
             return Err(ParseError::Incomplete);
+        }
+        // D.1: Check size limit only when we have the complete body
+        if header_end + expected_len > MAX_REQUEST_SIZE {
+            return Err(ParseError::TooLarge);
         }
         let body_ptr = remaining.as_ptr();
         final_body = unsafe { std::slice::from_raw_parts(body_ptr, expected_len) };

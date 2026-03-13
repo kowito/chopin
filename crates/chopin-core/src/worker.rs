@@ -109,12 +109,12 @@ impl Worker {
         let slab_capacity = std::env::var("CHOPIN_SLAB_CAPACITY")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(10_000);
+            .unwrap_or(25_000); // Increased from 10k to 25k for better high-concurrency performance
 
         let epoll_timeout_ms = std::env::var("CHOPIN_EPOLL_TIMEOUT_MS")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(1000);
+            .unwrap_or(100); // Reduced from 1000ms to 100ms for better responsiveness
 
         Self {
             id,
@@ -155,9 +155,10 @@ impl Worker {
         // Override via CHOPIN_SLAB_CAPACITY env var for heavy load.
         let mut slab = ConnectionSlab::new(self.slab_capacity);
 
-        let mut events = vec![epoll_event { events: 0, u64: 0 }; 1024]; // Process up to 1024 events at once
+        let mut events = vec![epoll_event { events: 0, u64: 0 }; 2048]; // Process up to 2048 events at once (doubled)
 
         // Wait timeout in ms (0 = spin-poll mode for lowest latency, trades CPU).
+        // Reduced from 1000ms to 100ms for better responsiveness
         let mut timeout = self.epoll_timeout_ms;
 
         let mut now = SystemTime::now()
@@ -180,9 +181,9 @@ impl Worker {
             }
             iter_count = iter_count.wrapping_add(1);
 
-            // Update time and prune every 1024 iterations
+            // Update time and prune every 4096 iterations (reduced frequency for better performance)
             #[allow(clippy::manual_is_multiple_of)]
-            if iter_count % 1024 == 0 {
+            if iter_count % 4096 == 0 {
                 now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map_err(|_| ChopinError::ClockError)?
