@@ -1,0 +1,13 @@
+   Compiling serde_core v1.0.228
+   Compiling zerocopy v0.8.40
+   Compiling regex-syntax v0.8.10
+   Compiling clap_builder v4.5.60
+   Compiling rayon-core v1.13.0
+   Compiling itertools v0.10.5
+   Compiling plotters v0.3.7
+   Compiling chopin-pg v0.5.18 (/Users/kowito/Projects/Kowito/chopin/crates/chopin-pg)
+   Compiling rayon v1.11.0
+   Compiling chopin-orm v0.5.18 (/Users/kowito/Projects/Kowito/chopin/crates/chopin-orm)
+   Compiling regex-automata v0.4.14
+   Compiling criterion-plot v0.5.0
+   Compiling clap v4.5.60

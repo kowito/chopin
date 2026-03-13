@@ -237,6 +237,8 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
         })
         .collect();
     let first_pk = pk_fields[0].clone();
+    let field_names_join = field_names_str.join(", ");
+    let fields_indices: Vec<usize> = (0..columns.len()).collect();
 
     let expanded = quote! {
         impl chopin_orm::Model for #name {
@@ -273,6 +275,12 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
                 &[#(#field_names_str),*]
             }
 
+            fn select_clause() -> &'static str {
+                const COLS: &[&str] = &[#(#field_names_str),*];
+                const JOINED: &str = #field_names_join;
+                JOINED
+            }
+
             fn primary_key_values(&self) -> Vec<chopin_pg::PgValue> {
                 use chopin_pg::types::ToSql;
                 vec![
@@ -305,7 +313,7 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
             fn from_row(row: &chopin_pg::Row) -> chopin_orm::OrmResult<Self> {
                 Ok(Self {
                     #(
-                        #fields_list: chopin_orm::ExtractValue::extract(row, stringify!(#fields_list))?,
+                        #fields_list: chopin_orm::ExtractValue::extract_at(row, #fields_indices)?,
                     )*
                 })
             }

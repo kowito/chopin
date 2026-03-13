@@ -169,6 +169,13 @@ pub enum Body {
     /// Zero-copy file body — served via `sendfile()` entirely in kernel space.
     /// The fd is owned and will be closed when the response is consumed or dropped.
     File { fd: OwnedFd, offset: u64, len: u64 },
+    /// Fully pre-baked raw HTTP response (status line + headers + body) as a
+    /// static byte slice. The worker writes this verbatim, bypassing ALL
+    /// header serialization logic. Maximum throughput — zero overhead.
+    ///
+    /// Use [`Response::raw`] to construct. You are responsible for producing a
+    /// valid HTTP/1.1 response including "\r\n\r\n" and the body.
+    Raw(&'static [u8]),
 }
 
 impl Body {
@@ -178,8 +185,9 @@ impl Body {
             Body::Empty => 0,
             Body::Static(b) => b.len(),
             Body::Bytes(b) => b.len(),
-            Body::Stream(_) => 0, // Chunked has no predefined length
+            Body::Stream(_) => 0, // unknown until streamed
             Body::File { len, .. } => *len as usize,
+            Body::Raw(b) => b.len(), // full response bytes
         }
     }
 
@@ -196,6 +204,7 @@ impl Body {
             Body::Bytes(b) => b.as_slice(),
             Body::Stream(_) => &[], // Streams must be polled/chunked iteratively
             Body::File { .. } => &[], // File data lives on disk, sent via sendfile
+            Body::Raw(b) => b,      // raw full response
         }
     }
 
@@ -203,6 +212,12 @@ impl Body {
     #[inline(always)]
     pub fn is_file(&self) -> bool {
         matches!(self, Body::File { .. })
+    }
+
+    /// Returns `true` if this body is a pre-baked full raw HTTP response.
+    #[inline(always)]
+    pub fn is_raw(&self) -> bool {
+        matches!(self, Body::Raw(_))
     }
 }
 
@@ -294,6 +309,62 @@ impl Response {
         let mut buf = Vec::with_capacity(128);
         val.serialize(&mut buf);
         Self::json_bytes(buf)
+    }
+
+    /// 200 OK with a zero-copy static pre-serialized JSON body.
+    ///
+    /// The fastest JSON response: `&'static [u8]` known at compile time.
+    /// Zero heap allocation on every request.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Pre-bake at compile time:
+    /// Response::json_static(b"{\"message\":\"Hello, World!\"}")
+    /// ```
+    #[inline(always)]
+    pub fn json_static(body: &'static [u8]) -> Self {
+        Self {
+            status: 200,
+            body: Body::Static(body),
+            content_type: "application/json",
+            headers: Headers::new(),
+        }
+    }
+
+    /// Emit a fully pre-baked HTTP/1.1 response verbatim.
+    ///
+    /// The supplied `bytes` must be a **complete**, valid HTTP/1.1 response
+    /// (status line + headers + blank line + body). The worker writes them
+    /// as-is, bypassing every header serialization step.
+    ///
+    /// This is the **absolute fastest** response path — a single `memcpy`
+    /// into the connection's `write_buf`, then one `write(2)` syscall.
+    ///
+    /// # Safety contract
+    /// You must include `Date:`, `Content-Length:`, and `Content-Type:` headers
+    /// yourself. Chopin will NOT add them for `Body::Raw` responses.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Build once at program start:
+    /// static PONG: &[u8] = b"HTTP/1.1 200 OK\r\n\
+    ///     Server: chopin\r\n\
+    ///     Content-Type: text/plain\r\n\
+    ///     Content-Length: 4\r\n\
+    ///     Connection: keep-alive\r\n\
+    ///     \r\n\
+    ///     pong";
+    ///
+    /// fn pong(_ctx: Context) -> Response { Response::raw(PONG) }
+    /// ```
+    #[inline(always)]
+    pub fn raw(bytes: &'static [u8]) -> Self {
+        Self {
+            status: 200,
+            body: Body::Raw(bytes),
+            content_type: "",
+            headers: Headers::new(),
+        }
     }
 
     /// 404 Not Found.

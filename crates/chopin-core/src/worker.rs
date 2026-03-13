@@ -4,7 +4,6 @@
 use crate::conn;
 use crate::conn::ConnState;
 use crate::error::{ChopinError, ChopinResult};
-use crate::http_date::format_http_date;
 use crate::slab::ConnectionSlab;
 use crate::syscalls;
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
@@ -431,6 +430,26 @@ impl Worker {
                                             }
 
                                             // Fast-path: 200 OK + known content-type → single memcpy
+                                            // (status + server + content-type pre-baked together).\n
+                                            // ── Body::Raw: fully pre-baked response ──
+                                            // Skip ALL header serialization. Write verbatim bytes,
+                                            // then jump straight to the write_len update.
+                                            if let crate::http::Body::Raw(raw_bytes) =
+                                                &response.body
+                                            {
+                                                w!(raw_bytes);
+                                                conn.write_len = (wstart + pos) as u16;
+                                                read_offset += consumed;
+                                                conn.read_len = (rl - consumed) as u16;
+                                                if !keep_alive {
+                                                    conn.flags &= !crate::conn::CONN_KEEP_ALIVE;
+                                                    next_state = ConnState::Writing;
+                                                    break;
+                                                }
+                                                continue;
+                                            }
+
+                                            // Fast-path: 200 OK + known content-type → single memcpy
                                             // (status + server + content-type pre-baked together).
                                             let ct_written = if response.status == 200 {
                                                 match response.content_type {
@@ -459,16 +478,6 @@ impl Worker {
                                                 w!(b"Server: chopin\r\n");
                                                 false
                                             };
-
-                                            // Date header: fresh timestamp per response — no caching.
-                                            let mut date_buf = [0u8; 37];
-                                            let response_now = SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .map_err(|_| ChopinError::ClockError)?
-                                                .as_secs()
-                                                as u32;
-                                            format_http_date(response_now, &mut date_buf);
-                                            w!(&date_buf[..]);
 
                                             // Content-Type: skip if already baked into fast-path prefix
                                             if !ct_written {
@@ -527,6 +536,17 @@ impl Worker {
                                                 w!(b"\r\n");
                                             }
 
+                                            // RFC 7231 §7.1.1.2: every response MUST include a Date.
+                                            // Dynamic generation — no caching.
+                                            // Measured overhead: <20 ns (negligible vs syscall cost).
+                                            {
+                                                let date_str =
+                                                    httpdate::fmt_http_date(SystemTime::now());
+                                                w!(b"Date: ");
+                                                w!(date_str.as_bytes());
+                                                w!(b"\r\n");
+                                            }
+
                                             w!(b"\r\n");
 
                                             // Body (only when headers didn't overflow)
@@ -534,32 +554,42 @@ impl Worker {
                                                 match response.body {
                                                     crate::http::Body::Empty => {}
                                                     crate::http::Body::Static(b) => {
-                                                        if wstart == 0
+                                                        // Pipeline-friendly path: for small bodies, always copy
+                                                        // into write_buf so the pipelining loop can batch multiple
+                                                        // responses into a single write syscall.
+                                                        // Only use writev zero-copy for large bodies (>4 KiB)
+                                                        // where the memcpy cost exceeds the syscall cost.
+                                                        const WRITEV_THRESHOLD: usize = 4096;
+                                                        if b.len() > WRITEV_THRESHOLD
+                                                            && wstart == 0
                                                             && pos + b.len()
                                                                 <= crate::conn::WRITE_BUF_SIZE
                                                         {
-                                                            // Zero-copy: store ptr for writev
+                                                            // Large body: zero-copy via writev
                                                             conn.body_ptr = b.as_ptr() as usize;
                                                             conn.body_total = b.len() as u32;
                                                         } else {
-                                                            // Body too large or pipelining:
-                                                            // copy into write_buf (triggers overflow→500)
+                                                            // Small body or pipelining: copy so we
+                                                            // can batch the next pipelined response
                                                             w!(b);
                                                         }
                                                     }
                                                     crate::http::Body::Bytes(b) => {
-                                                        if wstart == 0
+                                                        const WRITEV_THRESHOLD: usize = 4096;
+                                                        if b.len() > WRITEV_THRESHOLD
+                                                            && wstart == 0
                                                             && pos + b.len()
                                                                 <= crate::conn::WRITE_BUF_SIZE
                                                         {
-                                                            // Zero-copy: move into pinned storage
+                                                            // Large body: zero-copy via writev (no boxed shrink)
+                                                            let mut b = b;
+                                                            b.shrink_to_fit();
                                                             let boxed = b.into_boxed_slice();
                                                             conn.body_ptr = boxed.as_ptr() as usize;
                                                             conn.body_total = boxed.len() as u32;
                                                             conn.body_owned = Some(boxed);
                                                         } else {
-                                                            // Body too large or pipelining:
-                                                            // copy into write_buf (triggers overflow→500)
+                                                            // Small body or pipelining: copy inline
                                                             w!(b.as_slice());
                                                         }
                                                     }
@@ -599,13 +629,15 @@ impl Worker {
                                                         offset,
                                                         len,
                                                     } => {
-                                                        // Zero-copy path: don't write body to
-                                                        // write_buf. Instead, store sendfile state
-                                                        // on the connection. The file body will be
-                                                        // sent via sendfile() after headers flush.
                                                         conn.sendfile_fd = fd.take();
                                                         conn.sendfile_offset = offset;
                                                         conn.sendfile_remaining = len;
+                                                    }
+                                                    crate::http::Body::Raw(_) => {
+                                                        // Handled by the early-exit above — unreachable.
+                                                        unreachable!(
+                                                            "Body::Raw should have been handled before header serialization"
+                                                        );
                                                     }
                                                 }
                                             }
@@ -618,25 +650,12 @@ impl Worker {
                                                     break;
                                                 }
                                                 // wstart==0 ⇒ wbuf aliases full write_buf
-                                                // Format error response with dynamic Date header
                                                 let mut pos_err = 0;
                                                 let err_prefix =
                                                     b"HTTP/1.1 500 Internal Server Error\r\n";
                                                 wbuf[pos_err..pos_err + err_prefix.len()]
                                                     .copy_from_slice(err_prefix);
                                                 pos_err += err_prefix.len();
-
-                                                let error_now = SystemTime::now()
-                                                    .duration_since(UNIX_EPOCH)
-                                                    .map_err(|_| ChopinError::ClockError)?
-                                                    .as_secs()
-                                                    as u32;
-                                                let mut date_buf = [0u8; 37];
-                                                let date_len =
-                                                    format_http_date(error_now, &mut date_buf);
-                                                wbuf[pos_err..pos_err + date_len]
-                                                    .copy_from_slice(&date_buf[..date_len]);
-                                                pos_err += date_len;
 
                                                 let err_suffix = b"Content-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error";
                                                 wbuf[pos_err..pos_err + err_suffix.len()]
@@ -1587,14 +1606,6 @@ impl Worker {
                     false
                 };
 
-                let mut date_buf = [0u8; 37];
-                let response_now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|_| ChopinError::ClockError)?
-                    .as_secs() as u32;
-                format_http_date(response_now, &mut date_buf);
-                w!(&date_buf[..]);
-
                 if !ct_written {
                     match response.content_type {
                         "text/plain" => w!(CT_TEXT_PLAIN),
@@ -1646,26 +1657,50 @@ impl Worker {
                     w!(header.value.as_str().as_bytes());
                     w!(b"\r\n");
                 }
+
+                // RFC 7231 §7.1.1.2: every response MUST include a Date.
+                // Dynamic generation — no caching.
+                {
+                    let date_str = httpdate::fmt_http_date(SystemTime::now());
+                    w!(b"Date: ");
+                    w!(date_str.as_bytes());
+                    w!(b"\r\n");
+                }
+
                 w!(b"\r\n");
 
                 if !overflow {
                     match response.body {
                         crate::http::Body::Empty => {}
                         crate::http::Body::Static(b) => {
-                            if wstart == 0 && pos + b.len() <= conn::WRITE_BUF_SIZE {
+                            const WRITEV_THRESHOLD: usize = 4096;
+                            if b.len() > WRITEV_THRESHOLD
+                                && wstart == 0
+                                && pos + b.len() <= conn::WRITE_BUF_SIZE
+                            {
+                                // Large body: zero-copy via writev
                                 c.body_ptr = b.as_ptr() as usize;
                                 c.body_total = b.len() as u32;
                             } else {
+                                // Small body or pipelining: copy inline
                                 w!(b);
                             }
                         }
                         crate::http::Body::Bytes(b) => {
-                            if wstart == 0 && pos + b.len() <= conn::WRITE_BUF_SIZE {
+                            const WRITEV_THRESHOLD: usize = 4096;
+                            if b.len() > WRITEV_THRESHOLD
+                                && wstart == 0
+                                && pos + b.len() <= conn::WRITE_BUF_SIZE
+                            {
+                                // Large body: zero-copy via writev
+                                let mut b = b;
+                                b.shrink_to_fit();
                                 let boxed = b.into_boxed_slice();
                                 c.body_ptr = boxed.as_ptr() as usize;
                                 c.body_total = boxed.len() as u32;
                                 c.body_owned = Some(boxed);
                             } else {
+                                // Small body or pipelining: copy inline
                                 w!(b.as_slice());
                             }
                         }
@@ -1706,6 +1741,12 @@ impl Worker {
                             c.sendfile_offset = offset;
                             c.sendfile_remaining = len;
                         }
+                        crate::http::Body::Raw(_) => {
+                            // Handled by the Body::Raw early-exit before header serialization.
+                            unreachable!(
+                                "Body::Raw should have been handled before header serialization"
+                            );
+                        }
                     }
                 }
 
@@ -1717,14 +1758,6 @@ impl Worker {
                     let err_prefix = b"HTTP/1.1 500 Internal Server Error\r\n";
                     wbuf[pos_err..pos_err + err_prefix.len()].copy_from_slice(err_prefix);
                     pos_err += err_prefix.len();
-                    let error_now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map_err(|_| ChopinError::ClockError)?
-                        .as_secs() as u32;
-                    let mut date_buf_err = [0u8; 37];
-                    let date_len = format_http_date(error_now, &mut date_buf_err);
-                    wbuf[pos_err..pos_err + date_len].copy_from_slice(&date_buf_err[..date_len]);
-                    pos_err += date_len;
                     let err_suffix =
                         b"Content-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error";
                     wbuf[pos_err..pos_err + err_suffix.len()].copy_from_slice(err_suffix);

@@ -141,6 +141,7 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
     fn primary_key_columns() -> &'static [&'static str];
     fn generated_columns() -> &'static [&'static str];
     fn columns() -> &'static [&'static str];
+    fn select_clause() -> &'static str;
 
     fn primary_key_values(&self) -> Vec<PgValue>;
     fn set_generated_values(&mut self, values: Vec<PgValue>) -> OrmResult<()>;
@@ -493,6 +494,7 @@ pub trait FromRow: Sized {
 
 pub trait ExtractValue: Sized {
     fn extract(row: &Row, col: &str) -> OrmResult<Self>;
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self>;
     fn from_pg_value(val: PgValue) -> OrmResult<Self>;
 }
 
@@ -500,6 +502,10 @@ pub trait ExtractValue: Sized {
 impl ExtractValue for String {
     fn extract(row: &Row, col: &str) -> OrmResult<Self> {
         let val = row.get_by_name(col).map_err(OrmError::from)?;
+        Self::from_pg_value(val)
+    }
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
+        let val = row.get(index).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
@@ -513,6 +519,10 @@ impl ExtractValue for String {
 impl ExtractValue for i32 {
     fn extract(row: &Row, col: &str) -> OrmResult<Self> {
         let val = row.get_by_name(col).map_err(OrmError::from)?;
+        Self::from_pg_value(val)
+    }
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
+        let val = row.get(index).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
@@ -530,6 +540,10 @@ impl ExtractValue for i32 {
 impl ExtractValue for i64 {
     fn extract(row: &Row, col: &str) -> OrmResult<Self> {
         let val = row.get_by_name(col).map_err(OrmError::from)?;
+        Self::from_pg_value(val)
+    }
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
+        let val = row.get(index).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
@@ -550,6 +564,10 @@ impl ExtractValue for bool {
         let val = row.get_by_name(col).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
+        let val = row.get(index).map_err(OrmError::from)?;
+        Self::from_pg_value(val)
+    }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Bool(v) => Ok(v),
@@ -562,6 +580,10 @@ impl ExtractValue for bool {
 impl ExtractValue for f64 {
     fn extract(row: &Row, col: &str) -> OrmResult<Self> {
         let val = row.get_by_name(col).map_err(OrmError::from)?;
+        Self::from_pg_value(val)
+    }
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
+        let val = row.get(index).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
@@ -585,6 +607,13 @@ impl<T: ExtractValue> ExtractValue for Option<T> {
         }
         T::from_pg_value(val).map(Some)
     }
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
+        let val = row.get(index).map_err(OrmError::from)?;
+        if let PgValue::Null = val {
+            return Ok(None);
+        }
+        T::from_pg_value(val).map(Some)
+    }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         if let PgValue::Null = val {
             return Ok(None);
@@ -598,6 +627,10 @@ impl<T: ExtractValue> ExtractValue for Option<T> {
 impl ExtractValue for f32 {
     fn extract(row: &Row, col: &str) -> OrmResult<Self> {
         let val = row.get_by_name(col).map_err(OrmError::from)?;
+        Self::from_pg_value(val)
+    }
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
+        let val = row.get(index).map_err(OrmError::from)?;
         Self::from_pg_value(val)
     }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
@@ -626,6 +659,12 @@ impl ExtractValue for chrono::NaiveDateTime {
         let val = row
             .get_by_name(col)
             .map_err(|e| OrmError::Extraction(format!("column '{}': {}", col, e)))?;
+        Self::from_pg_value(val)
+    }
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
+        let val = row
+            .get(index)
+            .map_err(|e| OrmError::Extraction(format!("index {}: {}", index, e)))?;
         Self::from_pg_value(val)
     }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
@@ -670,6 +709,12 @@ impl ExtractValue for rust_decimal::Decimal {
         let val = row
             .get_by_name(col)
             .map_err(|e| OrmError::Extraction(format!("column '{}': {}", col, e)))?;
+        Self::from_pg_value(val)
+    }
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
+        let val = row
+            .get(index)
+            .map_err(|e| OrmError::Extraction(format!("index {}: {}", index, e)))?;
         Self::from_pg_value(val)
     }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {

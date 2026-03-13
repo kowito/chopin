@@ -375,7 +375,7 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
                 .collect();
             mapped.join(", ")
         } else {
-            M::columns().join(", ")
+            M::select_clause().to_string()
         };
 
         let mut query = format!("SELECT {} FROM {}", select_clause, M::table_name());

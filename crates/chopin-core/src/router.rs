@@ -1,5 +1,6 @@
 // src/router.rs
 use crate::http::{Context, MAX_PARAMS, Method, Response};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A route handler — a plain function pointer taking a [`Context`] and returning a [`Response`].
@@ -91,6 +92,10 @@ fn method_index(m: Method) -> usize {
 pub struct Router {
     pub(crate) root: RouteNode,
     pub(crate) global_middleware: Vec<MiddlewareFn>,
+    /// O(1) fast path for exact, static (no param/wildcard) routes.
+    /// Keyed by `(method_index, path)` — built once at `finalize()` time.
+    /// Avoids trie traversal for the common TFB benchmark paths like `/plaintext`, `/json`.
+    fast_table: HashMap<(usize, String), (Handler, Option<BoxedHandler>)>,
 }
 
 impl Router {
@@ -99,6 +104,7 @@ impl Router {
         Self {
             root: RouteNode::new(String::new()),
             global_middleware: Vec::new(),
+            fast_table: HashMap::new(),
         }
     }
 
@@ -169,6 +175,13 @@ impl Router {
     /// and an optional pre-composed middleware chain.
     #[inline]
     pub fn match_route<'a>(&'a self, method: Method, path: &'a str) -> Option<RouteMatch<'a>> {
+        // ── O(1) fast path: exact static routes (covers TFB /plaintext /json etc.) ──
+        // Only valid for paths with no params/wildcards — checked at finalize() time.
+        let midx = method_index(method);
+        if let Some((h, composed)) = self.fast_table.get(&(midx, path.to_owned())) {
+            return Some((h, [("", ""); MAX_PARAMS], 0, composed.as_ref()));
+        }
+
         // Fast path for root "/" — skip segment splitting entirely
         if path == "/" || path.is_empty() {
             let idx = method_index(method);
@@ -183,12 +196,12 @@ impl Router {
             return None;
         }
 
-        // Stack-allocated segments — no heap allocation
+        // Trie traversal for dynamic routes (params, wildcards)
         let mut segments = [""; MAX_SEGMENTS];
         let mut seg_count: usize = 0;
         for s in path.split('/').filter(|s| !s.is_empty()) {
             if seg_count >= MAX_SEGMENTS {
-                return None; // Path too deep
+                return None;
             }
             segments[seg_count] = s;
             seg_count += 1;
@@ -464,6 +477,38 @@ impl Router {
         Self::sort_children_recursive(&mut self.root);
         let global_mw: Vec<MiddlewareFn> = self.global_middleware.clone();
         Self::compose_tree(&mut self.root, &global_mw, &[]);
+
+        // Build the O(1) fast-path table for all static (no param/wildcard) leaf routes.
+        // This is done once at startup — zero cost on the hot path.
+        self.fast_table.clear();
+        let mut path_buf = String::with_capacity(64);
+        Self::build_fast_table(&self.root, &mut path_buf, &mut self.fast_table);
+    }
+
+    /// Walk the fully-composed trie and collect every route whose full path
+    /// contains no param or wildcard segments into `fast_table`.
+    fn build_fast_table(
+        node: &RouteNode,
+        path_buf: &mut String,
+        table: &mut HashMap<(usize, String), (Handler, Option<BoxedHandler>)>,
+    ) {
+        for method_idx in 0..METHOD_COUNT {
+            if let Some(handler) = node.handlers[method_idx] {
+                let composed = node.composed_handlers[method_idx].clone();
+                table.insert((method_idx, path_buf.clone()), (handler, composed));
+            }
+        }
+        for child in &node.children {
+            // Skip param/wildcard segments — they cannot be in the fast table.
+            if child.is_param || child.is_wildcard {
+                continue;
+            }
+            let prev_len = path_buf.len();
+            path_buf.push('/');
+            path_buf.push_str(&child.path);
+            Self::build_fast_table(child, path_buf, table);
+            path_buf.truncate(prev_len);
+        }
     }
 
     fn sort_children_recursive(node: &mut RouteNode) {

@@ -9,11 +9,9 @@
 //!   cargo bench --bench request_pipeline -p chopin-core
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 fn bench_request_parsing(c: &mut Criterion) {
-    let buf: &[u8] =
-        b"GET /json HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
+    let buf: &[u8] = b"GET /json HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
 
     c.bench_function("http_request_parse", |b| {
         b.iter(|| {
@@ -71,16 +69,6 @@ fn bench_response_serialization(c: &mut Criterion) {
             let server = b"Server: chopin\r\n";
             write_buf[pos..pos + server.len()].copy_from_slice(server);
             pos += server.len();
-
-            // Date header
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as u32;
-            let mut date_buf = [0u8; 37];
-            chopin_core::http_date::format_http_date(now, &mut date_buf);
-            write_buf[pos..pos + 37].copy_from_slice(&date_buf);
-            pos += 37;
 
             // Content-Type
             let ct = b"Content-Type: application/json\r\n";

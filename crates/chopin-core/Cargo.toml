@@ -29,9 +29,9 @@ serde_json = { workspace = true }
 inventory = "0.3.22"
 chopin-macros = { workspace = true }
 memchr = "2.8.0"
+httpdate = "1.0.3"
 
 [dev-dependencies]
-httpdate = "1.0.3"
 hyper = { version = "1.4.1", features = ["full"] }
 tokio = { version = "1.40.0", features = ["full"] }
 http-body-util = "0.1.2"
@@ -41,10 +41,6 @@ chopin-orm = { workspace = true }
 lazy_static = "1.4.0"
 thiserror = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
-
-[[bench]]
-name = "date_header"
-harness = false
 
 [[bench]]
 name = "request_pipeline"

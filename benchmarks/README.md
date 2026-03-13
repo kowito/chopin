@@ -21,9 +21,6 @@ benchmarks/
 Hot-path micro-benchmarks live alongside each crate and use [criterion](https://bheisler.github.io/criterion.rs/):
 
 ```bash
-# Date header pipeline (chopin-core)
-cargo bench --bench date_header -p chopin-core
-
 # HTTP request processing pipeline (chopin-core)
 cargo bench --bench request_pipeline -p chopin-core
 
