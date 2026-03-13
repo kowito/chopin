@@ -602,6 +602,9 @@ mod tests {
         fn columns() -> &'static [&'static str] {
             &["id", "name"]
         }
+        fn select_clause() -> &'static str {
+            "id, name"
+        }
         fn primary_key_values(&self) -> Vec<PgValue> {
             vec![PgValue::Int4(self.id)]
         }

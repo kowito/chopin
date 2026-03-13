@@ -438,6 +438,13 @@ impl Worker {
                                                 &response.body
                                             {
                                                 w!(raw_bytes);
+                                                if overflow {
+                                                    // If raw fits nowhere, this is a bug in buffer size vs response size.
+                                                    // For now, just stop batching and let it fail/partial write.
+                                                    conn.write_len = (wstart + pos) as u16;
+                                                    next_state = ConnState::Writing;
+                                                    break;
+                                                }
                                                 conn.write_len = (wstart + pos) as u16;
                                                 read_offset += consumed;
                                                 conn.read_len = (rl - consumed) as u16;
@@ -1577,6 +1584,24 @@ impl Worker {
                             }
                         }
                     };
+                }
+
+                // ── Body::Raw: fully pre-baked response ──
+                if let crate::http::Body::Raw(raw_bytes) = &response.body {
+                    w!(raw_bytes);
+                    if overflow {
+                        c.write_len = (wstart + pos) as u16;
+                        next_state = ConnState::Writing;
+                        break;
+                    }
+                    c.write_len = (wstart + pos) as u16;
+                    c.read_len = (rl - consumed) as u16;
+                    if !keep_alive {
+                        c.flags &= !crate::conn::CONN_KEEP_ALIVE;
+                        next_state = ConnState::Writing;
+                        break;
+                    }
+                    continue;
                 }
 
                 let ct_written = if response.status == 200 {
