@@ -5,6 +5,7 @@ use crate::conn;
 use crate::conn::ConnState;
 use crate::error::{ChopinError, ChopinResult};
 use crate::slab::ConnectionSlab;
+#[cfg(not(all(target_os = "linux", feature = "io-uring")))]
 use crate::syscalls;
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 #[allow(unused_imports)]
@@ -1460,7 +1461,16 @@ impl Worker {
                 let rl = c.read_len as usize;
                 let buf = &mut c.read_buf[read_offset..read_offset + rl];
                 match crate::parser::parse_request(buf) {
-                    Ok((req, consumed)) => Some((req, consumed)),
+                    Ok((req, consumed)) => {
+                        // SAFETY: `c.read_buf` lives inside `ConnectionSlab`'s `Box<[Conn]>` —
+                        // a heap-pinned allocation that is never freed or moved until the slab
+                        // is dropped at event-loop exit. We unbind the borrow from the exclusive
+                        // `&mut Conn` reference so that a second `slab.get_mut()` can be taken
+                        // for response-building. `req` is consumed before the next I/O cycle.
+                        let req: crate::http::Request<'static> =
+                            unsafe { std::mem::transmute(req) };
+                        Some((req, consumed))
+                    }
                     Err(crate::parser::ParseError::Incomplete) => {
                         if c.write_len > 0 {
                             None // Flush
