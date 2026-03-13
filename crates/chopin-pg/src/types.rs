@@ -362,7 +362,7 @@ impl PgValue {
             oid::BIT | oid::VARBIT => {
                 // Text format: string of '0' and '1' characters
                 let len = s.len() as u32;
-                let mut data = vec![0u8; (len as usize + 7) / 8];
+                let mut data = vec![0u8; (len as usize).div_ceil(8)];
                 for (i, ch) in s.chars().enumerate() {
                     if ch == '1' {
                         let byte_idx = i / 8;
@@ -2081,10 +2081,8 @@ impl TypeRegistry {
                             PgValue::Null => {} // empty field
                             PgValue::Text(s) => out.push_str(s),
                             other => {
-                                if let Some(bytes) = other.to_text_bytes() {
-                                    if let Ok(s) = std::str::from_utf8(&bytes) {
-                                        out.push_str(s);
-                                    }
+                                if let Some(bytes) = other.to_text_bytes().and_then(|b| std::str::from_utf8(&b).ok()) {
+                                    out.push_str(bytes);
                                 }
                             }
                         }

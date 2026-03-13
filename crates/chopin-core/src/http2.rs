@@ -229,7 +229,7 @@ impl Settings {
     /// Parse a SETTINGS frame payload into individual settings.
     /// Each setting is a 16-bit identifier + 32-bit value (6 bytes).
     pub fn from_payload(payload: &[u8]) -> Result<Self, H2Error> {
-        if payload.len() % 6 != 0 {
+        if !payload.len().is_multiple_of(6) {
             return Err(H2Error::ProtocolError("SETTINGS payload must be multiple of 6 bytes"));
         }
 
@@ -249,7 +249,7 @@ impl Settings {
                     s.initial_window_size = val;
                 }
                 SETTINGS_MAX_FRAME_SIZE => {
-                    if val < DEFAULT_MAX_FRAME_SIZE || val > MAX_FRAME_SIZE_LIMIT {
+                    if !(DEFAULT_MAX_FRAME_SIZE..=MAX_FRAME_SIZE_LIMIT).contains(&val) {
                         return Err(H2Error::ProtocolError("max frame size out of range"));
                     }
                     s.max_frame_size = val;

@@ -327,6 +327,7 @@ fn sha1(data: &[u8]) -> [u8; 20] {
 
         let (mut a, mut b, mut c, mut d, mut e) = (h0, h1, h2, h3, h4);
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..80 {
             let (f, k) = match i {
                 0..=19 => ((b & c) | ((!b) & d), 0x5A827999u32),
@@ -369,7 +370,7 @@ fn sha1(data: &[u8]) -> [u8; 20] {
 const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn base64_encode(data: &[u8]) -> String {
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };

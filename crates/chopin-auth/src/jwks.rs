@@ -72,6 +72,7 @@ fn algorithm_from_str(alg: &str) -> Option<Algorithm> {
 }
 
 fn parse_jwk(jwk: &Jwk) -> Result<ParsedKey, AuthError> {
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     let algorithm = jwk
         .alg
         .as_deref()

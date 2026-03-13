@@ -129,7 +129,7 @@ fn getrandom(buf: &mut [u8]) {
 /// Base64url-encode (no padding) per RFC 4648 §5.
 fn base64url_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity((data.len() * 4 + 2) / 3);
+    let mut out = String::with_capacity((data.len() * 4).div_ceil(3));
     let mut i = 0;
     while i + 2 < data.len() {
         let n = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8) | (data[i + 2] as u32);
