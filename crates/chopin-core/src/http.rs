@@ -105,7 +105,7 @@ impl Method {
     }
 }
 
-pub const MAX_HEADERS: usize = 16;
+pub const MAX_HEADERS: usize = 32;
 pub const MAX_PARAMS: usize = 4;
 
 /// A parsed HTTP request. All fields borrow from the connection's read buffer
