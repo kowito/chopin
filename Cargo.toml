@@ -10,8 +10,8 @@ license = "MIT"
 authors = ["kowito"]
 repository = "https://github.com/kowito/chopin"
 homepage = "https://github.com/kowito/chopin"
-categories = ["web-programming::http-server", "asynchronous"]
-keywords = ["chopin", "http", "performance", "web"]
+categories = ["web-programming", "web-programming::http-server", "database::sql", "command-line-utilities"]
+keywords = ["chopin", "web-framework", "performance", "postgresql", "orm"]
 readme = "README.md"
 
 [workspace.dependencies]
