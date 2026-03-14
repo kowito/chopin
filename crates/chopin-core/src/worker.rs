@@ -571,8 +571,6 @@ impl Worker {
                                                         const WRITEV_THRESHOLD: usize = 4096;
                                                         if b.len() > WRITEV_THRESHOLD
                                                             && wstart == 0
-                                                            && pos + b.len()
-                                                                <= crate::conn::WRITE_BUF_SIZE
                                                         {
                                                             // Large body: zero-copy via writev
                                                             conn.body_ptr = b.as_ptr() as usize;
@@ -587,8 +585,6 @@ impl Worker {
                                                         const WRITEV_THRESHOLD: usize = 4096;
                                                         if b.len() > WRITEV_THRESHOLD
                                                             && wstart == 0
-                                                            && pos + b.len()
-                                                                <= crate::conn::WRITE_BUF_SIZE
                                                         {
                                                             // Large body: zero-copy via writev (no boxed shrink)
                                                             let mut b = b;
@@ -1711,7 +1707,6 @@ impl Worker {
                             const WRITEV_THRESHOLD: usize = 4096;
                             if b.len() > WRITEV_THRESHOLD
                                 && wstart == 0
-                                && pos + b.len() <= conn::WRITE_BUF_SIZE
                             {
                                 // Large body: zero-copy via writev
                                 c.body_ptr = b.as_ptr() as usize;
@@ -1725,7 +1720,6 @@ impl Worker {
                             const WRITEV_THRESHOLD: usize = 4096;
                             if b.len() > WRITEV_THRESHOLD
                                 && wstart == 0
-                                && pos + b.len() <= conn::WRITE_BUF_SIZE
                             {
                                 // Large body: zero-copy via writev
                                 let mut b = b;
