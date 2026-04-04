@@ -1,7 +1,7 @@
 // src/conn.rs
 
-pub const READ_BUF_SIZE: usize = 8192;
-pub const WRITE_BUF_SIZE: usize = 32768;
+pub const DEFAULT_READ_BUF_SIZE: usize = 8192;
+pub const DEFAULT_WRITE_BUF_SIZE: usize = 32768;
 
 /// Connection flags (bit field)
 pub const CONN_KEEP_ALIVE: u8 = 1;
@@ -50,13 +50,18 @@ pub struct Conn {
     #[cfg(feature = "io-uring")]
     pub pending_op: u8,
 
-    pub read_buf: [u8; READ_BUF_SIZE],
-    pub write_buf: [u8; WRITE_BUF_SIZE],
+    pub read_buf: Box<[u8]>,
+    pub write_buf: Box<[u8]>,
 }
 
 impl Conn {
-    // A fresh unused connection slot
+    // A fresh unused connection slot using default buffer sizes.
     pub fn empty() -> Self {
+        Self::with_buf_sizes(DEFAULT_READ_BUF_SIZE, DEFAULT_WRITE_BUF_SIZE)
+    }
+
+    /// Create a connection slot with explicit buffer sizes (set at slab-init time).
+    pub fn with_buf_sizes(read_size: usize, write_size: usize) -> Self {
         Self {
             fd: -1,
             state: ConnState::Free,
@@ -75,8 +80,8 @@ impl Conn {
             body_owned: None,
             #[cfg(feature = "io-uring")]
             pending_op: 0,
-            read_buf: [0; READ_BUF_SIZE],
-            write_buf: [0; WRITE_BUF_SIZE],
+            read_buf: vec![0u8; read_size].into_boxed_slice(),
+            write_buf: vec![0u8; write_size].into_boxed_slice(),
         }
     }
 
@@ -117,16 +122,9 @@ mod tests {
     #[test]
     fn verify_conn_alignment() {
         assert_eq!(std::mem::align_of::<Conn>(), 64);
-
-        // Header fields: fd(4) + state(1) + flags(1) + read_len(2) + write_pos(2) +
-        //                write_len(2) + last_active(4) + requests_served(4) +
-        //                sendfile_fd(4) + sendfile_offset(8) + sendfile_remaining(8) +
-        //                body_ptr(8) + body_total(4) + body_sent(4) + body_owned(16) = 72 bytes
-        // + 8192 (read_buf) + 32768 (write_buf) = 41032, padded to 41088 (next 64-byte boundary).
+        // Buffer data is now heap-allocated (Box<[u8]>); the struct holds fat pointers.
+        // We only verify alignment and that size is a multiple of 64.
         let total_size = std::mem::size_of::<Conn>();
-
-        assert_eq!(std::mem::align_of::<Conn>(), 64);
-        assert_eq!(total_size % 64, 0, "Conn total size not a multiple of 64!");
-        assert_eq!(total_size, READ_BUF_SIZE + WRITE_BUF_SIZE + 128);
+        assert_eq!(total_size % 64, 0, "Conn struct size not a multiple of 64!");
     }
 }

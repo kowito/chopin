@@ -11,10 +11,22 @@ pub struct ConnectionSlab {
 impl ConnectionSlab {
     /// Allocate the huge array of Conns strictly once upon worker startup.
     pub fn new(capacity: usize) -> Self {
+        let read_buf_size = std::env::var("CHOPIN_READ_BUF_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(crate::conn::DEFAULT_READ_BUF_SIZE)
+            .clamp(512, u16::MAX as usize); // write_len/read_len are u16
+
+        let write_buf_size = std::env::var("CHOPIN_WRITE_BUF_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(crate::conn::DEFAULT_WRITE_BUF_SIZE)
+            .clamp(512, u16::MAX as usize);
+
         // Initialize connections dynamically but avoid re-allocations
         let mut entries = Vec::with_capacity(capacity);
         for i in 0..capacity {
-            let mut conn = Conn::empty();
+            let mut conn = Conn::with_buf_sizes(read_buf_size, write_buf_size);
             // The fd field works as the `next` index pointer.
             // The last entry points to -1 (null)
             conn.fd = if i == capacity - 1 {

@@ -326,7 +326,7 @@ impl Worker {
 
                                     // Headroom: stop pipelining if write_buf nearly full
                                     let wl = conn.write_len as usize;
-                                    if wl + 512 > crate::conn::WRITE_BUF_SIZE {
+                                    if wl + 512 > conn.write_buf.len() {
                                         next_state = ConnState::Writing;
                                         break;
                                     }
@@ -714,7 +714,7 @@ impl Worker {
                                             let err_413 = b"HTTP/1.1 413 Content Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
                                             let wstart = conn.write_len as usize;
                                             let end = wstart + err_413.len();
-                                            if end <= crate::conn::WRITE_BUF_SIZE {
+                                            if end <= conn.write_buf.len() {
                                                 conn.write_buf[wstart..end]
                                                     .copy_from_slice(err_413);
                                                 conn.write_len = end as u16;
@@ -1445,7 +1445,7 @@ impl Worker {
                     self.submit_read(ring, slab, idx);
                     return Ok(());
                 }
-                c.write_len as usize + 512 > conn::WRITE_BUF_SIZE
+                c.write_len as usize + 512 > c.write_buf.len()
             } else {
                 return Ok(());
             };
@@ -1493,7 +1493,7 @@ impl Worker {
                         if let Some(c) = slab.get_mut(idx) {
                             let wstart = c.write_len as usize;
                             let end = wstart + err_413.len();
-                            if end <= conn::WRITE_BUF_SIZE {
+                            if end <= c.write_buf.len() {
                                 c.write_buf[wstart..end].copy_from_slice(err_413);
                                 c.write_len = end as u16;
                             }
@@ -1869,18 +1869,17 @@ impl Worker {
         // A.4: Register slab read/write buffers with io_uring for OP_READ_FIXED/OP_WRITE_FIXED.
         // This avoids per-I/O page-table walks by pinning the buffers in kernel memory.
         {
-            use crate::conn::{READ_BUF_SIZE, WRITE_BUF_SIZE};
             let cap = slab.capacity();
             let mut iovecs = Vec::with_capacity(cap * 2);
             for i in 0..cap {
                 if let Some(c) = slab.get_mut(i) {
                     iovecs.push(libc::iovec {
                         iov_base: c.read_buf.as_mut_ptr() as *mut libc::c_void,
-                        iov_len: READ_BUF_SIZE,
+                        iov_len: c.read_buf.len(),
                     });
                     iovecs.push(libc::iovec {
                         iov_base: c.write_buf.as_mut_ptr() as *mut libc::c_void,
-                        iov_len: WRITE_BUF_SIZE,
+                        iov_len: c.write_buf.len(),
                     });
                 }
             }

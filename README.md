@@ -125,6 +125,24 @@ For detailed benchmark methodology, optimization layers, and how to maximize per
 
 > **🚀 Benchmark Integrity**: Check out our [TechEmpower Compliance Guide](docs/TFB_COMPLIANCE.md) to learn how Chopin achieves these numbers while remaining fully "Realistic" and rule-compliant.
 
+---
+
+## ⚙️ Runtime Configuration
+
+Chopin workers read the following environment variables at startup:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `CHOPIN_SLAB_CAPACITY` | `16000` | Max concurrent connections per worker. Increase for high-concurrency workloads (e.g. `25000`). |
+| `CHOPIN_EPOLL_TIMEOUT_MS` | `100` | Event loop poll timeout in milliseconds. Lower values improve timer resolution at the cost of CPU. |
+| `CHOPIN_READ_BUF_SIZE` | `8192` | Per-connection read buffer size in bytes (min 512, max 65535). Set at startup; all workers use the same value. |
+| `CHOPIN_WRITE_BUF_SIZE` | `32768` | Per-connection write buffer size in bytes (min 512, max 65535). Larger values reduce write syscalls for big responses. |
+
+```bash
+CHOPIN_SLAB_CAPACITY=25000 CHOPIN_READ_BUF_SIZE=16384 CHOPIN_WRITE_BUF_SIZE=65535 ./my_chopin_server
+```
+
+> **Memory tip**: each connection slot uses `CHOPIN_READ_BUF_SIZE + CHOPIN_WRITE_BUF_SIZE` bytes of heap. With the defaults (8 KiB + 32 KiB = 40 KiB) and 16 000 slots, that is ~625 MiB per worker. Tune `CHOPIN_SLAB_CAPACITY` down if memory is tight.
 
 ---
 "Simple as a melody, fast as a nocturne." - *nocturne-op9-no2*
