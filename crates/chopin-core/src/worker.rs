@@ -109,7 +109,7 @@ impl Worker {
         let slab_capacity = std::env::var("CHOPIN_SLAB_CAPACITY")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(25_000); // Increased from 10k to 25k for better high-concurrency performance
+            .unwrap_or(16_000); // Reduced from 25k to 16k to offset write_buf increase (32 KiB)
 
         let epoll_timeout_ms = std::env::var("CHOPIN_EPOLL_TIMEOUT_MS")
             .ok()

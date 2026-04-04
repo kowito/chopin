@@ -118,7 +118,7 @@ struct World {
 - **No `String` allocation in parsers or serialisers.** Use `&str` slices into buffers.
 - **`Conn` and `WorkerMetrics` are `#[repr(C, align(64))]`** — prevents false sharing.
 - **`SystemTime::now()` per-response for the `Date` header.** Do not cache/store the formatted date string. `format_http_date()` is ~200 cycles.
-- **Buffers**: `READ_BUF_SIZE = 8192`, `WRITE_BUF_SIZE = 16384`. Static/byte bodies bypass `write_buf` via `writev` zero-copy.
+- **Buffers**: `READ_BUF_SIZE = 8192`, `WRITE_BUF_SIZE = 32768`. Static/byte bodies bypass `write_buf` via `writev` zero-copy.
 
 ## Middleware
 Composed **once at `finalize()`** into a single `Arc<dyn Fn(Context) -> Response>`. One indirect call on the hot path — no chain construction, no `Arc::new`.

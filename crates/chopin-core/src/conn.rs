@@ -1,7 +1,7 @@
 // src/conn.rs
 
 pub const READ_BUF_SIZE: usize = 8192;
-pub const WRITE_BUF_SIZE: usize = 16384;
+pub const WRITE_BUF_SIZE: usize = 32768;
 
 /// Connection flags (bit field)
 pub const CONN_KEEP_ALIVE: u8 = 1;
@@ -122,7 +122,7 @@ mod tests {
         //                write_len(2) + last_active(4) + requests_served(4) +
         //                sendfile_fd(4) + sendfile_offset(8) + sendfile_remaining(8) +
         //                body_ptr(8) + body_total(4) + body_sent(4) + body_owned(16) = 72 bytes
-        // + 8192 (read_buf) + 16384 (write_buf) = 24648, padded to 24704 (next 64-byte boundary).
+        // + 8192 (read_buf) + 32768 (write_buf) = 41032, padded to 41088 (next 64-byte boundary).
         let total_size = std::mem::size_of::<Conn>();
 
         assert_eq!(std::mem::align_of::<Conn>(), 64);
