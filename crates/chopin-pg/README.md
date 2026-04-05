@@ -25,9 +25,9 @@
 - **Binary wire format** — per-parameter format codes with binary result decoding
 - **SCRAM-SHA-256 auth** — zero-dep implementation; cleartext password also supported
 - **Unix domain sockets** — `PgConfig.socket_dir` or `?host=` URL parameter
-- **Error classification** — `ErrorClass::Transient`/`Permanent`/`Client`/`Pool` with SQLSTATE mapping
+- **Error classification** — `ErrorClass::Transient`/`Permanent`/`Client`/`Pool` with SQLSTATE mapping; `PgError::BufferOverflow` returned (not panicked) when a server message exceeds the 16 MB safety limit
 - **Retry helper** — `retry(max_retries, || { ... })` with transient error detection
-- **Production hardening** — broken connection flag, TCP_NODELAY, zero-copy writes, `Rc<ColumnDesc>` sharing
+- **Production hardening** — broken connection flag, TCP_NODELAY, zero-copy writes, `Rc<ColumnDesc>` sharing, response buffer overflow protection (`BufferOverflow` error + OOM guard)
 
 ## 🚀 Benchmarks
 

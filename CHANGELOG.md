@@ -52,6 +52,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `chopin-core` — undefined `next_state` and out-of-scope variable references in `Body::Raw` handler
 - `chopin-core` — unused import warning on io-uring builds: gate `use crate::syscalls` with `#[cfg(not(io-uring))]`
 - `chopin-pg` — statement cache eviction race under connection reuse
+- `chopin-pg` — **response buffer overflow**: `message_complete()` now returns `Result<Option<usize>, PgError>` instead of `Option<usize>`; a server message whose length field exceeds `MAX_MESSAGE_SIZE` (16 MB) returns `Err(PgError::BufferOverflow)` and is propagated immediately through all read loops — previously the driver looped forever waiting for data that never arrived. `ensure_read_space()` also guards against OOM by skipping buffer growth when the advertised length exceeds the limit.
 
 ---
 

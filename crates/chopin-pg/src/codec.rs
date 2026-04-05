@@ -3,6 +3,7 @@
 //! All encoding writes directly into a caller-provided buffer.
 //! All decoding slices directly from the read buffer.
 
+use crate::error::PgError;
 use crate::protocol::*;
 
 /// Maximum size of a single PG message we'll accept (16 MB).
@@ -329,21 +330,25 @@ pub fn decode_header(buf: &[u8]) -> Option<MessageHeader> {
 }
 
 /// Check if a complete message is available in `buf`.
-/// Returns `None` if not enough data, or if the message exceeds MAX_MESSAGE_SIZE.
-pub fn message_complete(buf: &[u8]) -> Option<usize> {
+///
+/// Returns:
+/// - `Ok(Some(n))` — a complete message of `n` bytes is ready.
+/// - `Ok(None)` — not enough data yet; caller should read more.
+/// - `Err(PgError::BufferOverflow)` — the message length field exceeds
+///   `MAX_MESSAGE_SIZE`; the connection must be closed.
+pub fn message_complete(buf: &[u8]) -> Result<Option<usize>, PgError> {
     if buf.len() < 5 {
-        return None;
+        return Ok(None);
     }
     let length = read_u32(buf, 1) as usize;
-    // Reject messages that exceed our safety limit
     if length > MAX_MESSAGE_SIZE {
-        return None;
+        return Err(PgError::BufferOverflow);
     }
     let total = 1 + length; // tag + length-included body
     if buf.len() >= total {
-        Some(total)
+        Ok(Some(total))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -493,6 +498,7 @@ fn put_cstring(buf: &mut [u8], offset: usize, s: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::PgError;
     use crate::protocol::{BackendTag, CloseTarget, DescribeTarget, FormatCode};
 
     #[test]
@@ -524,18 +530,18 @@ mod tests {
     fn test_message_complete() {
         // tag(1) + length(4) = 5 bytes minimum
         let msg = [b'Z', 0, 0, 0, 5, b'I'];
-        assert_eq!(message_complete(&msg), Some(6));
-        assert_eq!(message_complete(&msg[..4]), None); // incomplete
+        assert_eq!(message_complete(&msg).unwrap(), Some(6));
+        assert_eq!(message_complete(&msg[..4]).unwrap(), None); // incomplete
     }
 
     #[test]
     fn test_message_complete_rejects_oversized() {
-        // Length field = MAX_MESSAGE_SIZE + 1 → should return None
+        // Length field = MAX_MESSAGE_SIZE + 1 → should return Err(BufferOverflow)
         let huge_len = (MAX_MESSAGE_SIZE + 1) as u32;
         let mut msg = [0u8; 6];
         msg[0] = b'D';
         msg[1..5].copy_from_slice(&huge_len.to_be_bytes());
-        assert_eq!(message_complete(&msg), None);
+        assert!(matches!(message_complete(&msg), Err(PgError::BufferOverflow)));
     }
 
     #[test]
@@ -729,22 +735,22 @@ mod tests {
     fn test_message_complete_exact_size() {
         // tag(1) + len(4) = 5-byte header, body = 1 byte → total = 6
         let msg = [b'Z', 0, 0, 0, 5, b'I'];
-        assert_eq!(message_complete(&msg), Some(6));
+        assert_eq!(message_complete(&msg).unwrap(), Some(6));
     }
 
     #[test]
     fn test_message_complete_one_byte_short() {
         let msg = [b'Z', 0, 0, 0, 5]; // header says 5 bytes body, but we only have 4 (no body)
-        assert_eq!(message_complete(&msg), None);
+        assert_eq!(message_complete(&msg).unwrap(), None);
     }
 
     #[test]
     fn test_message_complete_needs_exactly_5_bytes() {
         // 4 bytes → None
-        assert_eq!(message_complete(&[b'Z', 0, 0, 0]), None);
+        assert_eq!(message_complete(&[b'Z', 0, 0, 0]).unwrap(), None);
         // 5 bytes with length=4 (empty body) → Some(5)
         let msg = [b'C', 0, 0, 0, 4]; // CommandComplete with no text
-        assert_eq!(message_complete(&msg), Some(5));
+        assert_eq!(message_complete(&msg).unwrap(), Some(5));
     }
 
     #[test]
@@ -753,7 +759,7 @@ mod tests {
         let payload = [0u8; 10];
         let mut msg = vec![b'D', 0, 0, 0, 14]; // length = 4 + 10 = 14
         msg.extend_from_slice(&payload);
-        assert_eq!(message_complete(&msg), Some(15)); // 1 + 14
+        assert_eq!(message_complete(&msg).unwrap(), Some(15)); // 1 + 14
     }
 
     #[test]

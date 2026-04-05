@@ -491,7 +491,7 @@ impl PgConnection {
         loop {
             self.fill_read_buf(None)?;
 
-            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
                 let header = codec::decode_header(&self.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 let body = &self.read_buf[5..msg_len];
@@ -614,7 +614,7 @@ impl PgConnection {
         loop {
             self.fill_read_buf(None)?;
 
-            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
                 let header = codec::decode_header(&self.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 let body = &self.read_buf[5..msg_len].to_vec();
@@ -957,7 +957,7 @@ impl PgConnection {
         // Read until CopyInResponse
         loop {
             self.fill_read_buf(None)?;
-            let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) else {
+            let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? else {
                 continue;
             };
             let header = codec::decode_header(&self.read_buf)
@@ -988,7 +988,7 @@ impl PgConnection {
         // Read until CopyOutResponse
         loop {
             self.fill_read_buf(None)?;
-            let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) else {
+            let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? else {
                 continue;
             };
             let header = codec::decode_header(&self.read_buf)
@@ -1069,7 +1069,7 @@ impl PgConnection {
             Ok(n) => {
                 self.read_pos += n;
                 // Process any complete messages
-                while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
+                while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
                     let header = codec::decode_header(&self.read_buf).ok_or_else(|| {
                         PgError::Protocol("Incomplete message header".to_string())
                     })?;
@@ -1420,6 +1420,13 @@ impl PgConnection {
             if self.read_pos >= 5
                 && let Some(header) = codec::decode_header(&self.read_buf)
             {
+                // Guard against malicious or corrupt servers advertising a
+                // length that exceeds our safety limit — do not allocate.
+                // The overflow will be caught as Err(BufferOverflow) by the
+                // next call to message_complete().
+                if header.length as usize > codec::MAX_MESSAGE_SIZE {
+                    return;
+                }
                 let total = 1 + header.length as usize;
                 self.ensure_read_capacity(total - self.read_pos);
                 return;
@@ -1452,11 +1459,11 @@ impl PgConnection {
         let mut columns_rc: Rc<Vec<codec::ColumnDesc>> = Rc::new(Vec::new());
 
         loop {
-            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
+            if codec::message_complete(&self.read_buf[..self.read_pos])?.is_none() {
                 self.fill_read_buf(None)?;
             }
 
-            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
                 let header = codec::decode_header(&self.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 let body = &self.read_buf[5..msg_len];
@@ -1515,11 +1522,11 @@ impl PgConnection {
         };
 
         loop {
-            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
+            if codec::message_complete(&self.read_buf[..self.read_pos])?.is_none() {
                 self.fill_read_buf(None)?;
             }
 
-            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
                 let header = codec::decode_header(&self.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 let body = &self.read_buf[5..msg_len];
@@ -1625,11 +1632,11 @@ impl PgConnection {
         };
 
         loop {
-            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
+            if codec::message_complete(&self.read_buf[..self.read_pos])?.is_none() {
                 self.fill_read_buf(None)?;
             }
 
-            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
                 let header = codec::decode_header(&self.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 let body = &self.read_buf[5..msg_len];
@@ -1706,10 +1713,10 @@ impl PgConnection {
         loop {
             // Only read from the socket when the buffer has no complete message;
             // data may already be buffered from an earlier fill_read_buf call.
-            if codec::message_complete(&self.read_buf[..self.read_pos]).is_none() {
+            if codec::message_complete(&self.read_buf[..self.read_pos])?.is_none() {
                 self.fill_read_buf(None)?;
             }
-            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos]) {
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
                 let header = codec::decode_header(&self.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
                 if header.tag == BackendTag::ReadyForQuery {
@@ -1987,7 +1994,7 @@ impl<'a> CopyWriter<'a> {
         loop {
             self.conn.fill_read_buf(None)?;
             while let Some(msg_len) =
-                codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])
+                codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])?
             {
                 let header = codec::decode_header(&self.conn.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
@@ -2025,7 +2032,7 @@ impl<'a> CopyWriter<'a> {
         loop {
             self.conn.fill_read_buf(None)?;
             while let Some(msg_len) =
-                codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])
+                codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])?
             {
                 let header = codec::decode_header(&self.conn.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
@@ -2076,12 +2083,12 @@ impl<'a> CopyReader<'a> {
             // one TCP segment, the CopyData / CopyDone / ReadyForQuery bytes
             // are already in `read_buf` and we must not block waiting for
             // more socket data before processing them.
-            if codec::message_complete(&self.conn.read_buf[..self.conn.read_pos]).is_none() {
+            if codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])?.is_none() {
                 self.conn.fill_read_buf(None)?;
             }
 
             while let Some(msg_len) =
-                codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])
+                codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])?
             {
                 let header = codec::decode_header(&self.conn.read_buf)
                     .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;

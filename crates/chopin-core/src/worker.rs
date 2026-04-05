@@ -369,7 +369,7 @@ impl Worker {
                                                 keep_alive = false;
                                             }
 
-                                            let response = match self
+                                            let mut response = match self
                                                 .router
                                                 .match_route(ctx.req.method, ctx.req.path)
                                             {
@@ -411,6 +411,25 @@ impl Worker {
                                             // ── Serialize response APPENDING to write_buf ──
                                             // ctx consumed → read_buf borrow released
                                             let wstart = conn.write_len as usize;
+
+                                            // Pre-flight body size guard.
+                                            // Body::Bytes and Body::Static are copied into write_buf
+                                            // (inline) or sent via the body_ptr writev path.  Either
+                                            // way the full body must fit within the write buffer's
+                                            // total capacity.  Bodies exceeding this limit replace
+                                            // the response with 500 before any bytes are written,
+                                            // so the client always receives a complete valid response.
+                                            // Body::File uses sendfile (no write-buf constraint).
+                                            // Body::Stream has unknown size and is handled inline.
+                                            let preflight_body_len = match &response.body {
+                                                crate::http::Body::Bytes(b) => b.len(),
+                                                crate::http::Body::Static(b) => b.len(),
+                                                _ => 0,
+                                            };
+                                            if preflight_body_len > conn.write_buf.len() {
+                                                response = crate::http::Response::server_error();
+                                            }
+
                                             let wbuf = &mut conn.write_buf[wstart..];
                                             let mut pos: usize = 0;
                                             let mut overflow = false;
