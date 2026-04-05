@@ -1069,7 +1069,8 @@ impl PgConnection {
             Ok(n) => {
                 self.read_pos += n;
                 // Process any complete messages
-                while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
+                while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])?
+                {
                     let header = codec::decode_header(&self.read_buf).ok_or_else(|| {
                         PgError::Protocol("Incomplete message header".to_string())
                     })?;

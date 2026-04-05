@@ -588,8 +588,7 @@ impl Worker {
                                                         // Only use writev zero-copy for large bodies (>4 KiB)
                                                         // where the memcpy cost exceeds the syscall cost.
                                                         const WRITEV_THRESHOLD: usize = 4096;
-                                                        if b.len() > WRITEV_THRESHOLD
-                                                            && wstart == 0
+                                                        if b.len() > WRITEV_THRESHOLD && wstart == 0
                                                         {
                                                             // Large body: zero-copy via writev
                                                             conn.body_ptr = b.as_ptr() as usize;
@@ -602,8 +601,7 @@ impl Worker {
                                                     }
                                                     crate::http::Body::Bytes(b) => {
                                                         const WRITEV_THRESHOLD: usize = 4096;
-                                                        if b.len() > WRITEV_THRESHOLD
-                                                            && wstart == 0
+                                                        if b.len() > WRITEV_THRESHOLD && wstart == 0
                                                         {
                                                             // Large body: zero-copy via writev (no boxed shrink)
                                                             let mut b = b;
@@ -1724,9 +1722,7 @@ impl Worker {
                         crate::http::Body::Empty => {}
                         crate::http::Body::Static(b) => {
                             const WRITEV_THRESHOLD: usize = 4096;
-                            if b.len() > WRITEV_THRESHOLD
-                                && wstart == 0
-                            {
+                            if b.len() > WRITEV_THRESHOLD && wstart == 0 {
                                 // Large body: zero-copy via writev
                                 c.body_ptr = b.as_ptr() as usize;
                                 c.body_total = b.len() as u32;
@@ -1737,9 +1733,7 @@ impl Worker {
                         }
                         crate::http::Body::Bytes(b) => {
                             const WRITEV_THRESHOLD: usize = 4096;
-                            if b.len() > WRITEV_THRESHOLD
-                                && wstart == 0
-                            {
+                            if b.len() > WRITEV_THRESHOLD && wstart == 0 {
                                 // Large body: zero-copy via writev
                                 let mut b = b;
                                 b.shrink_to_fit();

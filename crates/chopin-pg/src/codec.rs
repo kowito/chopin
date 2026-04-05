@@ -541,7 +541,10 @@ mod tests {
         let mut msg = [0u8; 6];
         msg[0] = b'D';
         msg[1..5].copy_from_slice(&huge_len.to_be_bytes());
-        assert!(matches!(message_complete(&msg), Err(PgError::BufferOverflow)));
+        assert!(matches!(
+            message_complete(&msg),
+            Err(PgError::BufferOverflow)
+        ));
     }
 
     #[test]
