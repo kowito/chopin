@@ -141,12 +141,9 @@ fn load_root_certs_from_pem(path: &str) -> PgResult<RootCertStore> {
 
     let mut store = RootCertStore::empty();
     for cert in certs {
-        store.add(cert).map_err(|e| {
-            PgError::Protocol(format!(
-                "Invalid certificate in '{}': {}",
-                path, e
-            ))
-        })?;
+        store
+            .add(cert)
+            .map_err(|e| PgError::Protocol(format!("Invalid certificate in '{}': {}", path, e)))?;
     }
     Ok(store)
 }

@@ -492,11 +492,15 @@ pub trait FromRow: Sized {
 pub trait ExtractValue: Sized {
     /// Fetch a column by name and convert it.
     fn extract(row: &Row, col: &str) -> OrmResult<Self> {
-        row.get_by_name(col).map_err(OrmError::from).and_then(Self::from_pg_value)
+        row.get_by_name(col)
+            .map_err(OrmError::from)
+            .and_then(Self::from_pg_value)
     }
     /// Fetch a column by positional index and convert it.
     fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
-        row.get(index).map_err(OrmError::from).and_then(Self::from_pg_value)
+        row.get(index)
+            .map_err(OrmError::from)
+            .and_then(Self::from_pg_value)
     }
     fn from_pg_value(val: PgValue) -> OrmResult<Self>;
 }
