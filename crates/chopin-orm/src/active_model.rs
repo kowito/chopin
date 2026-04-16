@@ -89,10 +89,7 @@ impl<M: Model> ActiveModel<M> {
 
     /// Validates the model, returning an error if validation fails.
     fn validate(&self) -> OrmResult<()> {
-        if let Err(errors) = self.inner.validate() {
-            return Err(OrmError::Validation(errors));
-        }
-        Ok(())
+        self.inner.validate_or_err()
     }
 
     /// Intelligently issues an `INSERT` or `UPDATE` depending on `is_new()` state.

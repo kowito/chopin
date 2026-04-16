@@ -134,6 +134,11 @@ pub trait Validate {
     fn validate(&self) -> Result<(), Vec<String>> {
         Ok(()) // Default passes
     }
+
+    /// Converts a validation failure into an `OrmError::Validation`.
+    fn validate_or_err(&self) -> OrmResult<()> {
+        self.validate().map_err(OrmError::Validation)
+    }
 }
 
 pub trait Model: FromRow + Validate + Sized + Send + Sync {
@@ -223,9 +228,7 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
 
     /// Insert the model into the database. Retrieves generated columns.
     fn insert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
-        if let Err(errors) = self.validate() {
-            return Err(OrmError::Validation(errors));
-        }
+        self.validate_or_err()?;
         let all_cols = Self::columns();
         let gen_cols = Self::generated_columns();
 
@@ -275,9 +278,7 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
 
     /// Insert the model or update it if the primary key conflicts
     fn upsert(&mut self, executor: &mut impl Executor) -> OrmResult<()> {
-        if let Err(errors) = self.validate() {
-            return Err(OrmError::Validation(errors));
-        }
+        self.validate_or_err()?;
         let all_cols = Self::columns();
         let pk_cols = Self::primary_key_columns();
         let gen_cols = Self::generated_columns();
@@ -350,9 +351,7 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
         executor: &mut impl Executor,
         update_columns: &[&str],
     ) -> OrmResult<Self> {
-        if let Err(errors) = self.validate() {
-            return Err(OrmError::Validation(errors));
-        }
+        self.validate_or_err()?;
         let all_columns = Self::columns();
         let all_values = self.get_values();
 
@@ -410,9 +409,7 @@ pub trait Model: FromRow + Validate + Sized + Send + Sync {
 
     /// Update the model in the database matching its primary key.
     fn update(&self, executor: &mut impl Executor) -> OrmResult<()> {
-        if let Err(errors) = self.validate() {
-            return Err(OrmError::Validation(errors));
-        }
+        self.validate_or_err()?;
         let cols = Self::columns();
         let pk_cols = Self::primary_key_columns();
 
@@ -493,21 +490,19 @@ pub trait FromRow: Sized {
 }
 
 pub trait ExtractValue: Sized {
-    fn extract(row: &Row, col: &str) -> OrmResult<Self>;
-    fn extract_at(row: &Row, index: usize) -> OrmResult<Self>;
+    /// Fetch a column by name and convert it.
+    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
+        row.get_by_name(col).map_err(OrmError::from).and_then(Self::from_pg_value)
+    }
+    /// Fetch a column by positional index and convert it.
+    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
+        row.get(index).map_err(OrmError::from).and_then(Self::from_pg_value)
+    }
     fn from_pg_value(val: PgValue) -> OrmResult<Self>;
 }
 
 // Implement ExtractValue for common types
 impl ExtractValue for String {
-    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
-        let val = row.get_by_name(col).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
-    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
-        let val = row.get(index).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Text(s) => Ok(s),
@@ -517,14 +512,6 @@ impl ExtractValue for String {
 }
 
 impl ExtractValue for i32 {
-    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
-        let val = row.get_by_name(col).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
-    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
-        let val = row.get(index).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Int4(v) => Ok(v),
@@ -538,14 +525,6 @@ impl ExtractValue for i32 {
 }
 
 impl ExtractValue for i64 {
-    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
-        let val = row.get_by_name(col).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
-    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
-        let val = row.get(index).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Int8(v) => Ok(v),
@@ -560,14 +539,6 @@ impl ExtractValue for i64 {
 }
 
 impl ExtractValue for bool {
-    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
-        let val = row.get_by_name(col).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
-    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
-        let val = row.get(index).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Bool(v) => Ok(v),
@@ -578,14 +549,6 @@ impl ExtractValue for bool {
 }
 
 impl ExtractValue for f64 {
-    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
-        let val = row.get_by_name(col).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
-    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
-        let val = row.get(index).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Float8(v) => Ok(v),
@@ -600,20 +563,6 @@ impl ExtractValue for f64 {
 
 // Option wrapper
 impl<T: ExtractValue> ExtractValue for Option<T> {
-    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
-        let val = row.get_by_name(col).map_err(OrmError::from)?;
-        if let PgValue::Null = val {
-            return Ok(None);
-        }
-        T::from_pg_value(val).map(Some)
-    }
-    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
-        let val = row.get(index).map_err(OrmError::from)?;
-        if let PgValue::Null = val {
-            return Ok(None);
-        }
-        T::from_pg_value(val).map(Some)
-    }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         if let PgValue::Null = val {
             return Ok(None);
@@ -625,14 +574,6 @@ impl<T: ExtractValue> ExtractValue for Option<T> {
 // ─── f32 ExtractValue ─────────────────────────────────────────────────────────
 
 impl ExtractValue for f32 {
-    fn extract(row: &Row, col: &str) -> OrmResult<Self> {
-        let val = row.get_by_name(col).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
-    fn extract_at(row: &Row, index: usize) -> OrmResult<Self> {
-        let val = row.get(index).map_err(OrmError::from)?;
-        Self::from_pg_value(val)
-    }
     fn from_pg_value(val: PgValue) -> OrmResult<Self> {
         match val {
             PgValue::Float4(v) => Ok(v),
