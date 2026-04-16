@@ -15,12 +15,13 @@ rust_decimal = { version = "1", optional = true }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["std", "tls12"] }
 webpki-roots = { version = "0.26", optional = true }
 rustls-pki-types = { version = "1", optional = true }
+rustls-pemfile = { version = "2", optional = true }
 
 [features]
 default = []
 chrono = ["dep:chrono"]
 decimal = ["dep:rust_decimal"]
-tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
+tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types", "dep:rustls-pemfile"]
 
 [dev-dependencies]
 monoio = { version = "0.2.4", features = ["macros", "utils"] }

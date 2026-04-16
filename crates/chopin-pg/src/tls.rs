@@ -3,7 +3,7 @@
 //! Implements the PostgreSQL SSLRequest protocol and wraps the TCP stream
 //! with rustls for encrypted communication. Enabled via the `tls` feature.
 
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
 
@@ -15,31 +15,35 @@ use crate::error::{PgError, PgResult};
 // ─── SSL Mode ─────────────────────────────────────────────────
 
 /// SSL/TLS mode for PostgreSQL connections.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SslMode {
     /// Never use TLS. Fail if the server requires it.
     Disable,
     /// Try TLS first; fall back to plaintext if the server doesn't support it.
+    #[default]
     Prefer,
-    /// Require TLS. Fail if the server doesn't support it.
+    /// Require TLS. Verify the server certificate against the configured
+    /// root CA(s). Fail if the server doesn't support TLS or the certificate
+    /// cannot be verified.
     Require,
+    /// Require TLS, verify the server certificate, **and** verify that the
+    /// server hostname matches the certificate's CN / SAN. This is the
+    /// strictest mode and is recommended for production / AWS RDS connections.
+    VerifyFull,
 }
 
 impl SslMode {
-    /// Parse from a string (e.g., URL query parameter `?sslmode=prefer`).
+    /// Parse from a string (e.g., URL query parameter `?sslmode=verify-full`).
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "disable" => Some(SslMode::Disable),
             "prefer" => Some(SslMode::Prefer),
             "require" => Some(SslMode::Require),
+            "verify-full" | "verify_full" => Some(SslMode::VerifyFull),
+            // Map verify-ca to Require (cert verification without extra hostname check)
+            "verify-ca" | "verify_ca" => Some(SslMode::Require),
             _ => None,
         }
-    }
-}
-
-impl Default for SslMode {
-    fn default() -> Self {
-        SslMode::Prefer
     }
 }
 
@@ -66,8 +70,18 @@ pub(crate) enum TlsNegotiateResult {
 /// response (`S` = proceed, `N` = refused), and either completes the TLS
 /// handshake or returns the TCP stream for plain-text use.
 ///
+/// `ssl_root_cert` — optional path to a PEM file containing one or more root
+/// CA certificates to use as the trust store. When `Some`, these certs
+/// **replace** the Mozilla WebPKI roots, which is required for AWS RDS
+/// (and other services backed by a private CA). When `None`, the standard
+/// Mozilla root bundle is used.
+///
 /// The TCP stream **must** be in blocking mode when this is called.
-pub(crate) fn negotiate(mut tcp: TcpStream, host: &str) -> PgResult<TlsNegotiateResult> {
+pub(crate) fn negotiate(
+    mut tcp: TcpStream,
+    host: &str,
+    ssl_root_cert: Option<&str>,
+) -> PgResult<TlsNegotiateResult> {
     // Send SSLRequest
     tcp.write_all(&SSL_REQUEST).map_err(PgError::Io)?;
 
@@ -79,8 +93,11 @@ pub(crate) fn negotiate(mut tcp: TcpStream, host: &str) -> PgResult<TlsNegotiate
         return Ok(TlsNegotiateResult::Rejected(tcp));
     }
 
-    // Build rustls client config with Mozilla root certificates
-    let root_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    // Build root cert store — custom CA bundle takes priority over WebPKI roots.
+    let root_store = match ssl_root_cert {
+        Some(path) => load_root_certs_from_pem(path)?,
+        None => RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
+    };
 
     let config = ClientConfig::builder()
         .with_root_certificates(root_store)
@@ -98,6 +115,40 @@ pub(crate) fn negotiate(mut tcp: TcpStream, host: &str) -> PgResult<TlsNegotiate
     stream.complete_handshake()?;
 
     Ok(TlsNegotiateResult::Tls(stream))
+}
+
+// ─── PEM Certificate Loading ──────────────────────────────────
+
+/// Load root CA certificates from a PEM file into a `RootCertStore`.
+///
+/// This is used for custom CA bundles, most notably the
+/// [AWS RDS CA bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem).
+fn load_root_certs_from_pem(path: &str) -> PgResult<RootCertStore> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| PgError::Protocol(format!("Cannot open sslrootcert '{}': {}", path, e)))?;
+    let mut reader = BufReader::new(file);
+
+    let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
+        .filter_map(|c| c.ok())
+        .collect();
+
+    if certs.is_empty() {
+        return Err(PgError::Protocol(format!(
+            "No certificates found in sslrootcert file '{}'",
+            path
+        )));
+    }
+
+    let mut store = RootCertStore::empty();
+    for cert in certs {
+        store.add(cert).map_err(|e| {
+            PgError::Protocol(format!(
+                "Invalid certificate in '{}': {}",
+                path, e
+            ))
+        })?;
+    }
+    Ok(store)
 }
 
 // ─── TLS Stream ───────────────────────────────────────────────

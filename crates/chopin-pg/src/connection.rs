@@ -141,6 +141,14 @@ pub struct PgConfig {
     /// Default: `Prefer` (try TLS, fall back to plaintext).
     #[cfg(feature = "tls")]
     pub ssl_mode: tls::SslMode,
+    /// Path to a PEM file containing one or more root CA certificates.
+    ///
+    /// Use this to trust a private CA, such as the
+    /// [AWS RDS CA bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem).
+    /// When set, these certs replace the default Mozilla WebPKI root store.
+    /// Only effective when the `tls` feature is enabled.
+    #[cfg(feature = "tls")]
+    pub ssl_root_cert: Option<String>,
 }
 
 impl PgConfig {
@@ -154,6 +162,8 @@ impl PgConfig {
             socket_dir: None,
             #[cfg(feature = "tls")]
             ssl_mode: tls::SslMode::default(),
+            #[cfg(feature = "tls")]
+            ssl_root_cert: None,
         }
     }
 
@@ -168,6 +178,24 @@ impl PgConfig {
     #[cfg(feature = "tls")]
     pub fn with_ssl_mode(mut self, mode: tls::SslMode) -> Self {
         self.ssl_mode = mode;
+        self
+    }
+
+    /// Set the path to a PEM file of root CA certificates.
+    ///
+    /// Required for connecting to AWS RDS (and other servers backed by a
+    /// private CA). Download the bundle from:
+    /// <https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem>
+    ///
+    /// # Example
+    /// ```ignore
+    /// let config = PgConfig::new("mydb.cluster-xyz.us-east-1.rds.amazonaws.com", 5432, "user", "pass", "mydb")
+    ///     .with_ssl_mode(SslMode::VerifyFull)
+    ///     .with_ssl_root_cert("/etc/ssl/certs/aws-rds-bundle.pem");
+    /// ```
+    #[cfg(feature = "tls")]
+    pub fn with_ssl_root_cert(mut self, path: &str) -> Self {
+        self.ssl_root_cert = Some(path.to_string());
         self
     }
 
@@ -195,10 +223,12 @@ impl PgConfig {
             .split_once('/')
             .ok_or_else(|| PgError::Protocol("Missing database in URL".to_string()))?;
 
-        // Parse query params for socket dir and sslmode
+        // Parse query params for socket dir, sslmode, and sslrootcert
         let mut socket_dir: Option<String> = None;
         #[cfg(feature = "tls")]
         let mut ssl_mode = tls::SslMode::default();
+        #[cfg(feature = "tls")]
+        let mut ssl_root_cert: Option<String> = None;
         if !query_part.is_empty() {
             for param in query_part.split('&') {
                 if let Some(value) = param.strip_prefix("host=")
@@ -207,10 +237,14 @@ impl PgConfig {
                     socket_dir = Some(value.to_string());
                 }
                 #[cfg(feature = "tls")]
-                if let Some(value) = param.strip_prefix("sslmode=") {
-                    if let Some(mode) = tls::SslMode::parse(value) {
-                        ssl_mode = mode;
-                    }
+                if let Some(value) = param.strip_prefix("sslmode=")
+                    && let Some(mode) = tls::SslMode::parse(value)
+                {
+                    ssl_mode = mode;
+                }
+                #[cfg(feature = "tls")]
+                if let Some(value) = param.strip_prefix("sslrootcert=") {
+                    ssl_root_cert = Some(percent_decode(value));
                 }
             }
         }
@@ -250,6 +284,8 @@ impl PgConfig {
             socket_dir,
             #[cfg(feature = "tls")]
             ssl_mode,
+            #[cfg(feature = "tls")]
+            ssl_root_cert,
         })
     }
 }
@@ -357,26 +393,34 @@ impl PgConnection {
             // TLS negotiation (when feature enabled)
             #[cfg(feature = "tls")]
             {
+                let root_cert = config.ssl_root_cert.as_deref();
                 match config.ssl_mode {
                     tls::SslMode::Disable => PgStream::Tcp(tcp),
-                    tls::SslMode::Prefer => match tls::negotiate(tcp, &config.host) {
-                        Ok(tls::TlsNegotiateResult::Tls(tls_stream)) => PgStream::Tls(tls_stream),
-                        Ok(tls::TlsNegotiateResult::Rejected(tcp)) => PgStream::Tcp(tcp),
-                        Err(_) => {
-                            // TLS negotiation failed — reconnect plain-text
-                            let tcp = TcpStream::connect(&addr).map_err(PgError::Io)?;
-                            let _ = tcp.set_nodelay(true);
-                            PgStream::Tcp(tcp)
+                    tls::SslMode::Prefer => {
+                        match tls::negotiate(tcp, &config.host, root_cert) {
+                            Ok(tls::TlsNegotiateResult::Tls(tls_stream)) => {
+                                PgStream::Tls(tls_stream)
+                            }
+                            Ok(tls::TlsNegotiateResult::Rejected(tcp)) => PgStream::Tcp(tcp),
+                            Err(_) => {
+                                // TLS negotiation failed — reconnect plain-text
+                                let tcp = TcpStream::connect(&addr).map_err(PgError::Io)?;
+                                let _ = tcp.set_nodelay(true);
+                                PgStream::Tcp(tcp)
+                            }
                         }
-                    },
-                    tls::SslMode::Require => match tls::negotiate(tcp, &config.host)? {
-                        tls::TlsNegotiateResult::Tls(tls_stream) => PgStream::Tls(tls_stream),
-                        tls::TlsNegotiateResult::Rejected(_) => {
-                            return Err(PgError::Protocol(
-                                "Server does not support SSL (sslmode=require)".to_string(),
-                            ));
+                    }
+                    tls::SslMode::Require | tls::SslMode::VerifyFull => {
+                        match tls::negotiate(tcp, &config.host, root_cert)? {
+                            tls::TlsNegotiateResult::Tls(tls_stream) => PgStream::Tls(tls_stream),
+                            tls::TlsNegotiateResult::Rejected(_) => {
+                                return Err(PgError::Protocol(format!(
+                                    "Server does not support SSL (sslmode={:?})",
+                                    config.ssl_mode
+                                )));
+                            }
                         }
-                    },
+                    }
                 }
             }
 
