@@ -173,6 +173,27 @@ pub struct PoolStats {
     pub lifetime_expirations: u64,
     pub idle_expirations: u64,
     pub checkout_timeouts: u64,
+    /// Total nanoseconds spent waiting for a connection across all `get()` calls.
+    pub total_checkout_wait_nanos: u64,
+    /// Maximum nanoseconds spent waiting for a single `get()` call.
+    pub max_checkout_wait_nanos: u64,
+}
+
+impl PoolStats {
+    /// Average time waiting for a connection across all `get()` calls (microseconds).
+    ///
+    /// Returns `0` when no checkouts have been recorded.
+    pub fn avg_checkout_wait_micros(&self) -> u64 {
+        if self.total_checkouts == 0 {
+            return 0;
+        }
+        (self.total_checkout_wait_nanos / self.total_checkouts) / 1_000
+    }
+
+    /// Maximum single `get()` wait time in microseconds.
+    pub fn max_checkout_wait_micros(&self) -> u64 {
+        self.max_checkout_wait_nanos / 1_000
+    }
 }
 
 // ─── PgPool ───────────────────────────────────────────────────
@@ -337,6 +358,12 @@ impl PgPool {
         match self.try_checkout() {
             Ok(pooled) => {
                 self.active += 1;
+                let elapsed_ns = start.elapsed().as_nanos() as u64;
+                self.stats.total_checkout_wait_nanos =
+                    self.stats.total_checkout_wait_nanos.saturating_add(elapsed_ns);
+                if elapsed_ns > self.stats.max_checkout_wait_nanos {
+                    self.stats.max_checkout_wait_nanos = elapsed_ns;
+                }
                 return Ok(ConnectionGuard {
                     pool: self as *mut PgPool,
                     conn: Some(pooled),
@@ -363,6 +390,12 @@ impl PgPool {
             match self.try_checkout() {
                 Ok(pooled) => {
                     self.active += 1;
+                    let elapsed_ns = start.elapsed().as_nanos() as u64;
+                    self.stats.total_checkout_wait_nanos =
+                        self.stats.total_checkout_wait_nanos.saturating_add(elapsed_ns);
+                    if elapsed_ns > self.stats.max_checkout_wait_nanos {
+                        self.stats.max_checkout_wait_nanos = elapsed_ns;
+                    }
                     return Ok(ConnectionGuard {
                         pool: self as *mut PgPool,
                         conn: Some(pooled),
@@ -396,7 +429,29 @@ impl PgPool {
         }
     }
 
-    // ─── Maintenance ──────────────────────────────────────────
+    /// Pre-warm the pool by eagerly creating connections up to `target`.
+    ///
+    /// Creates new connections until `idle + active >= min(target, max_size)`.
+    /// Returns the number of connections actually created.
+    ///
+    /// Useful for ensuring a minimum number of connections are ready at
+    /// startup, avoiding cold-start latency on first use.
+    pub fn warmup(&mut self, target: usize) -> PgResult<usize> {
+        let effective = target.min(self.pool_config.max_size);
+        let current = self.idle.len() + self.active;
+        if current >= effective {
+            return Ok(0);
+        }
+        let need = effective - current;
+        let mut created = 0;
+        for _ in 0..need {
+            let conn = PgConnection::connect(&self.config)?;
+            self.idle.push_back(PooledConn::new(conn));
+            self.stats.total_connections_created += 1;
+            created += 1;
+        }
+        Ok(created)
+    }
 
     /// Reap expired connections (call periodically from your event loop).
     ///

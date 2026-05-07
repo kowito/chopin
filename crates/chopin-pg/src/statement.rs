@@ -10,6 +10,21 @@ use std::collections::HashMap;
 /// Default maximum number of cached statements before LRU eviction kicks in.
 const DEFAULT_MAX_CAPACITY: usize = 256;
 
+/// Statistics for the statement cache.
+#[derive(Debug, Clone, Default)]
+pub struct CacheStats {
+    /// Number of cache hits (statement already parsed on server).
+    pub hits: u64,
+    /// Number of cache misses (statement sent to server for parsing).
+    pub misses: u64,
+    /// Number of LRU evictions.
+    pub evictions: u64,
+    /// Current number of cached statements.
+    pub size: usize,
+    /// Maximum capacity before eviction.
+    pub capacity: usize,
+}
+
 /// A cached prepared statement with its row description.
 #[derive(Debug, Clone)]
 pub struct CachedStatement {
@@ -34,6 +49,12 @@ pub struct StatementCache {
     tick: u64,
     /// Maximum number of entries before LRU eviction.
     max_capacity: usize,
+    /// Cumulative cache hits.
+    hits: u64,
+    /// Cumulative cache misses.
+    misses: u64,
+    /// Cumulative LRU evictions.
+    evictions: u64,
 }
 
 /// A reference to a cached or new statement.
@@ -66,6 +87,9 @@ impl StatementCache {
             counter: 0,
             tick: 0,
             max_capacity: DEFAULT_MAX_CAPACITY,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
         }
     }
 
@@ -76,6 +100,9 @@ impl StatementCache {
             counter: 0,
             tick: 0,
             max_capacity,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
         }
     }
 
@@ -98,12 +125,14 @@ impl StatementCache {
 
         if let Some(cached) = self.cache.get_mut(&hash) {
             cached.access_tick = current_tick;
+            self.hits += 1;
             Statement {
                 name: cached.name.clone(),
                 is_new: false,
                 columns: cached.columns.clone(),
             }
         } else {
+            self.misses += 1;
             let name = format!("s{}", self.counter);
             self.counter += 1;
             Statement {
@@ -154,6 +183,7 @@ impl StatementCache {
             .min_by_key(|(_, v)| v.access_tick)
             .map(|(k, _)| k)?;
         let evicted = self.cache.remove(&lru_key)?;
+        self.evictions += 1;
         Some(EvictedStatement { name: evicted.name })
     }
 
@@ -190,6 +220,17 @@ impl StatementCache {
     /// Return the names of all cached statements (for server-side Close).
     pub fn cached_names(&self) -> Vec<String> {
         self.cache.values().map(|c| c.name.clone()).collect()
+    }
+
+    /// Return cumulative cache statistics.
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            hits: self.hits,
+            misses: self.misses,
+            evictions: self.evictions,
+            size: self.cache.len(),
+            capacity: self.max_capacity,
+        }
     }
 
     /// FNV-1a hash for SQL strings (fast, no allocations).

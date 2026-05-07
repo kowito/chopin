@@ -270,6 +270,39 @@ impl Row {
     }
 }
 
+// ─── FromRow Trait ────────────────────────────────────────────
+
+/// Conversion from a query result [`Row`] into a Rust type.
+///
+/// Implement this trait to conveniently map database rows to your own
+/// structs without repeating field-access boilerplate.
+///
+/// # Example
+/// ```ignore
+/// struct User { id: i32, name: String }
+///
+/// impl FromRow for User {
+///     fn from_row(row: &Row) -> PgResult<Self> {
+///         Ok(User {
+///             id: row.get::<i32>(0)?,
+///             name: row.get::<String>(1)?,
+///         })
+///     }
+/// }
+///
+/// let users: Vec<User> = conn
+///     .query("SELECT id, name FROM users", &[])?
+///     .iter()
+///     .map(User::from_row)
+///     .collect::<PgResult<Vec<_>>>()?;
+/// ```
+pub trait FromRow: Sized {
+    /// Convert `row` into `Self`.
+    ///
+    /// Return [`PgError::TypeConversion`] for type mismatches or missing columns.
+    fn from_row(row: &Row) -> PgResult<Self>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -63,6 +63,8 @@ pub enum BackendTag {
     CopyOutResponse = b'H',
     CopyDone = b'c',
     CopyData = b'd',
+    /// Portal suspended — more rows available after `Execute` with a row limit.
+    PortalSuspended = b's',
     NegotiateProtocolVersion = b'v',
     Unknown = 0,
 }
@@ -90,6 +92,7 @@ impl From<u8> for BackendTag {
             b'H' => BackendTag::CopyOutResponse,
             b'c' => BackendTag::CopyDone,
             b'd' => BackendTag::CopyData,
+            b's' => BackendTag::PortalSuspended,
             b'v' => BackendTag::NegotiateProtocolVersion,
             _ => BackendTag::Unknown,
         }

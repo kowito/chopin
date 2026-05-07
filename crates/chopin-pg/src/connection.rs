@@ -31,13 +31,84 @@ use crate::codec;
 use crate::error::{PgError, PgResult};
 use crate::protocol::*;
 use crate::row::Row;
-use crate::statement::StatementCache;
+use crate::statement::{CacheStats, StatementCache};
 #[cfg(feature = "tls")]
 use crate::tls;
 use crate::types::{PgValue, ToSql};
 
 /// Default I/O timeout for poll operations (5 seconds).
 const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(5);
+
+// ─── SecretString ─────────────────────────────────────────────
+
+/// A `String` wrapper that zeroes its memory when dropped.
+///
+/// Uses `std::ptr::write_volatile` to prevent the compiler from optimising
+/// away the zero-fill before the allocator reclaims the bytes.  This
+/// limits credential exposure through core dumps, `/proc/self/mem`, and
+/// page-file leaks.
+#[derive(Clone)]
+pub struct SecretString(String);
+
+impl SecretString {
+    /// Wrap a string value.
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    /// Borrow the contained string slice.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Drop for SecretString {
+    fn drop(&mut self) {
+        // SAFETY: we own the allocation and will never read it again.
+        // write_volatile prevents the optimizer from eliding the zeroing.
+        let bytes = unsafe { self.0.as_mut_vec() };
+        for b in bytes.iter_mut() {
+            unsafe { std::ptr::write_volatile(b as *mut u8, 0) };
+        }
+    }
+}
+
+impl From<&str> for SecretString {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretString(***)")
+    }
+}
+
+impl PartialEq<&str> for SecretString {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<str> for SecretString {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq for SecretString {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
 
 // ─── Stream Abstraction ──────────────────────────────────────
 
@@ -132,11 +203,20 @@ pub struct PgConfig {
     pub host: String,
     pub port: u16,
     pub user: String,
-    pub password: String,
+    /// Password stored in a zeroing wrapper — never appears in `Debug` output.
+    pub password: SecretString,
     pub database: String,
     /// Optional Unix domain socket directory.
     /// When set, connect via `<socket_dir>/.s.PGSQL.<port>` instead of TCP.
     pub socket_dir: Option<String>,
+    /// Optional `application_name` sent during startup.
+    /// Visible in `pg_stat_activity.application_name` for observability.
+    pub application_name: Option<String>,
+    /// Initial read buffer size in bytes.  The buffer grows dynamically as
+    /// needed; this only controls the initial allocation. Default: 64 KiB.
+    pub read_buf_size: usize,
+    /// Initial write buffer size in bytes. Default: 64 KiB.
+    pub write_buf_size: usize,
     /// SSL/TLS mode. Only effective when the `tls` feature is enabled.
     /// Default: `Prefer` (try TLS, fall back to plaintext).
     #[cfg(feature = "tls")]
@@ -157,9 +237,12 @@ impl PgConfig {
             host: host.to_string(),
             port,
             user: user.to_string(),
-            password: password.to_string(),
+            password: SecretString::new(password),
             database: database.to_string(),
             socket_dir: None,
+            application_name: None,
+            read_buf_size: 64 * 1024,
+            write_buf_size: 64 * 1024,
             #[cfg(feature = "tls")]
             ssl_mode: tls::SslMode::default(),
             #[cfg(feature = "tls")]
@@ -171,6 +254,22 @@ impl PgConfig {
     /// The actual socket path will be `<dir>/.s.PGSQL.<port>`.
     pub fn with_socket_dir(mut self, dir: &str) -> Self {
         self.socket_dir = Some(dir.to_string());
+        self
+    }
+
+    /// Set `application_name` to identify this connection in `pg_stat_activity`.
+    pub fn with_application_name(mut self, name: &str) -> Self {
+        self.application_name = Some(name.to_string());
+        self
+    }
+
+    /// Set the initial read and write buffer sizes (bytes).
+    ///
+    /// Buffers grow automatically as needed; this controls only the initial
+    /// allocation size. Both values are clamped to a minimum of 8 KiB.
+    pub fn with_buf_sizes(mut self, read_buf_size: usize, write_buf_size: usize) -> Self {
+        self.read_buf_size = read_buf_size.max(8 * 1024);
+        self.write_buf_size = write_buf_size.max(8 * 1024);
         self
     }
 
@@ -204,16 +303,25 @@ impl PgConfig {
     /// For Unix domain sockets, use a path as the host:
     /// `postgres://user:pass@%2Fvar%2Frun%2Fpostgresql/db`  (URL-encoded slashes)
     /// or `postgres://user:pass@/db?host=/var/run/postgresql`
+    ///
+    /// IPv6 addresses must use bracket notation: `postgres://user:pass@[::1]:5432/db`
+    ///
+    /// Passwords containing `@` or `:` must be percent-encoded.
     pub fn from_url(url: &str) -> PgResult<Self> {
         let url = url
             .strip_prefix("postgres://")
             .or_else(|| url.strip_prefix("postgresql://"))
             .ok_or_else(|| PgError::Protocol("Invalid URL scheme".to_string()))?;
 
-        // user:pass@host:port/db
+        // Use rsplit_once so that passwords containing '@' (percent-encoded as %40
+        // or literal '@') are handled correctly — the last '@' separates
+        // userinfo from host.
         let (userpass, hostdb) = url
-            .split_once('@')
+            .rsplit_once('@')
             .ok_or_else(|| PgError::Protocol("Missing @ in URL".to_string()))?;
+
+        // Split user:password on the FIRST ':' only so passwords containing
+        // ':' (percent-encoded) are preserved intact.
         let (user, password) = userpass.split_once(':').unwrap_or((userpass, ""));
 
         // Check for ?host= query parameter (Unix socket)
@@ -225,6 +333,7 @@ impl PgConfig {
 
         // Parse query params for socket dir, sslmode, and sslrootcert
         let mut socket_dir: Option<String> = None;
+        let mut application_name: Option<String> = None;
         #[cfg(feature = "tls")]
         let mut ssl_mode = tls::SslMode::default();
         #[cfg(feature = "tls")]
@@ -235,6 +344,9 @@ impl PgConfig {
                     && value.starts_with('/')
                 {
                     socket_dir = Some(value.to_string());
+                }
+                if let Some(value) = param.strip_prefix("application_name=") {
+                    application_name = Some(percent_decode(value));
                 }
                 #[cfg(feature = "tls")]
                 if let Some(value) = param.strip_prefix("sslmode=")
@@ -268,7 +380,19 @@ impl PgConfig {
                 .map_err(|_| PgError::Protocol("Invalid port".to_string()))?;
             ("localhost".to_string(), port)
         } else {
-            let (h, port_str) = hostport.split_once(':').unwrap_or((hostport, "5432"));
+            // Handle IPv6 bracket notation: [::1]:5432 or [::1]
+            let (h, port_str) = if hostport.starts_with('[') {
+                let bracket_end = hostport
+                    .find(']')
+                    .ok_or_else(|| PgError::Protocol("Unterminated IPv6 address in URL".to_string()))?;
+                let addr = &hostport[1..bracket_end];
+                let rest = &hostport[bracket_end + 1..];
+                let p = rest.strip_prefix(':').unwrap_or("5432");
+                (addr, p)
+            } else {
+                let (h, p) = hostport.split_once(':').unwrap_or((hostport, "5432"));
+                (h, p)
+            };
             let port: u16 = port_str
                 .parse()
                 .map_err(|_| PgError::Protocol("Invalid port".to_string()))?;
@@ -278,10 +402,13 @@ impl PgConfig {
         Ok(Self {
             host,
             port,
-            user: user.to_string(),
-            password: password.to_string(),
-            database: database.to_string(),
+            user: percent_decode(user),
+            password: SecretString::new(percent_decode(password)),
+            database: percent_decode(database),
             socket_dir,
+            application_name,
+            read_buf_size: 64 * 1024,
+            write_buf_size: 64 * 1024,
             #[cfg(feature = "tls")]
             ssl_mode,
             #[cfg(feature = "tls")]
@@ -363,6 +490,14 @@ pub struct PgConnection {
     /// Flag set on fatal I/O errors. A broken connection must not be
     /// returned to the pool; it will be discarded on drop.
     broken: bool,
+    /// Host used to connect — stored for cancel request.
+    cancel_host: String,
+    /// Port used to connect — stored for cancel request.
+    cancel_port: u16,
+    /// Unix socket directory, if used — stored for cancel request.
+    cancel_socket_dir: Option<String>,
+    /// Monotonically increasing counter for generating unique portal names.
+    portal_counter: u32,
 }
 
 impl PgConnection {
@@ -430,8 +565,8 @@ impl PgConnection {
 
         let mut conn = Self {
             stream,
-            read_buf: vec![0u8; 64 * 1024],  // 64 KB read buffer
-            write_buf: vec![0u8; 64 * 1024], // 64 KB write buffer
+            read_buf: vec![0u8; config.read_buf_size],
+            write_buf: vec![0u8; config.write_buf_size],
             read_pos: 0,
             tx_status: TransactionStatus::Idle,
             stmt_cache: StatementCache::new(),
@@ -445,6 +580,10 @@ impl PgConnection {
             io_timeout: DEFAULT_IO_TIMEOUT,
             notice_handler: None,
             broken: false,
+            cancel_host: config.host.clone(),
+            cancel_port: config.port,
+            cancel_socket_dir: config.socket_dir.clone(),
+            portal_counter: 0,
         };
 
         conn.startup(config)?;
@@ -524,9 +663,20 @@ impl PgConnection {
 
     /// Perform the startup and authentication handshake.
     fn startup(&mut self, config: &PgConfig) -> PgResult<()> {
+        // Build optional startup parameters
+        let mut extra_params: Vec<(&str, &str)> = Vec::new();
+        if let Some(ref name) = config.application_name {
+            extra_params.push(("application_name", name.as_str()));
+        }
+
         // Send StartupMessage
         self.ensure_write_capacity(512);
-        let n = codec::encode_startup(&mut self.write_buf, &config.user, &config.database, &[]);
+        let n = codec::encode_startup(
+            &mut self.write_buf,
+            &config.user,
+            &config.database,
+            &extra_params,
+        );
         self.stream
             .write_all(&self.write_buf[..n])
             .map_err(PgError::Io)?;
@@ -549,7 +699,7 @@ impl PgConnection {
                             }
                             Some(AuthType::CleartextPassword) => {
                                 let n =
-                                    codec::encode_password(&mut self.write_buf, &config.password);
+                                    codec::encode_password(&mut self.write_buf, config.password.as_str());
                                 self.stream
                                     .write_all(&self.write_buf[..n])
                                     .map_err(PgError::Io)?;
@@ -562,20 +712,20 @@ impl PgConnection {
                                         (
                                             ScramClient::new_with_channel_binding(
                                                 &config.user,
-                                                &config.password,
+                                                config.password.as_str(),
                                                 cb_data,
                                             ),
                                             "SCRAM-SHA-256-PLUS",
                                         )
                                     } else {
                                         (
-                                            ScramClient::new(&config.user, &config.password),
+                                            ScramClient::new(&config.user, config.password.as_str()),
                                             "SCRAM-SHA-256",
                                         )
                                     };
                                 #[cfg(not(feature = "tls"))]
                                 let (mut scram, mechanism) = (
-                                    ScramClient::new(&config.user, &config.password),
+                                    ScramClient::new(&config.user, config.password.as_str()),
                                     "SCRAM-SHA-256",
                                 );
 
@@ -605,7 +755,7 @@ impl PgConnection {
                                 let salt: [u8; 4] = [body[4], body[5], body[6], body[7]];
                                 let hash = crate::auth::md5_password_hash(
                                     &config.user,
-                                    &config.password,
+                                    config.password.as_str(),
                                     &salt,
                                 );
                                 let n = codec::encode_password(&mut self.write_buf, &hash);
@@ -785,126 +935,30 @@ impl PgConnection {
 
     /// Execute a query expecting exactly one row.
     ///
-    /// Optimised path: reads the Extended Query Protocol response stream and
-    /// returns the **first** `DataRow` directly, without collecting into a
-    /// `Vec<Row>`.  Subsequent rows (if any) are still drained so the
-    /// connection is left in a clean state.
+    /// Returns `Ok(Row)` when exactly one row is returned, `Err(NoRows)` when
+    /// zero rows are returned, and `Err(TooManyRows)` when more than one row
+    /// is returned.  Use [`query_opt`] when zero rows are acceptable.
     pub fn query_one(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Row> {
-        let stmt = self.stmt_cache.get_or_create(sql);
-
-        let estimated = 10 + sql.len() + (params.len() * 256);
-        self.ensure_write_capacity(estimated);
-
-        let mut pos = 0;
-
-        if stmt.is_new {
-            let n = codec::encode_parse(&mut self.write_buf[pos..], &stmt.name, sql, &[]);
-            pos += n;
-            let n = codec::encode_describe(
-                &mut self.write_buf[pos..],
-                DescribeTarget::Statement,
-                &stmt.name,
-            );
-            pos += n;
+        let mut rows = self.query(sql, params)?;
+        match rows.len() {
+            0 => Err(PgError::NoRows),
+            1 => Ok(rows.remove(0)),
+            _ => Err(PgError::TooManyRows),
         }
-
-        let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
-        let param_formats: Vec<i16> = pg_values
-            .iter()
-            .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
-            .collect();
-        let param_values: Vec<Option<Vec<u8>>> = pg_values
-            .iter()
-            .zip(param_formats.iter())
-            .map(|(v, &fmt)| {
-                if fmt == 1 {
-                    v.to_binary_bytes()
-                } else {
-                    v.to_text_bytes()
-                }
-            })
-            .collect();
-        let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
-        let n = codec::encode_bind(
-            &mut self.write_buf[pos..],
-            "",
-            &stmt.name,
-            &param_formats,
-            &param_refs,
-            &[1],
-        );
-        pos += n;
-
-        // Execute with max_rows = 0 (unlimited) — PostgreSQL will send all
-        // DataRows but we stop caring after the first one.
-        let n = codec::encode_execute(&mut self.write_buf[pos..], "", 0);
-        pos += n;
-
-        let n = codec::encode_sync(&mut self.write_buf[pos..]);
-        pos += n;
-
-        self.flush_write_buf(pos)?;
-
-        self.read_extended_result_one(sql, &stmt.name, stmt.is_new, stmt.columns)
     }
 
-    /// Execute a query expecting zero or one row. Returns `Ok(None)` when
-    /// the query returns no rows, avoiding the `PgError::NoRows` error path.
+    /// Execute a query expecting zero or one row.
+    ///
+    /// Returns `Ok(None)` when zero rows are returned, `Ok(Some(Row))` when
+    /// exactly one row is returned, and `Err(TooManyRows)` when more than one
+    /// row is returned.
     pub fn query_opt(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Option<Row>> {
-        let stmt = self.stmt_cache.get_or_create(sql);
-
-        let estimated = 10 + sql.len() + (params.len() * 256);
-        self.ensure_write_capacity(estimated);
-
-        let mut pos = 0;
-
-        if stmt.is_new {
-            let n = codec::encode_parse(&mut self.write_buf[pos..], &stmt.name, sql, &[]);
-            pos += n;
-            let n = codec::encode_describe(
-                &mut self.write_buf[pos..],
-                DescribeTarget::Statement,
-                &stmt.name,
-            );
-            pos += n;
+        let mut rows = self.query(sql, params)?;
+        match rows.len() {
+            0 => Ok(None),
+            1 => Ok(Some(rows.remove(0))),
+            _ => Err(PgError::TooManyRows),
         }
-
-        let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
-        let param_formats: Vec<i16> = pg_values
-            .iter()
-            .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
-            .collect();
-        let param_values: Vec<Option<Vec<u8>>> = pg_values
-            .iter()
-            .zip(param_formats.iter())
-            .map(|(v, &fmt)| {
-                if fmt == 1 {
-                    v.to_binary_bytes()
-                } else {
-                    v.to_text_bytes()
-                }
-            })
-            .collect();
-        let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
-        let n = codec::encode_bind(
-            &mut self.write_buf[pos..],
-            "",
-            &stmt.name,
-            &param_formats,
-            &param_refs,
-            &[1],
-        );
-        pos += n;
-
-        let n = codec::encode_execute(&mut self.write_buf[pos..], "", 0);
-        pos += n;
-
-        let n = codec::encode_sync(&mut self.write_buf[pos..]);
-        pos += n;
-
-        self.flush_write_buf(pos)?;
-
-        self.read_extended_result_opt(sql, &stmt.name, stmt.is_new, stmt.columns)
     }
 
     /// Execute a statement that returns no rows (INSERT, UPDATE, DELETE).
@@ -1235,6 +1289,428 @@ impl PgConnection {
     /// Check if the connection is alive by sending a simple query.
     pub fn is_alive(&mut self) -> bool {
         self.query_simple("SELECT 1").is_ok()
+    }
+
+    // ─── Streaming Cursor ─────────────────────────────────────
+
+    /// Open a streaming cursor over a parameterized query.
+    ///
+    /// Uses a PostgreSQL **named portal** to stream rows in batches without
+    /// buffering the entire result set in memory. Ideal for large result sets
+    /// where collecting all rows upfront would be impractical.
+    ///
+    /// The connection is exclusively borrowed for the lifetime of the cursor;
+    /// no other queries can run until the cursor is dropped.
+    ///
+    /// # Parameters
+    /// - `fetch_size`: number of rows to retrieve per [`Cursor::fetch`] call.
+    ///   A value of `0` is clamped to `1`.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut cursor = conn.query_cursor(
+    ///     "SELECT id, email FROM users WHERE active = $1",
+    ///     &[&true],
+    ///     100,
+    /// )?;
+    /// while let batch = cursor.fetch()? {
+    ///     if batch.is_empty() { break; }
+    ///     for row in &batch { /* process row */ }
+    /// }
+    /// ```
+    pub fn query_cursor(
+        &mut self,
+        sql: &str,
+        params: &[&dyn ToSql],
+        fetch_size: usize,
+    ) -> PgResult<Cursor<'_>> {
+        let stmt = self.stmt_cache.get_or_create(sql);
+        self.portal_counter = self.portal_counter.wrapping_add(1);
+        let portal_name = format!("p{}", self.portal_counter);
+
+        let estimated = 30 + sql.len() + params.len() * 256 + portal_name.len() * 2 + 50;
+        self.ensure_write_capacity(estimated);
+
+        let mut pos = 0;
+        let stmt_name = stmt.name.clone();
+        let is_new = stmt.is_new;
+        let cached_columns = stmt.columns.clone();
+
+        if is_new {
+            let n = codec::encode_parse(&mut self.write_buf[pos..], &stmt_name, sql, &[]);
+            pos += n;
+            let n = codec::encode_describe(
+                &mut self.write_buf[pos..],
+                DescribeTarget::Statement,
+                &stmt_name,
+            );
+            pos += n;
+        }
+
+        // Bind to the named portal (not the unnamed "").
+        let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
+        let param_formats: Vec<i16> = pg_values
+            .iter()
+            .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
+            .collect();
+        let param_values: Vec<Option<Vec<u8>>> = pg_values
+            .iter()
+            .zip(param_formats.iter())
+            .map(|(v, &fmt)| if fmt == 1 { v.to_binary_bytes() } else { v.to_text_bytes() })
+            .collect();
+        let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
+
+        let n = codec::encode_bind(
+            &mut self.write_buf[pos..],
+            &portal_name,
+            &stmt_name,
+            &param_formats,
+            &param_refs,
+            &[1], // request binary-format results
+        );
+        pos += n;
+
+        // Flush (not Sync) — the portal stays alive for subsequent Execute calls.
+        let n = codec::encode_flush(&mut self.write_buf[pos..]);
+        pos += n;
+        self.flush_write_buf(pos)?;
+
+        // Read ParseComplete?, ParameterDescription?, RowDescription/NoData, BindComplete.
+        let columns = self.read_cursor_bind(sql, &stmt_name, is_new, cached_columns)?;
+
+        Ok(Cursor {
+            conn: self,
+            portal_name,
+            fetch_size: fetch_size.max(1),
+            exhausted: false,
+            columns: Rc::new(columns),
+        })
+    }
+
+    /// Internal: read server responses after Bind for a named portal.
+    ///
+    /// Drains ParseComplete?, ParameterDescription?, RowDescription/NoData,
+    /// and returns when BindComplete is received, giving back the column layout.
+    fn read_cursor_bind(
+        &mut self,
+        sql: &str,
+        stmt_name: &str,
+        is_new: bool,
+        cached_columns: Option<Vec<codec::ColumnDesc>>,
+    ) -> PgResult<Vec<codec::ColumnDesc>> {
+        let mut columns: Vec<codec::ColumnDesc> = cached_columns.unwrap_or_default();
+
+        loop {
+            if codec::message_complete(&self.read_buf[..self.read_pos])?.is_none() {
+                self.fill_read_buf(None)?;
+            }
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
+                let tag = BackendTag::from(self.read_buf[0]);
+                match tag {
+                    BackendTag::ParseComplete | BackendTag::ParameterDescription => {
+                        self.consume_read(msg_len);
+                    }
+                    BackendTag::RowDescription => {
+                        let mut cols = {
+                            let body = &self.read_buf[5..msg_len];
+                            codec::parse_row_description(body)
+                        };
+                        for col in &mut cols {
+                            col.format_code = FormatCode::Binary;
+                        }
+                        if is_new {
+                            let sname = stmt_name.to_string();
+                            if let Some(evicted) =
+                                self.stmt_cache.insert(sql, sname, 0, Some(cols.clone()))
+                            {
+                                self.close_statement_on_server(&evicted.name);
+                            }
+                        }
+                        columns = cols;
+                        self.consume_read(msg_len);
+                    }
+                    BackendTag::NoData => {
+                        if is_new {
+                            let sname = stmt_name.to_string();
+                            if let Some(evicted) =
+                                self.stmt_cache.insert(sql, sname, 0, None)
+                            {
+                                self.close_statement_on_server(&evicted.name);
+                            }
+                        }
+                        self.consume_read(msg_len);
+                    }
+                    BackendTag::BindComplete => {
+                        self.consume_read(msg_len);
+                        return Ok(columns);
+                    }
+                    BackendTag::ErrorResponse => {
+                        let err = {
+                            let body = &self.read_buf[5..msg_len];
+                            self.parse_error_with_context(body, sql)
+                        };
+                        self.consume_read(msg_len);
+                        // Sent a Flush (not Sync); restore clean protocol state.
+                        let n = codec::encode_sync(&mut self.write_buf);
+                        let _ = self.flush_write_buf(n);
+                        let _ = self.drain_to_ready();
+                        return Err(err);
+                    }
+                    BackendTag::NoticeResponse => {
+                        let body = &self.read_buf[5..msg_len];
+                        self.dispatch_notice(body);
+                        self.consume_read(msg_len);
+                    }
+                    _ => {
+                        self.consume_read(msg_len);
+                    }
+                }
+            }
+        }
+    }
+
+    // ─── Query Pipelining ─────────────────────────────────────
+
+    /// Execute multiple queries as a single pipelined batch.
+    ///
+    /// All queries are serialised into one write to the server and their
+    /// results are read back in order. This eliminates per-query
+    /// round-trip latency for workloads that require many sequential
+    /// queries.
+    ///
+    /// Statement caching is applied per query: new statements are
+    /// automatically parsed and described; cached statements are reused.
+    ///
+    /// # Returns
+    /// `Vec<Vec<Row>>` — one inner `Vec<Row>` per query, in order.
+    ///
+    /// # Error behaviour
+    /// The first query error aborts the pipeline. Results for prior queries
+    /// in the same pipeline that already completed are **not** rolled back
+    /// unless they were inside the same transaction. Wrap in
+    /// [`transaction`](Self::transaction) for atomicity.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let results = conn.pipeline(&[
+    ///     ("SELECT $1::int4 + $2::int4", &[&1_i32, &2_i32] as &[&dyn ToSql]),
+    ///     ("SELECT $1::text", &[&"hello"]),
+    /// ])?;
+    /// ```
+    pub fn pipeline(&mut self, queries: &[(&str, &[&dyn ToSql])]) -> PgResult<Vec<Vec<Row>>> {
+        if queries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Estimate write buffer: header + sql + params per query.
+        let estimated: usize = queries
+            .iter()
+            .map(|(sql, params)| 50 + sql.len() + params.len() * 256)
+            .sum::<usize>()
+            + 10;
+        self.ensure_write_capacity(estimated);
+
+        let mut pos = 0;
+
+        // Collect (stmt_name, is_new, cached_columns) before encoding anything.
+        let mut stmt_infos: Vec<(String, bool, Option<Vec<codec::ColumnDesc>>)> =
+            Vec::with_capacity(queries.len());
+
+        for (sql, params) in queries {
+            let stmt = self.stmt_cache.get_or_create(sql);
+            let stmt_name = stmt.name.clone();
+            let is_new = stmt.is_new;
+            let cached = stmt.columns.clone();
+
+            if is_new {
+                let n = codec::encode_parse(&mut self.write_buf[pos..], &stmt_name, sql, &[]);
+                pos += n;
+                let n = codec::encode_describe(
+                    &mut self.write_buf[pos..],
+                    DescribeTarget::Statement,
+                    &stmt_name,
+                );
+                pos += n;
+            }
+
+            let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
+            let param_formats: Vec<i16> = pg_values
+                .iter()
+                .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
+                .collect();
+            let param_values: Vec<Option<Vec<u8>>> = pg_values
+                .iter()
+                .zip(param_formats.iter())
+                .map(|(v, &fmt)| if fmt == 1 { v.to_binary_bytes() } else { v.to_text_bytes() })
+                .collect();
+            let param_refs: Vec<Option<&[u8]>> =
+                param_values.iter().map(|p| p.as_deref()).collect();
+
+            let n = codec::encode_bind(
+                &mut self.write_buf[pos..],
+                "", // unnamed portal — discarded after Execute
+                &stmt_name,
+                &param_formats,
+                &param_refs,
+                &[1], // binary results
+            );
+            pos += n;
+            let n = codec::encode_execute(&mut self.write_buf[pos..], "", 0);
+            pos += n;
+
+            stmt_infos.push((stmt_name, is_new, cached));
+        }
+
+        // Single Sync terminates the whole pipeline.
+        let n = codec::encode_sync(&mut self.write_buf[pos..]);
+        pos += n;
+        self.flush_write_buf(pos)?;
+
+        // Read all pipeline results.
+        let mut results: Vec<Vec<Row>> = (0..queries.len()).map(|_| Vec::new()).collect();
+        let mut query_idx: usize = 0;
+        let mut current_columns: Rc<Vec<codec::ColumnDesc>> = Rc::new(Vec::new());
+        let mut got_row_desc = false;
+
+        loop {
+            if codec::message_complete(&self.read_buf[..self.read_pos])?.is_none() {
+                self.fill_read_buf(None)?;
+            }
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
+                let tag = BackendTag::from(self.read_buf[0]);
+                match tag {
+                    BackendTag::ParseComplete | BackendTag::ParameterDescription => {
+                        self.consume_read(msg_len);
+                    }
+                    BackendTag::RowDescription => {
+                        let mut cols = {
+                            let body = &self.read_buf[5..msg_len];
+                            codec::parse_row_description(body)
+                        };
+                        for col in &mut cols {
+                            col.format_code = FormatCode::Binary;
+                        }
+                        let is_new = stmt_infos[query_idx].1;
+                        if is_new {
+                            let sql = queries[query_idx].0;
+                            let sname = stmt_infos[query_idx].0.clone();
+                            if let Some(evicted) =
+                                self.stmt_cache.insert(sql, sname, 0, Some(cols.clone()))
+                            {
+                                self.close_statement_on_server(&evicted.name);
+                            }
+                            stmt_infos[query_idx].1 = false;
+                        }
+                        current_columns = Rc::new(cols);
+                        got_row_desc = true;
+                        self.consume_read(msg_len);
+                    }
+                    BackendTag::NoData => {
+                        let is_new = stmt_infos[query_idx].1;
+                        if is_new {
+                            let sql = queries[query_idx].0;
+                            let sname = stmt_infos[query_idx].0.clone();
+                            if let Some(evicted) = self.stmt_cache.insert(sql, sname, 0, None) {
+                                self.close_statement_on_server(&evicted.name);
+                            }
+                            stmt_infos[query_idx].1 = false;
+                        }
+                        self.consume_read(msg_len);
+                    }
+                    BackendTag::BindComplete => {
+                        if !got_row_desc {
+                            // Cached statement — restore columns from the cache snapshot.
+                            if let Some(ref cols) = stmt_infos[query_idx].2 {
+                                current_columns = Rc::new(cols.clone());
+                            }
+                        }
+                        got_row_desc = false;
+                        self.consume_read(msg_len);
+                    }
+                    BackendTag::DataRow => {
+                        let raw_values = {
+                            let body = &self.read_buf[5..msg_len];
+                            codec::parse_data_row(body)
+                        };
+                        if query_idx < results.len() {
+                            results[query_idx]
+                                .push(Row::new(Rc::clone(&current_columns), raw_values));
+                        }
+                        self.consume_read(msg_len);
+                    }
+                    BackendTag::CommandComplete | BackendTag::EmptyQueryResponse => {
+                        if tag == BackendTag::CommandComplete {
+                            let (ctag, affected) = {
+                                let body = &self.read_buf[5..msg_len];
+                                extract_command_complete(body)
+                            };
+                            self.last_command_tag = ctag;
+                            self.last_affected_rows = affected;
+                        }
+                        self.consume_read(msg_len);
+                        query_idx += 1;
+                        current_columns = Rc::new(Vec::new());
+                        got_row_desc = false;
+                    }
+                    BackendTag::ReadyForQuery => {
+                        self.tx_status = TransactionStatus::from(self.read_buf[5]);
+                        self.consume_read(msg_len);
+                        return Ok(results);
+                    }
+                    BackendTag::ErrorResponse => {
+                        let sql = if query_idx < queries.len() {
+                            queries[query_idx].0
+                        } else {
+                            ""
+                        };
+                        let err = {
+                            let body = &self.read_buf[5..msg_len];
+                            self.parse_error_with_context(body, sql)
+                        };
+                        self.consume_read(msg_len);
+                        self.drain_to_ready()?;
+                        return Err(err);
+                    }
+                    BackendTag::NotificationResponse => {
+                        let notification = {
+                            let body = &self.read_buf[5..msg_len];
+                            Self::parse_notification(body)
+                        };
+                        self.notifications.push_back(notification);
+                        self.consume_read(msg_len);
+                    }
+                    BackendTag::NoticeResponse => {
+                        let body = &self.read_buf[5..msg_len];
+                        self.dispatch_notice(body);
+                        self.consume_read(msg_len);
+                    }
+                    _ => {
+                        self.consume_read(msg_len);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Return statement cache statistics (hits, misses, evictions, size).
+    pub fn cache_stats(&self) -> CacheStats {
+        self.stmt_cache.stats()
+    }
+
+    /// Create a cancel token for this connection.
+    ///
+    /// The returned [`CancelToken`] can be cloned and sent to any thread or
+    /// worker.  Calling [`CancelToken::send`] will interrupt a query that is
+    /// currently executing on this connection by sending a `CancelRequest`
+    /// over a fresh, short-lived TCP connection to the server.
+    pub fn cancel_token(&self) -> CancelToken {
+        CancelToken {
+            host: self.cancel_host.clone(),
+            port: self.cancel_port,
+            socket_dir: self.cancel_socket_dir.clone(),
+            process_id: self.process_id,
+            secret_key: self.secret_key,
+        }
     }
 
     // ─── Internal Methods ─────────────────────────────────────
@@ -1644,116 +2120,6 @@ impl PgConnection {
         }
     }
 
-    /// Optimised read path for `query_one`: returns the first `DataRow`
-    /// directly without collecting into a `Vec`. Remaining rows and
-    /// protocol messages are drained so the connection stays clean.
-    fn read_extended_result_one(
-        &mut self,
-        sql: &str,
-        stmt_name: &str,
-        is_new: bool,
-        cached_columns: Option<Vec<codec::ColumnDesc>>,
-    ) -> PgResult<Row> {
-        match self.read_extended_result_opt(sql, stmt_name, is_new, cached_columns)? {
-            Some(row) => Ok(row),
-            None => Err(PgError::NoRows),
-        }
-    }
-
-    /// Optimised read path for `query_opt`: returns the first `DataRow`
-    /// as `Some(Row)`, or `None` if the query returns zero rows.
-    /// Remaining rows are drained.
-    fn read_extended_result_opt(
-        &mut self,
-        sql: &str,
-        stmt_name: &str,
-        is_new: bool,
-        cached_columns: Option<Vec<codec::ColumnDesc>>,
-    ) -> PgResult<Option<Row>> {
-        let mut result: Option<Row> = None;
-        let mut columns_rc: Rc<Vec<codec::ColumnDesc>> = match cached_columns {
-            Some(c) => Rc::new(c),
-            None => Rc::new(Vec::new()),
-        };
-
-        loop {
-            if codec::message_complete(&self.read_buf[..self.read_pos])?.is_none() {
-                self.fill_read_buf(None)?;
-            }
-
-            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
-                let header = codec::decode_header(&self.read_buf)
-                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
-                let body = &self.read_buf[5..msg_len];
-
-                match header.tag {
-                    BackendTag::ParseComplete => {}
-                    BackendTag::ParameterDescription => {}
-                    BackendTag::RowDescription => {
-                        let mut columns = codec::parse_row_description(body);
-                        for col in &mut columns {
-                            col.format_code = FormatCode::Binary;
-                        }
-                        if is_new
-                            && let Some(evicted) = self.stmt_cache.insert(
-                                sql,
-                                stmt_name.to_string(),
-                                0,
-                                Some(columns.clone()),
-                            )
-                        {
-                            self.close_statement_on_server(&evicted.name);
-                        }
-                        columns_rc = Rc::new(columns);
-                    }
-                    BackendTag::NoData if is_new => {
-                        if let Some(evicted) =
-                            self.stmt_cache.insert(sql, stmt_name.to_string(), 0, None)
-                        {
-                            self.close_statement_on_server(&evicted.name);
-                        }
-                    }
-                    BackendTag::NoData => {}
-                    BackendTag::BindComplete => {}
-                    BackendTag::DataRow
-                        // Only capture the first row; subsequent DataRows are skipped.
-                        if result.is_none() => {
-                            let raw_values = codec::parse_data_row(body);
-                            result = Some(Row::new(Rc::clone(&columns_rc), raw_values));
-                    }
-                    BackendTag::DataRow => {
-                        // Subsequent DataRows are skipped (not allocated).
-                    }
-                    BackendTag::CommandComplete => {
-                        let (tag, rows_affected) = extract_command_complete(body);
-                        self.last_command_tag = tag;
-                        self.last_affected_rows = rows_affected;
-                    }
-                    BackendTag::ReadyForQuery => {
-                        self.tx_status = TransactionStatus::from(body[0]);
-                        self.consume_read(msg_len);
-                        return Ok(result);
-                    }
-                    BackendTag::ErrorResponse => {
-                        let err = self.parse_error_with_context(body, sql);
-                        self.consume_read(msg_len);
-                        self.drain_to_ready()?;
-                        return Err(err);
-                    }
-                    BackendTag::NotificationResponse => {
-                        let notification = Self::parse_notification(body);
-                        self.notifications.push_back(notification);
-                    }
-                    BackendTag::NoticeResponse => {
-                        self.dispatch_notice(body);
-                    }
-                    _ => {}
-                }
-                self.consume_read(msg_len);
-            }
-        }
-    }
-
     fn drain_to_ready(&mut self) -> PgResult<()> {
         loop {
             // Only read from the socket when the buffer has no complete message;
@@ -1863,11 +2229,212 @@ impl Drop for PgConnection {
     }
 }
 
-// ─── Transaction ──────────────────────────────────────────────
+// ─── CancelToken ──────────────────────────────────────────────
 
-/// A transaction guard. Ensures the transaction is committed or rolled back.
+/// Cancel token for interrupting a running backend query.
 ///
-/// Created via `PgConnection::transaction()`. Provides the same query
+/// Obtained via [`PgConnection::cancel_token`].  The token is cheap to
+/// clone and can be stored or sent to another worker.  Calling
+/// [`CancelToken::send`] opens a new, short-lived connection to the same
+/// PostgreSQL server and sends a `CancelRequest` message, which causes the
+/// backend to interrupt the currently executing query and return a server
+/// error with SQLSTATE `57014` (`query_canceled`) to the original
+/// connection.
+///
+/// # Notes
+/// - A successful `send()` does **not** guarantee the query was cancelled —
+///   it may have already completed.
+/// - The original connection stays open and valid after cancellation.
+#[derive(Debug, Clone)]
+pub struct CancelToken {
+    host: String,
+    port: u16,
+    socket_dir: Option<String>,
+    /// Backend process ID (from `BackendKeyData`).
+    process_id: i32,
+    /// Backend secret key (from `BackendKeyData`).
+    secret_key: i32,
+}
+
+impl CancelToken {
+    /// Send a cancel request to the PostgreSQL backend.
+    ///
+    /// Opens a fresh TCP (or Unix domain socket) connection to the server,
+    /// sends the 16-byte `CancelRequest` message, and closes immediately.
+    pub fn send(&self) -> PgResult<()> {
+        use std::io::Write as _;
+
+        // CancelRequest wire format (no message type byte, just raw bytes):
+        //   Int32(16)         — total message length including self
+        //   Int32(80877102)   — cancel request code (1234 << 16 | 5678)
+        //   Int32(process_id) — backend PID
+        //   Int32(secret_key) — backend secret key
+        let mut msg = [0u8; 16];
+        msg[0..4].copy_from_slice(&16i32.to_be_bytes());
+        msg[4..8].copy_from_slice(&80877102i32.to_be_bytes());
+        msg[8..12].copy_from_slice(&self.process_id.to_be_bytes());
+        msg[12..16].copy_from_slice(&self.secret_key.to_be_bytes());
+
+        if let Some(ref dir) = self.socket_dir {
+            #[cfg(unix)]
+            {
+                use std::os::unix::net::UnixStream;
+                let path = format!("{}/.s.PGSQL.{}", dir, self.port);
+                UnixStream::connect(path)
+                    .map_err(PgError::Io)?
+                    .write_all(&msg)
+                    .map_err(PgError::Io)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = dir;
+                Err(PgError::Protocol(
+                    "Unix domain sockets not supported on this platform".to_string(),
+                ))
+            }
+        } else {
+            let addr = format!("{}:{}", self.host, self.port);
+            TcpStream::connect(&addr)
+                .map_err(PgError::Io)?
+                .write_all(&msg)
+                .map_err(PgError::Io)
+        }
+    }
+}
+
+// ─── Cursor ───────────────────────────────────────────────────
+
+/// A server-side streaming cursor backed by a named PostgreSQL portal.
+///
+/// Created by [`PgConnection::query_cursor`]. Call [`fetch`](Cursor::fetch)
+/// repeatedly to retrieve rows in batches. The cursor is automatically
+/// closed when dropped.
+///
+/// The connection is exclusively borrowed for the lifetime of the cursor —
+/// no other queries can run while the cursor is open.
+pub struct Cursor<'a> {
+    conn: &'a mut PgConnection,
+    portal_name: String,
+    fetch_size: usize,
+    /// True once the server has sent `CommandComplete` (no more rows).
+    exhausted: bool,
+    /// Column layout shared by all fetched rows.
+    columns: Rc<Vec<codec::ColumnDesc>>,
+}
+
+impl<'a> Cursor<'a> {
+    /// Fetch the next batch of up to `fetch_size` rows.
+    ///
+    /// Returns an empty `Vec` when no more rows are available.
+    pub fn fetch(&mut self) -> PgResult<Vec<Row>> {
+        if self.exhausted {
+            return Ok(Vec::new());
+        }
+
+        // Encode Execute(portal, fetch_size) + Flush.
+        {
+            let estimated = 22 + self.portal_name.len();
+            self.conn.ensure_write_capacity(estimated);
+            let mut pos = 0;
+            let n = codec::encode_execute(
+                &mut self.conn.write_buf,
+                &self.portal_name,
+                self.fetch_size as i32,
+            );
+            pos += n;
+            let n = codec::encode_flush(&mut self.conn.write_buf[pos..]);
+            pos += n;
+            self.conn.flush_write_buf(pos)?;
+        }
+
+        let mut rows = Vec::new();
+        loop {
+            if codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])?.is_none() {
+                self.conn.fill_read_buf(None)?;
+            }
+            while let Some(msg_len) =
+                codec::message_complete(&self.conn.read_buf[..self.conn.read_pos])?
+            {
+                let tag = BackendTag::from(self.conn.read_buf[0]);
+                match tag {
+                    BackendTag::DataRow => {
+                        let raw_values = {
+                            let body = &self.conn.read_buf[5..msg_len];
+                            codec::parse_data_row(body)
+                        };
+                        rows.push(Row::new(Rc::clone(&self.columns), raw_values));
+                        self.conn.consume_read(msg_len);
+                    }
+                    BackendTag::PortalSuspended => {
+                        // More rows available; caller may call fetch() again.
+                        self.conn.consume_read(msg_len);
+                        return Ok(rows);
+                    }
+                    BackendTag::CommandComplete => {
+                        let (ctag, affected) = {
+                            let body = &self.conn.read_buf[5..msg_len];
+                            extract_command_complete(body)
+                        };
+                        self.conn.last_command_tag = ctag;
+                        self.conn.last_affected_rows = affected;
+                        self.conn.consume_read(msg_len);
+                        self.exhausted = true;
+                        // Send Sync to finalize the pipeline and receive ReadyForQuery.
+                        let n = codec::encode_sync(&mut self.conn.write_buf);
+                        self.conn.flush_write_buf(n)?;
+                        self.conn.drain_to_ready()?;
+                        return Ok(rows);
+                    }
+                    BackendTag::ErrorResponse => {
+                        let err = {
+                            let body = &self.conn.read_buf[5..msg_len];
+                            self.conn.parse_error_with_context(body, &self.portal_name)
+                        };
+                        self.conn.consume_read(msg_len);
+                        self.exhausted = true;
+                        // Attempt to recover to a clean protocol state.
+                        let n = codec::encode_sync(&mut self.conn.write_buf);
+                        let _ = self.conn.flush_write_buf(n);
+                        let _ = self.conn.drain_to_ready();
+                        return Err(err);
+                    }
+                    BackendTag::NoticeResponse => {
+                        let body = &self.conn.read_buf[5..msg_len];
+                        self.conn.dispatch_notice(body);
+                        self.conn.consume_read(msg_len);
+                    }
+                    _ => {
+                        self.conn.consume_read(msg_len);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Drop for Cursor<'_> {
+    fn drop(&mut self) {
+        if self.exhausted {
+            return; // Protocol is already in a clean state.
+        }
+        // The named portal is still open on the server.
+        // Close it and sync to prevent resource leaks.
+        let portal_name = self.portal_name.clone();
+        let estimated = 12 + portal_name.len();
+        self.conn.ensure_write_capacity(estimated);
+        let mut pos = 0;
+        let n =
+            codec::encode_close(&mut self.conn.write_buf, CloseTarget::Portal, &portal_name);
+        pos += n;
+        let n = codec::encode_sync(&mut self.conn.write_buf[pos..]);
+        pos += n;
+        let _ = self.conn.flush_write_buf(pos);
+        let _ = self.conn.drain_to_ready();
+    }
+}
+
+// ─── Transaction ──────────────────────────────────────────────
+/// A transaction guard. Ensures the transaction is committed or rolled back.
 /// methods as `PgConnection`. On drop, if neither `commit` nor `rollback`
 /// was called, automatically rolls back.
 pub struct Transaction<'a> {

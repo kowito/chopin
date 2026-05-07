@@ -64,11 +64,12 @@ pub mod statement;
 pub mod tls;
 pub mod types;
 
-pub use connection::{CopyReader, CopyWriter, Notification, PgConfig, PgConnection, Transaction};
+pub use connection::{CancelToken, CopyReader, CopyWriter, Cursor, Notification, PgConfig, PgConnection, SecretString, Transaction};
 pub use error::{ErrorClass, PgError, PgResult};
 pub use pool::{ConnectionGuard, PgPool, PgPoolConfig, PoolStats};
-pub use row::Row;
+pub use row::{FromRow, Row};
 pub use statement::Statement;
+pub use statement::CacheStats;
 #[cfg(feature = "tls")]
 pub use tls::SslMode;
 pub use types::{FromSql, PgValue, ToParam, ToSql, TypeRegistry, encode_inet_binary};
