@@ -308,7 +308,7 @@ impl Response {
     /// on every request.
     pub fn json<T: kowito_json::serialize::Serialize>(val: &T) -> Self {
         let mut buf = crate::bufpool::get_with_capacity(128);
-        val.serialize(&mut *buf);
+        val.serialize(&mut buf);
         Self::json_bytes(buf.into_vec())
     }
 
@@ -627,7 +627,7 @@ fn parse_range(header: &str, total: u64) -> RangeResult {
         if suffix == 0 || total == 0 {
             return RangeResult::Unsatisfiable;
         }
-        let start = if suffix >= total { 0 } else { total - suffix };
+        let start = total.saturating_sub(suffix);
         return RangeResult::Range(start, total - 1);
     }
 
