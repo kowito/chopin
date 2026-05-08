@@ -2003,6 +2003,8 @@ impl Worker {
                     }
                 }
 
+                let is_chunked = matches!(response.body, crate::http::Body::Stream(_));
+
                 if is_chunked {
                     w!(b"Transfer-Encoding: chunked\r\n");
                 } else {
