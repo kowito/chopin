@@ -1,0 +1,31 @@
+# cargo-audit configuration
+# Accepted advisories that cannot currently be fixed upstream.
+
+[advisories]
+ignore = [
+    # fxhash is unmaintained (RUSTSEC-2025-0057).
+    # Pulled in transitively by `monoio` and `kowito-json` — external crates we
+    # do not control. No direct user-visible impact; will be resolved when those
+    # upstreams migrate to an alternative (e.g. rustc-hash).
+    "RUSTSEC-2025-0057",
+
+    # paste is unmaintained (RUSTSEC-2024-0436).
+    # Transitively required by `pulp` → `kowito-json` (external). No action
+    # available until kowito-json upstream removes the dependency.
+    "RUSTSEC-2024-0436",
+
+    # rand 0.8.5 is unsound with a custom global logger and rand::rng()
+    # (RUSTSEC-2026-0097). Both sources of this dep are **dev-only**:
+    #   - sqlx 0.8.x (dev dep of chopin-pg)
+    #   - monoio-pg 0.1.10 (dev dep of chopin-pg)
+    # They do not appear in production binaries. rand 0.9 is a breaking change;
+    # we will update once sqlx stable and monoio-pg ship rand 0.9 support.
+    "RUSTSEC-2026-0097",
+
+    # rustls-pemfile is unmaintained (RUSTSEC-2025-0134).
+    # We have migrated chopin-core and chopin-pg from rustls-pemfile to the
+    # rustls-pki-types `pem` feature. This entry can be removed once the
+    # lockfile no longer references rustls-pemfile (i.e. after `cargo update`
+    # drops the transitive pull from other crates, if any remain).
+    "RUSTSEC-2025-0134",
+]
