@@ -359,8 +359,10 @@ impl PgPool {
             Ok(pooled) => {
                 self.active += 1;
                 let elapsed_ns = start.elapsed().as_nanos() as u64;
-                self.stats.total_checkout_wait_nanos =
-                    self.stats.total_checkout_wait_nanos.saturating_add(elapsed_ns);
+                self.stats.total_checkout_wait_nanos = self
+                    .stats
+                    .total_checkout_wait_nanos
+                    .saturating_add(elapsed_ns);
                 if elapsed_ns > self.stats.max_checkout_wait_nanos {
                     self.stats.max_checkout_wait_nanos = elapsed_ns;
                 }
@@ -391,8 +393,10 @@ impl PgPool {
                 Ok(pooled) => {
                     self.active += 1;
                     let elapsed_ns = start.elapsed().as_nanos() as u64;
-                    self.stats.total_checkout_wait_nanos =
-                        self.stats.total_checkout_wait_nanos.saturating_add(elapsed_ns);
+                    self.stats.total_checkout_wait_nanos = self
+                        .stats
+                        .total_checkout_wait_nanos
+                        .saturating_add(elapsed_ns);
                     if elapsed_ns > self.stats.max_checkout_wait_nanos {
                         self.stats.max_checkout_wait_nanos = elapsed_ns;
                     }

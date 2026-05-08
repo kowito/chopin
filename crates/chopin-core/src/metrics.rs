@@ -64,11 +64,7 @@ pub fn register_global_metrics(metrics: Arc<Vec<Arc<WorkerMetrics>>>) {
 fn total_requests() -> usize {
     GLOBAL_METRICS
         .get()
-        .map(|m| {
-            m.iter()
-                .map(|w| w.req_count.load(Ordering::Relaxed))
-                .sum()
-        })
+        .map(|m| m.iter().map(|w| w.req_count.load(Ordering::Relaxed)).sum())
         .unwrap_or(0)
 }
 
@@ -88,11 +84,7 @@ fn total_active_conns() -> usize {
 fn total_bytes_sent() -> usize {
     GLOBAL_METRICS
         .get()
-        .map(|m| {
-            m.iter()
-                .map(|w| w.bytes_sent.load(Ordering::Relaxed))
-                .sum()
-        })
+        .map(|m| m.iter().map(|w| w.bytes_sent.load(Ordering::Relaxed)).sum())
         .unwrap_or(0)
 }
 
@@ -121,7 +113,9 @@ pub fn prometheus_metrics_handler(_ctx: crate::http::Context) -> crate::http::Re
         agg_req += v;
         buf.push_str(&format!("chopin_requests_total{{worker=\"{i}\"}} {v}\n"));
     }
-    buf.push_str(&format!("chopin_requests_total{{worker=\"all\"}} {agg_req}\n"));
+    buf.push_str(&format!(
+        "chopin_requests_total{{worker=\"all\"}} {agg_req}\n"
+    ));
 
     // ── chopin_active_connections ─────────────────────────────────────────────
     buf.push_str("\n# HELP chopin_active_connections Currently open connections.\n");
@@ -130,7 +124,9 @@ pub fn prometheus_metrics_handler(_ctx: crate::http::Context) -> crate::http::Re
     for (i, w) in metrics.iter().enumerate() {
         let v = w.active_conns.load(Ordering::Relaxed);
         agg_conns += v;
-        buf.push_str(&format!("chopin_active_connections{{worker=\"{i}\"}} {v}\n"));
+        buf.push_str(&format!(
+            "chopin_active_connections{{worker=\"{i}\"}} {v}\n"
+        ));
     }
     buf.push_str(&format!(
         "chopin_active_connections{{worker=\"all\"}} {agg_conns}\n"

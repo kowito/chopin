@@ -948,8 +948,7 @@ mod tls {
 
     /// Build a connection config to the local test server with the given SSL mode.
     fn tls_cfg(mode: SslMode) -> PgConfig {
-        PgConfig::new("localhost", 5432, "chopin", "chopin", "postgres")
-            .with_ssl_mode(mode)
+        PgConfig::new("localhost", 5432, "chopin", "chopin", "postgres").with_ssl_mode(mode)
     }
 
     // ─── sslmode=disable ──────────────────────────────────────────────────────
@@ -1095,8 +1094,7 @@ mod tls {
     /// `sslmode=verify-ca` maps to `SslMode::Require` (cert check, no hostname check).
     #[test]
     fn test_from_url_sslmode_verify_ca_maps_to_require() {
-        let cfg =
-            PgConfig::from_url("postgres://u:p@host:5432/db?sslmode=verify-ca").unwrap();
+        let cfg = PgConfig::from_url("postgres://u:p@host:5432/db?sslmode=verify-ca").unwrap();
         assert_eq!(cfg.ssl_mode, SslMode::Require);
     }
 

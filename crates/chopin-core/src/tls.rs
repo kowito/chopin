@@ -39,10 +39,9 @@ impl TlsServerConfig {
             .map_err(|e| format!("Cannot read key '{}': {}", key_path, e))?;
 
         // Parse certificate chain
-        let certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut cert_pem.as_slice())
-                .filter_map(|c| c.ok())
-                .collect();
+        let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_pem.as_slice())
+            .filter_map(|c| c.ok())
+            .collect();
         if certs.is_empty() {
             return Err(format!("No certificates found in '{}'", cert_path));
         }
@@ -83,13 +82,7 @@ struct FdReader(i32);
 
 impl Read for FdReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = unsafe {
-            libc::read(
-                self.0,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                buf.len(),
-            )
-        };
+        let n = unsafe { libc::read(self.0, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
         if n < 0 {
             Err(io::Error::last_os_error())
         } else {
@@ -103,13 +96,7 @@ struct FdWriter(i32);
 
 impl Write for FdWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let n = unsafe {
-            libc::write(
-                self.0,
-                buf.as_ptr() as *const libc::c_void,
-                buf.len(),
-            )
-        };
+        let n = unsafe { libc::write(self.0, buf.as_ptr() as *const libc::c_void, buf.len()) };
         if n < 0 {
             Err(io::Error::last_os_error())
         } else {

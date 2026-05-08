@@ -382,9 +382,9 @@ impl PgConfig {
         } else {
             // Handle IPv6 bracket notation: [::1]:5432 or [::1]
             let (h, port_str) = if hostport.starts_with('[') {
-                let bracket_end = hostport
-                    .find(']')
-                    .ok_or_else(|| PgError::Protocol("Unterminated IPv6 address in URL".to_string()))?;
+                let bracket_end = hostport.find(']').ok_or_else(|| {
+                    PgError::Protocol("Unterminated IPv6 address in URL".to_string())
+                })?;
                 let addr = &hostport[1..bracket_end];
                 let rest = &hostport[bracket_end + 1..];
                 let p = rest.strip_prefix(':').unwrap_or("5432");
@@ -698,8 +698,10 @@ impl PgConnection {
                                 // Handled! Keep going to ReadyForQuery
                             }
                             Some(AuthType::CleartextPassword) => {
-                                let n =
-                                    codec::encode_password(&mut self.write_buf, config.password.as_str());
+                                let n = codec::encode_password(
+                                    &mut self.write_buf,
+                                    config.password.as_str(),
+                                );
                                 self.stream
                                     .write_all(&self.write_buf[..n])
                                     .map_err(PgError::Io)?;
@@ -707,22 +709,23 @@ impl PgConnection {
                             Some(AuthType::SASLInit) => {
                                 // B.3: Use SCRAM-SHA-256-PLUS with channel binding when TLS is active
                                 #[cfg(feature = "tls")]
-                                let (mut scram, mechanism) =
-                                    if let Some(cb_data) = self.stream.tls_server_cert_hash() {
-                                        (
-                                            ScramClient::new_with_channel_binding(
-                                                &config.user,
-                                                config.password.as_str(),
-                                                cb_data,
-                                            ),
-                                            "SCRAM-SHA-256-PLUS",
-                                        )
-                                    } else {
-                                        (
-                                            ScramClient::new(&config.user, config.password.as_str()),
-                                            "SCRAM-SHA-256",
-                                        )
-                                    };
+                                let (mut scram, mechanism) = if let Some(cb_data) =
+                                    self.stream.tls_server_cert_hash()
+                                {
+                                    (
+                                        ScramClient::new_with_channel_binding(
+                                            &config.user,
+                                            config.password.as_str(),
+                                            cb_data,
+                                        ),
+                                        "SCRAM-SHA-256-PLUS",
+                                    )
+                                } else {
+                                    (
+                                        ScramClient::new(&config.user, config.password.as_str()),
+                                        "SCRAM-SHA-256",
+                                    )
+                                };
                                 #[cfg(not(feature = "tls"))]
                                 let (mut scram, mechanism) = (
                                     ScramClient::new(&config.user, config.password.as_str()),
@@ -1356,7 +1359,13 @@ impl PgConnection {
         let param_values: Vec<Option<Vec<u8>>> = pg_values
             .iter()
             .zip(param_formats.iter())
-            .map(|(v, &fmt)| if fmt == 1 { v.to_binary_bytes() } else { v.to_text_bytes() })
+            .map(|(v, &fmt)| {
+                if fmt == 1 {
+                    v.to_binary_bytes()
+                } else {
+                    v.to_text_bytes()
+                }
+            })
             .collect();
         let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
 
@@ -1432,9 +1441,7 @@ impl PgConnection {
                     BackendTag::NoData => {
                         if is_new {
                             let sname = stmt_name.to_string();
-                            if let Some(evicted) =
-                                self.stmt_cache.insert(sql, sname, 0, None)
-                            {
+                            if let Some(evicted) = self.stmt_cache.insert(sql, sname, 0, None) {
                                 self.close_statement_on_server(&evicted.name);
                             }
                         }
@@ -1541,7 +1548,13 @@ impl PgConnection {
             let param_values: Vec<Option<Vec<u8>>> = pg_values
                 .iter()
                 .zip(param_formats.iter())
-                .map(|(v, &fmt)| if fmt == 1 { v.to_binary_bytes() } else { v.to_text_bytes() })
+                .map(|(v, &fmt)| {
+                    if fmt == 1 {
+                        v.to_binary_bytes()
+                    } else {
+                        v.to_text_bytes()
+                    }
+                })
                 .collect();
             let param_refs: Vec<Option<&[u8]>> =
                 param_values.iter().map(|p| p.as_deref()).collect();
@@ -2423,8 +2436,7 @@ impl Drop for Cursor<'_> {
         let estimated = 12 + portal_name.len();
         self.conn.ensure_write_capacity(estimated);
         let mut pos = 0;
-        let n =
-            codec::encode_close(&mut self.conn.write_buf, CloseTarget::Portal, &portal_name);
+        let n = codec::encode_close(&mut self.conn.write_buf, CloseTarget::Portal, &portal_name);
         pos += n;
         let n = codec::encode_sync(&mut self.conn.write_buf[pos..]);
         pos += n;

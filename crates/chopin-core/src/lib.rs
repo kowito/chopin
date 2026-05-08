@@ -32,8 +32,8 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-pub mod conn;
 pub mod bufpool;
+pub mod conn;
 pub mod error;
 pub mod extract;
 pub mod filter;
@@ -57,8 +57,8 @@ pub mod websocket;
 pub mod worker;
 
 // Re-exports for users
-pub use error::{ChopinError, ChopinResult};
 pub use bufpool::{BufGuard, get as buf_get, get_with_capacity as buf_get_with_capacity};
+pub use error::{ChopinError, ChopinResult};
 pub use extract::{FromRequest, Json, Query};
 pub use filter::{Filter, FilterStack, LoggingFilter, PassthroughFilter};
 pub use headers::{Header, HeaderValue, Headers, IntoHeaderValue};

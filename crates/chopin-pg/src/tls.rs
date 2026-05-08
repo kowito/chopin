@@ -249,7 +249,6 @@ impl Write for TlsStream {
 impl TlsStream {
     /// Flush pending TLS records to the underlying TCP socket.
     fn flush_tls(&mut self) -> io::Result<()> {
-
         while self.tls.wants_write() {
             match self.tls.write_tls(&mut self.tcp) {
                 Ok(0) => break,
@@ -353,45 +352,55 @@ mod tests {
     fn test_load_root_certs_file_not_found() {
         let result = load_root_certs_from_pem("/nonexistent/chopin_test_missing.pem");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot open sslrootcert"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot open sslrootcert")
+        );
     }
 
     #[test]
     fn test_load_root_certs_empty_file_returns_error() {
-        let path = std::env::temp_dir()
-            .join(format!("chopin_tls_test_empty_{}.pem", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("chopin_tls_test_empty_{}.pem", std::process::id()));
         std::fs::write(&path, b"").expect("write temp file");
         let result = load_root_certs_from_pem(path.to_str().unwrap());
         let _ = std::fs::remove_file(&path);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("No certificates found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No certificates found")
+        );
     }
 
     #[test]
     fn test_load_root_certs_non_pem_content_returns_error() {
-        let path = std::env::temp_dir()
-            .join(format!("chopin_tls_test_garbage_{}.pem", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "chopin_tls_test_garbage_{}.pem",
+            std::process::id()
+        ));
         std::fs::write(&path, b"this is not a pem file\njust garbage\n").expect("write temp file");
         let result = load_root_certs_from_pem(path.to_str().unwrap());
         let _ = std::fs::remove_file(&path);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("No certificates found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No certificates found")
+        );
     }
 
     #[test]
     fn test_load_root_certs_pem_marker_only_no_cert_data_returns_error() {
         // PEM markers present but content is not a valid certificate
-        let path = std::env::temp_dir()
-            .join(format!("chopin_tls_test_badcert_{}.pem", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "chopin_tls_test_badcert_{}.pem",
+            std::process::id()
+        ));
         std::fs::write(
             &path,
             b"-----BEGIN CERTIFICATE-----\nnot-valid-base64!!!\n-----END CERTIFICATE-----\n",
@@ -431,8 +440,8 @@ Syqu0vqCzEHcHDjYi2wmwViXlLloP+0=\n\
 
     #[test]
     fn test_load_root_certs_valid_cert() {
-        let path = std::env::temp_dir()
-            .join(format!("chopin_tls_test_valid_{}.pem", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("chopin_tls_test_valid_{}.pem", std::process::id()));
         std::fs::write(&path, TEST_CA_PEM.as_bytes()).expect("write temp file");
         let result = load_root_certs_from_pem(path.to_str().unwrap());
         let _ = std::fs::remove_file(&path);
@@ -444,8 +453,8 @@ Syqu0vqCzEHcHDjYi2wmwViXlLloP+0=\n\
     fn test_load_root_certs_multiple_certs() {
         // Two copies of the same cert → store should contain 2 entries.
         let two_certs = format!("{}\n{}", TEST_CA_PEM, TEST_CA_PEM);
-        let path = std::env::temp_dir()
-            .join(format!("chopin_tls_test_multi_{}.pem", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("chopin_tls_test_multi_{}.pem", std::process::id()));
         std::fs::write(&path, two_certs.as_bytes()).expect("write temp file");
         let result = load_root_certs_from_pem(path.to_str().unwrap());
         let _ = std::fs::remove_file(&path);

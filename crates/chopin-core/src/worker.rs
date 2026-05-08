@@ -315,8 +315,7 @@ impl Worker {
                                             if let Some(ref tls_cfg) = self.tls_config {
                                                 match tls_cfg.new_session() {
                                                     Ok(session) => {
-                                                        conn.tls_session =
-                                                            Some(Box::new(session));
+                                                        conn.tls_session = Some(Box::new(session));
                                                     }
                                                     Err(_e) => {
                                                         // TLS session init failed — drop connection
@@ -363,9 +362,7 @@ impl Worker {
                                 if !write_saturated && read_start < conn.read_buf.len() {
                                     // ── TLS-aware read ────────────────────────
                                     #[cfg(feature = "tls")]
-                                    let read_result = if let Some(ref mut tls) =
-                                        conn.tls_session
-                                    {
+                                    let read_result = if let Some(ref mut tls) = conn.tls_session {
                                         // Drive handshake first if not complete
                                         if !crate::tls::is_handshake_complete(tls) {
                                             let _ = crate::tls::tls_flush_pending(fd, tls);
@@ -732,13 +729,15 @@ impl Worker {
                                                             n = q;
                                                             pos -= 2;
                                                             itoa_buf[pos] = DEC_DIGITS_LUT[r];
-                                                            itoa_buf[pos + 1] = DEC_DIGITS_LUT[r + 1];
+                                                            itoa_buf[pos + 1] =
+                                                                DEC_DIGITS_LUT[r + 1];
                                                         }
                                                         if n >= 10 {
                                                             let r = n * 2;
                                                             pos -= 2;
                                                             itoa_buf[pos] = DEC_DIGITS_LUT[r];
-                                                            itoa_buf[pos + 1] = DEC_DIGITS_LUT[r + 1];
+                                                            itoa_buf[pos + 1] =
+                                                                DEC_DIGITS_LUT[r + 1];
                                                         } else {
                                                             pos -= 1;
                                                             itoa_buf[pos] = b'0' + n as u8;
@@ -764,7 +763,7 @@ impl Worker {
                                             }
 
                                             // RFC 7231 §7.1.1.2: every response MUST include a Date.
-                            // Phase 4: Per-worker cache refreshed at most once per second.
+                                            // Phase 4: Per-worker cache refreshed at most once per second.
                                             w!(b"Date: ");
                                             w!(&self.date_cache);
                                             w!(b"\r\n");
@@ -993,21 +992,20 @@ impl Worker {
 
                                         // TLS cannot use kernel writev — flatten through TLS.
                                         #[cfg(feature = "tls")]
-                                        let writev_result = if let Some(ref mut tls) =
-                                            conn.tls_session
-                                        {
-                                            crate::tls::tls_writev(
-                                                fd,
-                                                tls,
-                                                &[header_slice, body_slice],
-                                            )
-                                            .map_err(ChopinError::Io)
-                                        } else {
-                                            syscalls::writev_nonblocking(
-                                                fd,
-                                                &[header_slice, body_slice],
-                                            )
-                                        };
+                                        let writev_result =
+                                            if let Some(ref mut tls) = conn.tls_session {
+                                                crate::tls::tls_writev(
+                                                    fd,
+                                                    tls,
+                                                    &[header_slice, body_slice],
+                                                )
+                                                .map_err(ChopinError::Io)
+                                            } else {
+                                                syscalls::writev_nonblocking(
+                                                    fd,
+                                                    &[header_slice, body_slice],
+                                                )
+                                            };
 
                                         #[cfg(not(feature = "tls"))]
                                         let writev_result = syscalls::writev_nonblocking(
@@ -1035,21 +1033,20 @@ impl Worker {
                                     } else if ws < write_total {
                                         // Phase 1a: flush remaining headers only
                                         #[cfg(feature = "tls")]
-                                        let write_result = if let Some(ref mut tls) =
-                                            conn.tls_session
-                                        {
-                                            crate::tls::tls_write(
-                                                fd,
-                                                tls,
-                                                &conn.write_buf[ws..write_total],
-                                            )
-                                            .map_err(ChopinError::Io)
-                                        } else {
-                                            syscalls::write_nonblocking(
-                                                fd,
-                                                &conn.write_buf[ws..write_total],
-                                            )
-                                        };
+                                        let write_result =
+                                            if let Some(ref mut tls) = conn.tls_session {
+                                                crate::tls::tls_write(
+                                                    fd,
+                                                    tls,
+                                                    &conn.write_buf[ws..write_total],
+                                                )
+                                                .map_err(ChopinError::Io)
+                                            } else {
+                                                syscalls::write_nonblocking(
+                                                    fd,
+                                                    &conn.write_buf[ws..write_total],
+                                                )
+                                            };
 
                                         #[cfg(not(feature = "tls"))]
                                         let write_result = syscalls::write_nonblocking(
@@ -1122,8 +1119,7 @@ impl Worker {
                                     {
                                         // TLS cannot use kernel sendfile — read+write fallback.
                                         #[cfg(feature = "tls")]
-                                        let sf_result = if let Some(ref mut tls) =
-                                            conn.tls_session
+                                        let sf_result = if let Some(ref mut tls) = conn.tls_session
                                         {
                                             crate::tls::tls_sendfile(
                                                 fd,
@@ -1897,8 +1893,7 @@ impl Worker {
                         crate::http::Body::Static(b) => b.len(),
                         _ => 0,
                     };
-                    let will_writev =
-                        pre_body_len > PREFLIGHT_WRITEV_THRESHOLD && wstart == 0;
+                    let will_writev = pre_body_len > PREFLIGHT_WRITEV_THRESHOLD && wstart == 0;
                     if !will_writev && pre_body_len > 0 {
                         let needed = wstart + HEADER_OVERHEAD + pre_body_len;
                         if needed > c.write_buf.len() && !c.try_grow_write_buf(needed) {
