@@ -6,6 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.27] — 2026-05-08
+
+### Security
+- **`rustls-webpki` 0.103.12 → 0.103.13** — patched reachable panic in certificate revocation list parsing (RUSTSEC-2026-0104 / CVE). Affects the `tls` feature of `chopin-core` and `chopin-pg`.
+
+### Changed
+- Removed unused `indicatif` dependency from `chopin-cli` (eliminates RUSTSEC-2025-0119 `number_prefix` unmaintained warning).
+- Added `.cargo/audit.toml` to formally document accepted advisories that cannot currently be resolved upstream (transitive `fxhash`, `paste`; dev-only `rand 0.8.5`; unmaintained `rustls-pemfile`).
+- Applied `cargo fmt` across the workspace (formatting-only, no behaviour change).
+- Fixed two `cargo clippy -D warnings` findings in `chopin-core`:
+  - `explicit_auto_deref`: `&mut *buf` → `&mut buf` in `Response::json`.
+  - `implicit_saturating_sub`: manual bounds check replaced with `total.saturating_sub(suffix)` in `Response::file_range`.
+
+---
+
 ## [Unreleased]
 
 ### Added

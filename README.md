@@ -118,7 +118,7 @@ Hyper      [██████████████████████  
 
 **🔧 Optimization Tip**: On Linux, enable the `io-uring` feature for 35–50% latency reduction:
 ```toml
-chopin-core = { version = "0.5.21", features = ["io-uring"] }
+chopin-core = { version = "0.5.27", features = ["io-uring"] }
 ```
 
 For detailed benchmark methodology, optimization layers, and how to maximize performance, see [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
