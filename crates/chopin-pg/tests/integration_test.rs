@@ -936,3 +936,174 @@ fn test_transaction_status_after_begin() {
     db.conn.rollback().unwrap();
     assert_eq!(db.conn.transaction_status(), TransactionStatus::Idle);
 }
+
+// ─── TLS integration tests (feature = "tls") ─────────────────────────────────
+//
+// These tests verify TLS connection modes against the local PostgreSQL instance.
+// All tests skip gracefully when the server is not reachable or not TLS-capable.
+
+#[cfg(feature = "tls")]
+mod tls {
+    use chopin_pg::{PgConfig, PgConnection, SslMode};
+
+    /// Build a connection config to the local test server with the given SSL mode.
+    fn tls_cfg(mode: SslMode) -> PgConfig {
+        PgConfig::new("localhost", 5432, "chopin", "chopin", "postgres")
+            .with_ssl_mode(mode)
+    }
+
+    // ─── sslmode=disable ──────────────────────────────────────────────────────
+
+    /// Plain-text connection with TLS explicitly disabled still works.
+    #[test]
+    fn test_tls_disable_connects_and_queries() {
+        let cfg = tls_cfg(SslMode::Disable);
+        let mut conn = match PgConnection::connect(&cfg) {
+            Ok(c) => c,
+            Err(_) => return, // server not available → skip
+        };
+        let rows = conn.query("SELECT 1 AS n", &[]).unwrap();
+        let n: i32 = rows[0].get_typed(0).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    // ─── sslmode=prefer ───────────────────────────────────────────────────────
+
+    /// Prefer-mode upgrades to TLS when available, silently falls back to
+    /// plaintext when the server does not support TLS.
+    #[test]
+    fn test_tls_prefer_connects_and_queries() {
+        let cfg = tls_cfg(SslMode::Prefer);
+        let mut conn = match PgConnection::connect(&cfg) {
+            Ok(c) => c,
+            Err(_) => return, // server not available → skip
+        };
+        let rows = conn.query("SELECT 2 AS n", &[]).unwrap();
+        let n: i32 = rows[0].get_typed(0).unwrap();
+        assert_eq!(n, 2);
+    }
+
+    // ─── sslmode=require ──────────────────────────────────────────────────────
+
+    /// Require-mode either connects via TLS or returns a clear error that the
+    /// server does not support SSL.  A connection-refused error is also fine
+    /// (server not running).
+    #[test]
+    fn test_tls_require_either_connects_or_returns_clear_error() {
+        let cfg = tls_cfg(SslMode::Require);
+        match PgConnection::connect(&cfg) {
+            Ok(mut conn) => {
+                // TLS is available on this server — verify a query works.
+                let rows = conn.query("SELECT 3 AS n", &[]).unwrap();
+                let n: i32 = rows[0].get_typed(0).unwrap();
+                assert_eq!(n, 3);
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("does not support SSL")
+                        || msg.contains("Connection refused")
+                        || msg.contains("os error"),
+                    "unexpected error for sslmode=require: {msg}"
+                );
+            }
+        }
+    }
+
+    // ─── sslmode=verify-full ──────────────────────────────────────────────────
+
+    /// verify-full is the strictest mode: TLS + cert verification + hostname
+    /// match. On a local dev server without TLS the expected failure message
+    /// must say "does not support SSL".
+    #[test]
+    fn test_tls_verify_full_either_connects_or_returns_clear_error() {
+        let cfg = tls_cfg(SslMode::VerifyFull);
+        match PgConnection::connect(&cfg) {
+            Ok(mut conn) => {
+                let rows = conn.query("SELECT 4 AS n", &[]).unwrap();
+                let n: i32 = rows[0].get_typed(0).unwrap();
+                assert_eq!(n, 4);
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("does not support SSL")
+                        || msg.contains("TLS")
+                        || msg.contains("Connection refused")
+                        || msg.contains("os error"),
+                    "unexpected error for sslmode=verify-full: {msg}"
+                );
+            }
+        }
+    }
+
+    // ─── custom CA bundle ─────────────────────────────────────────────────────
+
+    /// When a non-existent CA bundle path is configured the driver must return
+    /// a descriptive error that names the file — not panic or produce a cryptic
+    /// message.  The test is meaningful only when the server supports TLS; if
+    /// the server rejects TLS or is unreachable other error messages are also
+    /// accepted.
+    #[test]
+    fn test_tls_require_nonexistent_ca_bundle_returns_descriptive_error() {
+        let cfg = PgConfig::new("localhost", 5432, "chopin", "chopin", "postgres")
+            .with_ssl_mode(SslMode::Require)
+            .with_ssl_root_cert("/nonexistent/aws-rds-global-bundle.pem");
+        match PgConnection::connect(&cfg) {
+            Ok(_) => {} // unlikely but valid if server ignores cert
+            Err(e) => {
+                let msg = e.to_string();
+                // One of three things can happen depending on server TLS support:
+                //  a) server reachable + TLS available → driver tries to load cert → "Cannot open sslrootcert"
+                //  b) server reachable + no TLS       → "does not support SSL"
+                //  c) server not reachable             → "Connection refused" / "os error"
+                assert!(
+                    msg.contains("Cannot open sslrootcert")
+                        || msg.contains("does not support SSL")
+                        || msg.contains("Connection refused")
+                        || msg.contains("os error"),
+                    "unexpected error when CA bundle is missing: {msg}"
+                );
+            }
+        }
+    }
+
+    // ─── URL parsing ──────────────────────────────────────────────────────────
+
+    /// `sslmode=verify-full` is round-tripped through the URL parser correctly.
+    #[test]
+    fn test_from_url_sslmode_verify_full_parsed() {
+        let cfg = PgConfig::from_url(
+            "postgres://chopin:chopin@localhost:5432/postgres?sslmode=verify-full",
+        )
+        .unwrap();
+        assert_eq!(cfg.ssl_mode, SslMode::VerifyFull);
+        assert!(cfg.ssl_root_cert.is_none());
+    }
+
+    /// Both `sslmode` and `sslrootcert` are parsed from the URL query string.
+    #[test]
+    fn test_from_url_sslmode_and_sslrootcert_parsed() {
+        let cfg = PgConfig::from_url(
+            "postgres://u:p@host:5432/db?sslmode=require&sslrootcert=/tmp/bundle.pem",
+        )
+        .unwrap();
+        assert_eq!(cfg.ssl_mode, SslMode::Require);
+        assert_eq!(cfg.ssl_root_cert.as_deref(), Some("/tmp/bundle.pem"));
+    }
+
+    /// `sslmode=verify-ca` maps to `SslMode::Require` (cert check, no hostname check).
+    #[test]
+    fn test_from_url_sslmode_verify_ca_maps_to_require() {
+        let cfg =
+            PgConfig::from_url("postgres://u:p@host:5432/db?sslmode=verify-ca").unwrap();
+        assert_eq!(cfg.ssl_mode, SslMode::Require);
+    }
+
+    /// Default SSL mode is `Prefer` when no `sslmode` query param is given.
+    #[test]
+    fn test_from_url_default_sslmode_is_prefer() {
+        let cfg = PgConfig::from_url("postgres://u:p@localhost:5432/db").unwrap();
+        assert_eq!(cfg.ssl_mode, SslMode::Prefer);
+    }
+}

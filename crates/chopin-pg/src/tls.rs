@@ -249,6 +249,7 @@ impl Write for TlsStream {
 impl TlsStream {
     /// Flush pending TLS records to the underlying TCP socket.
     fn flush_tls(&mut self) -> io::Result<()> {
+
         while self.tls.wants_write() {
             match self.tls.write_tls(&mut self.tcp) {
                 Ok(0) => break,
@@ -267,5 +268,188 @@ impl TlsStream {
         let certs = self.tls.peer_certificates()?;
         let first = certs.first()?;
         Some(crate::auth::sha256(first.as_ref()).to_vec())
+    }
+}
+
+// ─── Tests ───────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── SslMode::parse ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ssl_mode_parse_disable() {
+        assert_eq!(SslMode::parse("disable"), Some(SslMode::Disable));
+    }
+
+    #[test]
+    fn test_ssl_mode_parse_prefer() {
+        assert_eq!(SslMode::parse("prefer"), Some(SslMode::Prefer));
+    }
+
+    #[test]
+    fn test_ssl_mode_parse_require() {
+        assert_eq!(SslMode::parse("require"), Some(SslMode::Require));
+    }
+
+    #[test]
+    fn test_ssl_mode_parse_verify_full_hyphen() {
+        assert_eq!(SslMode::parse("verify-full"), Some(SslMode::VerifyFull));
+    }
+
+    #[test]
+    fn test_ssl_mode_parse_verify_full_underscore() {
+        assert_eq!(SslMode::parse("verify_full"), Some(SslMode::VerifyFull));
+    }
+
+    #[test]
+    fn test_ssl_mode_parse_verify_ca_hyphen_maps_to_require() {
+        assert_eq!(SslMode::parse("verify-ca"), Some(SslMode::Require));
+    }
+
+    #[test]
+    fn test_ssl_mode_parse_verify_ca_underscore_maps_to_require() {
+        assert_eq!(SslMode::parse("verify_ca"), Some(SslMode::Require));
+    }
+
+    #[test]
+    fn test_ssl_mode_parse_unknown_returns_none() {
+        assert!(SslMode::parse("invalid").is_none());
+    }
+
+    #[test]
+    fn test_ssl_mode_parse_empty_returns_none() {
+        assert!(SslMode::parse("").is_none());
+    }
+
+    #[test]
+    fn test_ssl_mode_parse_is_case_sensitive() {
+        // Should NOT match uppercase variants
+        assert!(SslMode::parse("PREFER").is_none());
+        assert!(SslMode::parse("Require").is_none());
+        assert!(SslMode::parse("DISABLE").is_none());
+    }
+
+    // ─── SslMode default ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ssl_mode_default_is_prefer() {
+        assert_eq!(SslMode::default(), SslMode::Prefer);
+    }
+
+    #[test]
+    fn test_ssl_mode_copy_and_eq() {
+        let a = SslMode::VerifyFull;
+        let b = a; // Copy trait
+        assert_eq!(a, b);
+        assert_ne!(a, SslMode::Require);
+    }
+
+    // ─── load_root_certs_from_pem — error paths ───────────────────────────────
+
+    #[test]
+    fn test_load_root_certs_file_not_found() {
+        let result = load_root_certs_from_pem("/nonexistent/chopin_test_missing.pem");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot open sslrootcert"));
+    }
+
+    #[test]
+    fn test_load_root_certs_empty_file_returns_error() {
+        let path = std::env::temp_dir()
+            .join(format!("chopin_tls_test_empty_{}.pem", std::process::id()));
+        std::fs::write(&path, b"").expect("write temp file");
+        let result = load_root_certs_from_pem(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No certificates found"));
+    }
+
+    #[test]
+    fn test_load_root_certs_non_pem_content_returns_error() {
+        let path = std::env::temp_dir()
+            .join(format!("chopin_tls_test_garbage_{}.pem", std::process::id()));
+        std::fs::write(&path, b"this is not a pem file\njust garbage\n").expect("write temp file");
+        let result = load_root_certs_from_pem(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No certificates found"));
+    }
+
+    #[test]
+    fn test_load_root_certs_pem_marker_only_no_cert_data_returns_error() {
+        // PEM markers present but content is not a valid certificate
+        let path = std::env::temp_dir()
+            .join(format!("chopin_tls_test_badcert_{}.pem", std::process::id()));
+        std::fs::write(
+            &path,
+            b"-----BEGIN CERTIFICATE-----\nnot-valid-base64!!!\n-----END CERTIFICATE-----\n",
+        )
+        .expect("write temp file");
+        let result = load_root_certs_from_pem(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        // rustls-pemfile will fail to decode the base64, producing no certs
+        assert!(result.is_err());
+    }
+
+    // ─── load_root_certs_from_pem — success path ─────────────────────────────
+
+    /// A minimal self-signed CA certificate used as a test fixture for PEM loading.
+    /// Generated with: openssl req -x509 -newkey rsa:2048 -keyout /dev/null
+    ///   -out cert.pem -days 3650 -nodes -subj "/CN=chopin-test-ca"
+    const TEST_CA_PEM: &str = "\
+-----BEGIN CERTIFICATE-----\n\
+MIIDEzCCAfugAwIBAgIUAb/5iIK6uUPgrgzQPwkllDb2cQUwDQYJKoZIhvcNAQEL\n\
+BQAwGTEXMBUGA1UEAwwOY2hvcGluLXRlc3QtY2EwHhcNMjYwNTA4MDIzNjMyWhcN\n\
+MzYwNTA1MDIzNjMyWjAZMRcwFQYDVQQDDA5jaG9waW4tdGVzdC1jYTCCASIwDQYJ\n\
+KoZIhvcNAQEBBQADggEPADCCAQoCggEBAMLZsTKdc2SFNZuGQeysSI/6ijeLwMCr\n\
+K2PIZMqoURD2KdKDmt/wViOfVoZmcY3qG5h0BvZPpJZw2bcu7PJLCRU0Mti/sOdN\n\
+u/u1/F58c/hSaCylGfumabejcgbUid+YIX1wAlOjpLKTIXQ439kd62SxPgZyy7ZH\n\
+CiZXhhORBR3mgECn3jeFBEGZIMCnzfwiRa0jKm9XZmUlDGC75XofVaV6zvzqeOWa\n\
+6UTJH1mJr4N0izIXGNzEwX4DZjIeNZG+QA0ClbPe/Bm5IQgMzLTiQYd/hOvoTaKI\n\
+f5yn2O436ISX8bvKZEXh4ogpN9l/JGx699BOxYOp6bWM4v8I9/hL7zsCAwEAAaNT\n\
+MFEwHQYDVR0OBBYEFE5ZgIQ6J1AZA0mFyF9Gyp3OvOIZMB8GA1UdIwQYMBaAFE5Z\n\
+gIQ6J1AZA0mFyF9Gyp3OvOIZMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEL\n\
+BQADggEBAFwoIkwUVw8hyEdgTjjasbv8/oNJTmoYuSffXz+6mCkI5mqNCR9PhN92\n\
++zccVmyLpNKyjEKLRjZhFJQ2vT3Rozg5wNWUW6Si3+ArjGFntWDDB0yx2pr71KMW\n\
+flTFPYZYPCcMTwwr0EnG/X9C29Icc/moaSUD9ZBhtX2dJNElMxg+bcK2D0w2rmIl\n\
+ZGUnlElmQgfNmeLKpjYfoz1oYWfhwg/GTL8LT4jjUKpFMDa1EqiwWOqM1FUhTkJj\n\
+9iUIr4DAmZ9tqK+NxjS2dXVKmNIH+71gElMuuEYQNgtr0p/NspGxajsMHTMGhxeG\n\
+Syqu0vqCzEHcHDjYi2wmwViXlLloP+0=\n\
+-----END CERTIFICATE-----\n";
+
+    #[test]
+    fn test_load_root_certs_valid_cert() {
+        let path = std::env::temp_dir()
+            .join(format!("chopin_tls_test_valid_{}.pem", std::process::id()));
+        std::fs::write(&path, TEST_CA_PEM.as_bytes()).expect("write temp file");
+        let result = load_root_certs_from_pem(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        let store = result.expect("valid CA cert should load without error");
+        assert_eq!(store.len(), 1, "should contain exactly one certificate");
+    }
+
+    #[test]
+    fn test_load_root_certs_multiple_certs() {
+        // Two copies of the same cert → store should contain 2 entries.
+        let two_certs = format!("{}\n{}", TEST_CA_PEM, TEST_CA_PEM);
+        let path = std::env::temp_dir()
+            .join(format!("chopin_tls_test_multi_{}.pem", std::process::id()));
+        std::fs::write(&path, two_certs.as_bytes()).expect("write temp file");
+        let result = load_root_certs_from_pem(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        let store = result.expect("two valid certs should load without error");
+        assert_eq!(store.len(), 2);
     }
 }

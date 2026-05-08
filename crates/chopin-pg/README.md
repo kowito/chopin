@@ -24,6 +24,7 @@
 - **22 PostgreSQL types** — Bool, Int2/4/8, Float4/8, Text, Bytes, Json, Jsonb, Uuid, Date, Time, Timestamp, Timestamptz, Interval, Inet, Numeric, MacAddr, Point, Range, Array
 - **Binary wire format** — per-parameter format codes with binary result decoding
 - **SCRAM-SHA-256 auth** — zero-dep implementation; cleartext password also supported
+- **TLS / SSL** — optional `tls` feature; rustls-backed with `sslmode=prefer|require|verify-full`; custom CA bundle for AWS RDS and other private PKI environments
 - **Unix domain sockets** — `PgConfig.socket_dir` or `?host=` URL parameter
 - **Error classification** — `ErrorClass::Transient`/`Permanent`/`Client`/`Pool` with SQLSTATE mapping; `PgError::BufferOverflow` returned (not panicked) when a server message exceeds the 16 MB safety limit
 - **Retry helper** — `retry(max_retries, || { ... })` with transient error detection
@@ -257,6 +258,79 @@ conn.transaction(|tx| {
 - **Cleartext password** — supported
 - **MD5** — recognized but returns an error (not implemented)
 
+## 🔒 TLS / SSL (AWS RDS & Private CAs)
+
+Enable the optional `tls` feature for encrypted PostgreSQL connections backed by **rustls** (no OpenSSL dependency).
+
+```toml
+[dependencies]
+chopin-pg = { version = "*", features = ["tls"] }
+```
+
+### SSL modes
+
+| `sslmode` | Behaviour |
+|---|---|
+| `disable` | Never use TLS. Fail if the server requires it. |
+| `prefer` *(default)* | Try TLS first; fall back to plaintext if the server rejects it. |
+| `require` | Require TLS and verify the server certificate against the configured CA bundle. Fail if TLS is unavailable. |
+| `verify-full` | Require TLS, verify the certificate, **and** verify that the hostname matches the certificate's CN/SAN. Recommended for production / AWS RDS. |
+
+### Connecting to AWS RDS
+
+1. **Download the global CA bundle** (one-time):
+
+   ```bash
+   curl -o /etc/ssl/certs/aws-rds-global-bundle.pem \
+       https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+   ```
+
+2. **Configure `PgConfig`**:
+
+   ```rust
+   use chopin_pg::{PgConfig, PgConnection, SslMode};
+
+   let config = PgConfig::new(
+       "mydb.cluster-xxxxxx.us-east-1.rds.amazonaws.com",
+       5432, "myuser", "secret", "mydb",
+   )
+   .with_ssl_mode(SslMode::VerifyFull)
+   .with_ssl_root_cert("/etc/ssl/certs/aws-rds-global-bundle.pem");
+
+   let mut conn = PgConnection::connect(&config)?;
+   ```
+
+3. **Or use a connection URL** with query parameters:
+
+   ```rust
+   let config = PgConfig::from_url(
+       "postgres://myuser:secret@mydb.cluster-xxxxxx.us-east-1.rds.amazonaws.com:5432/mydb\
+        ?sslmode=verify-full\
+        &sslrootcert=/etc/ssl/certs/aws-rds-global-bundle.pem"
+   )?;
+   ```
+
+4. **Run the bundled example** to confirm connectivity:
+
+   ```bash
+   export PG_HOST=mydb.cluster-xxxxxx.us-east-1.rds.amazonaws.com
+   export PG_PORT=5432
+   export PG_USER=myuser
+   export PG_PASSWORD=secret
+   export PG_DATABASE=mydb
+   export PG_SSL_ROOT_CERT=/etc/ssl/certs/aws-rds-global-bundle.pem
+
+   cargo run -p chopin-pg --example aws_rds_tls --features tls
+   ```
+
+   The example prints the server version, connected database/user, server address, and confirms `ssl_is_used() = true`.
+
+### Notes
+
+- When `ssl_root_cert` is set the Mozilla WebPKI root store is **replaced** by the custom bundle. This is required for services backed by a private CA (AWS RDS, Azure Database, Cloud SQL, etc.).
+- `verify-ca` is accepted as an alias for `require` in URL parsing (cert check without hostname verification).
+- Channel binding (`SCRAM-SHA-256-PLUS`) is automatically used when TLS is active and the server advertises support — the server's certificate hash is extracted for the `tls-server-end-point` binding type.
+
 ## 🔌 Connection Pool Sizing for High Concurrency
 
 When handling high concurrency (e.g., 512+ concurrent connections), proper connection pool sizing is critical. Understanding the relationship between HTTP concurrency and database pool size is essential to avoid connection starvation and timeouts.
@@ -355,3 +429,11 @@ Set up monitoring for pool exhaustion:
 - **Monitor pool utilization** and adjust based on actual behavior
 
 For 512 concurrent connections, a well-tuned pool of 25 connections per worker will handle typical API workloads efficiently while preventing resource exhaustion.
+
+## ⚙️ Feature Flags
+
+| Feature | Default | Description |
+|---|---|---|
+| `tls` | off | TLS/SSL support via **rustls**. Enables `SslMode`, `PgConfig::with_ssl_mode`, and `PgConfig::with_ssl_root_cert`. Required for AWS RDS and any TLS-only PostgreSQL endpoint. |
+| `chrono` | off | `chrono::NaiveDate`, `NaiveTime`, `NaiveDateTime`, and `DateTime<Utc>` implementations for `ToSql`/`FromSql`. |
+| `decimal` | off | `rust_decimal::Decimal` implementation for `ToSql`/`FromSql` (maps to PostgreSQL `NUMERIC`). |

@@ -29,3 +29,7 @@ monoio-pg = "0.1.10"
 tokio-postgres = "0.7"
 tokio = { version = "1.40", features = ["full"] }
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "macros"] }
+
+[[example]]
+name = "aws_rds_tls"
+required-features = ["tls"]
