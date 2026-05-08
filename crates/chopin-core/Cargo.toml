@@ -13,6 +13,8 @@ default = ["catch-panic"]
 catch-panic = []
 io-uring = []
 compression = ["dep:flate2"]
+logging = ["dep:tracing-subscriber"]
+tls = ["dep:rustls", "dep:rustls-pemfile", "dep:webpki-roots"]
 
 [dependencies]
 arrayvec = "0.7"
@@ -30,6 +32,11 @@ inventory = "0.3.22"
 chopin-macros = { workspace = true }
 memchr = "2.8.0"
 httpdate = "1.0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"], optional = true }
+rustls = { version = "0.23", features = ["ring"], optional = true }
+rustls-pemfile = { version = "2", optional = true }
+webpki-roots = { version = "0.26", optional = true }
 
 [dev-dependencies]
 hyper = { version = "1.4.1", features = ["full"] }

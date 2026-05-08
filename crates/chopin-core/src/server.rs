@@ -65,9 +65,75 @@ impl Chopin {
         self
     }
 
+    /// Mount the built-in Prometheus metrics endpoint at the given path.
+    ///
+    /// The metrics page is available immediately after the server starts.
+    /// Aggregate counters across all worker threads are rendered in the
+    /// [Prometheus exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// Chopin::new().mount_all_routes().with_metrics("/metrics").serve("0.0.0.0:8080").unwrap();
+    /// ```
+    pub fn with_metrics(mut self, path: &'static str) -> Self {
+        self.router
+            .get(path, crate::metrics::prometheus_metrics_handler);
+        self
+    }
+
+    /// Mount a built-in health check endpoint at the given path.
+    ///
+    /// Returns `200 OK` with a JSON body containing server uptime, worker
+    /// count, total request count, and active connection count. Suitable for
+    /// Kubernetes liveness/readiness probes and AWS ALB health checks.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// Chopin::new().mount_all_routes().with_health("/health").serve("0.0.0.0:8080").unwrap();
+    /// ```
+    pub fn with_health(mut self, path: &'static str) -> Self {
+        self.router.get(path, crate::metrics::health_handler);
+        self
+    }
+
+    /// Initialise structured JSON logging to stderr using `tracing-subscriber`.
+    ///
+    /// Log level is controlled by the `RUST_LOG` environment variable
+    /// (default: `info`). Requires the `logging` feature flag.
+    ///
+    /// # Example
+    ///
+    /// ```bash
+    /// RUST_LOG=debug cargo run
+    /// ```
+    #[cfg(feature = "logging")]
+    pub fn with_logging(self) -> Self {
+        use tracing_subscriber::{EnvFilter, fmt};
+        let filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        fmt().json().with_env_filter(filter).init();
+        self
+    }
+
     /// Start the server, binding to `host_port` (e.g. `"0.0.0.0:8080"`).
     pub fn serve(self, host_port: &str) -> crate::error::ChopinResult<()> {
         let server = Server::bind(host_port);
+        server.serve(self.router)
+    }
+
+    /// Start the server with TLS, binding to `host_port`.
+    ///
+    /// Requires the `tls` feature flag.
+    #[cfg(feature = "tls")]
+    pub fn serve_tls(
+        self,
+        host_port: &str,
+        cert_path: &str,
+        key_path: &str,
+    ) -> crate::error::ChopinResult<()> {
+        let server = Server::bind(host_port).with_tls(cert_path, key_path)?;
         server.serve(self.router)
     }
 }
@@ -96,6 +162,11 @@ impl Chopin {
 pub struct Server {
     host_port: String,
     workers: usize,
+    /// Phase 3.2 Option C: cap on pipelined requests batched per event-loop
+    /// iteration.  0 = unlimited (default).
+    max_pipeline_depth: u32,
+    #[cfg(feature = "tls")]
+    tls_config: Option<crate::tls::TlsServerConfig>,
 }
 
 impl Server {
@@ -104,6 +175,9 @@ impl Server {
         Self {
             host_port: host_port.to_string(),
             workers: num_cpus::get(),
+            max_pipeline_depth: 0,
+            #[cfg(feature = "tls")]
+            tls_config: None,
         }
     }
 
@@ -111,6 +185,42 @@ impl Server {
     pub fn workers(mut self, workers: usize) -> Self {
         self.workers = workers;
         self
+    }
+
+    /// Limit the number of pipelined HTTP requests processed per event-loop
+    /// iteration before forcing a write flush.
+    ///
+    /// Setting this improves fairness when clients send many back-to-back
+    /// pipelined requests: after `depth` requests are batched and serialised,
+    /// their responses are flushed and other connections get a turn.
+    ///
+    /// `0` (the default) means unlimited — all buffered pipelined requests are
+    /// handled before yielding, which maximises throughput for pipeline-heavy
+    /// clients.
+    pub fn with_max_pipeline_depth(mut self, depth: u32) -> Self {
+        self.max_pipeline_depth = depth;
+        self
+    }
+
+    /// Enable TLS using PEM certificate and key files.
+    ///
+    /// Requires the `tls` feature flag.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// Server::bind("0.0.0.0:443")
+    ///     .with_tls("cert.pem", "key.pem")
+    ///     .unwrap()
+    ///     .serve(router)
+    ///     .unwrap();
+    /// ```
+    #[cfg(feature = "tls")]
+    pub fn with_tls(mut self, cert_path: &str, key_path: &str) -> crate::error::ChopinResult<Self> {
+        let cfg = crate::tls::TlsServerConfig::from_pem_files(cert_path, key_path)
+            .map_err(|e| crate::error::ChopinError::Other(e))?;
+        self.tls_config = Some(cfg);
+        Ok(self)
     }
 
     /// Start the server with the provided router. Spawns one thread per worker,
@@ -124,19 +234,27 @@ impl Server {
 
         let shutdown_signal = shutdown_flag.clone();
         ctrlc::set_handler(move || {
+            tracing::info!("Shutdown signal received — draining connections");
             shutdown_signal.store(true, Ordering::Release);
         })
         .map_err(|e| ChopinError::Other(format!("Failed to set Ctrl-C handler: {e}")))?;
 
-        let mut worker_metrics = Vec::with_capacity(self.workers);
+        let mut worker_metrics: Vec<Arc<crate::metrics::WorkerMetrics>> =
+            Vec::with_capacity(self.workers);
         for _ in 0..self.workers {
             worker_metrics.push(Arc::new(crate::metrics::WorkerMetrics::new()));
         }
 
-        let _metrics_clones = worker_metrics.clone();
-        let _shutdown_metrics = shutdown_flag.clone();
+        // Register metrics globally so /metrics and /health handlers can read them.
+        crate::metrics::register_global_metrics(Arc::new(worker_metrics.clone()));
 
         let Parts { host, port } = parse_host_port(&self.host_port)?;
+
+        tracing::info!(
+            address = %self.host_port,
+            workers = self.workers,
+            "Chopin server starting"
+        );
 
         let mut handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(self.workers);
         for (i, metrics_worker) in worker_metrics.iter().enumerate().take(self.workers) {
@@ -148,6 +266,11 @@ impl Server {
             let host_clone = host.clone();
             let port_clone = port;
 
+            #[cfg(feature = "tls")]
+            let tls_clone = self.tls_config.clone();
+
+            let max_pipeline_depth_clone = self.max_pipeline_depth;
+
             let handle = thread::Builder::new()
                 .name(format!("chopin-worker-{}", i))
                 .spawn(move || {
@@ -155,20 +278,29 @@ impl Server {
                         core_affinity::set_for_current(id);
                     }
 
+                    tracing::debug!(worker_id = i, "Worker thread started");
+
                     // Create dedicated SO_REUSEPORT listener for this worker
                     match syscalls::create_listen_socket_reuseport(&host_clone, port_clone) {
                         Ok(listen_fd) => {
                             let mut worker =
                                 Worker::new(i, router_clone, metrics_worker, listen_fd);
-                            if let Err(_e) = worker.run(shutdown) {
-                                // Error suppressed in production
+                            #[cfg(feature = "tls")]
+                            if let Some(cfg) = tls_clone {
+                                worker.set_tls_config(cfg);
+                            }
+                            if max_pipeline_depth_clone > 0 {
+                                worker.set_max_pipeline_depth(max_pipeline_depth_clone);
+                            }
+                            if let Err(e) = worker.run(shutdown) {
+                                tracing::error!(worker_id = i, error = %e, "Worker exited with error");
                             }
                             unsafe {
                                 libc::close(listen_fd);
                             }
                         }
-                        Err(_e) => {
-                            // Error suppressed in production
+                        Err(e) => {
+                            tracing::error!(worker_id = i, error = %e, "Failed to create listen socket");
                         }
                     }
                 })
@@ -181,6 +313,7 @@ impl Server {
             let _ = handle.join();
         }
 
+        tracing::info!("All workers stopped — server shutdown complete");
         Ok(())
     }
 }

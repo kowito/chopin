@@ -39,6 +39,15 @@ const FAST_200_TEXT: &[u8] = b"HTTP/1.1 200 OK\r\nServer: chopin\r\nContent-Type
 const FAST_200_HTML: &[u8] =
     b"HTTP/1.1 200 OK\r\nServer: chopin\r\nContent-Type: text/html; charset=utf-8\r\n";
 
+/// Phase 2: Lookup table for fast 2-digit integer-to-ASCII conversion.
+/// `DEC_DIGITS_LUT[n*2..n*2+2]` is the zero-padded ASCII representation of `n` (0..=99).
+const DEC_DIGITS_LUT: &[u8; 200] = b"\
+    0001020304050607080910111213141516171819\
+    2021222324252627282930313233343536373839\
+    4041424344454647484950515253545556575859\
+    6061626364656667686970717273747576777879\
+    8081828384858687888990919293949596979899";
+
 /// Format an HTTP status line into a fixed 40-byte buffer. Returns the slice length.
 #[inline(always)]
 fn status_line(status: u16, out: &mut [u8; 40]) -> usize {
@@ -102,6 +111,17 @@ pub struct Worker {
     listen_fd: i32, // Dedicated SO_REUSEPORT listener
     slab_capacity: usize,
     epoll_timeout_ms: i32,
+    /// Phase 3.2 Option C: maximum number of pipelined requests to dispatch per
+    /// event-loop iteration before forcing a write flush.  0 = unlimited.
+    /// Configurable via `CHOPIN_MAX_PIPELINE_DEPTH` env var or
+    /// `Server::with_max_pipeline_depth()`.
+    max_pipeline_depth: u32,
+    #[cfg(feature = "tls")]
+    tls_config: Option<crate::tls::TlsServerConfig>,
+    // Phase 4: Per-worker Date header cache. Refreshed at most once per second.
+    // Stored on Worker so both epoll and io_uring event loops share the same field.
+    date_cache: [u8; 29],
+    date_cache_secs: u32,
 }
 
 impl Worker {
@@ -109,12 +129,17 @@ impl Worker {
         let slab_capacity = std::env::var("CHOPIN_SLAB_CAPACITY")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(16_000); // Reduced from 25k to 16k to offset write_buf increase (32 KiB)
+            .unwrap_or(8_000); // Phase 1: 32 KiB read + 32 KiB write = 64 KiB/conn; 8k slots ≈ 512 MB/worker
 
         let epoll_timeout_ms = std::env::var("CHOPIN_EPOLL_TIMEOUT_MS")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
             .unwrap_or(100); // Reduced from 1000ms to 100ms for better responsiveness
+
+        let max_pipeline_depth = std::env::var("CHOPIN_MAX_PIPELINE_DEPTH")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0); // 0 = unlimited
 
         Self {
             id,
@@ -123,7 +148,34 @@ impl Worker {
             listen_fd,
             slab_capacity,
             epoll_timeout_ms,
+            max_pipeline_depth,
+            #[cfg(feature = "tls")]
+            tls_config: None,
+            date_cache: {
+                let s = httpdate::fmt_http_date(std::time::SystemTime::now());
+                let mut buf = [0u8; 29];
+                buf.copy_from_slice(s.as_bytes());
+                buf
+            },
+            date_cache_secs: 0,
         }
+    }
+
+    /// Configure TLS for this worker. Must be called before `run()`.
+    #[cfg(feature = "tls")]
+    pub fn set_tls_config(&mut self, cfg: crate::tls::TlsServerConfig) {
+        self.tls_config = Some(cfg);
+    }
+
+    /// Override the maximum number of pipelined requests to batch-dispatch per
+    /// event-loop iteration.  `0` means unlimited (the default).
+    ///
+    /// Setting this to a small value (e.g. `8`) improves fairness across
+    /// connections when clients send many back-to-back pipelined requests,
+    /// by forcing a write flush sooner and giving other ready connections a
+    /// chance to be served.
+    pub fn set_max_pipeline_depth(&mut self, depth: u32) {
+        self.max_pipeline_depth = depth;
     }
 
     /// Dispatches to the io_uring event loop on Linux with the `io-uring` feature,
@@ -184,10 +236,18 @@ impl Worker {
             // Update time and prune every 4096 iterations (reduced frequency for better performance)
             #[allow(clippy::manual_is_multiple_of)]
             if iter_count % 4096 == 0 {
-                now = SystemTime::now()
+                let sys_now = SystemTime::now();
+                now = sys_now
                     .duration_since(UNIX_EPOCH)
                     .map_err(|_| ChopinError::ClockError)?
                     .as_secs() as u32;
+
+                // Phase 4: Refresh Date header cache when the second ticks over.
+                if now != self.date_cache_secs {
+                    let new_date = httpdate::fmt_http_date(sys_now);
+                    self.date_cache.copy_from_slice(new_date.as_bytes());
+                    self.date_cache_secs = now;
+                }
 
                 if now - last_prune >= 1 {
                     self.prune_connections_wheel(&mut slab, &epoll, &mut timer_wheel, now);
@@ -250,6 +310,27 @@ impl Worker {
                                             conn.flags = crate::conn::CONN_KEEP_ALIVE;
                                             conn.last_active = now;
                                             conn.requests_served = 0;
+                                            // Initialise TLS session if server is TLS-enabled
+                                            #[cfg(feature = "tls")]
+                                            if let Some(ref tls_cfg) = self.tls_config {
+                                                match tls_cfg.new_session() {
+                                                    Ok(session) => {
+                                                        conn.tls_session =
+                                                            Some(Box::new(session));
+                                                    }
+                                                    Err(_e) => {
+                                                        // TLS session init failed — drop connection
+                                                        tracing::warn!(
+                                                            "TLS session init failed; dropping connection"
+                                                        );
+                                                        slab.free(idx);
+                                                        unsafe {
+                                                            libc::close(client_fd);
+                                                        }
+                                                        continue;
+                                                    }
+                                                }
+                                            }
                                             self.metrics.inc_conn();
                                             timer_wheel.insert(idx, now);
                                         }
@@ -274,12 +355,41 @@ impl Worker {
 
                         if is_read {
                             if let Some(conn) = slab.get_mut(idx) {
+                                // Phase 3.3: Write backpressure — stop reading when output
+                                // buffer is > 75% full to prevent unbounded memory growth.
+                                let write_saturated =
+                                    conn.write_len as usize > conn.write_buf.len() * 3 / 4;
                                 let read_start = conn.read_len as usize;
-                                if read_start < conn.read_buf.len() {
-                                    match syscalls::read_nonblocking(
+                                if !write_saturated && read_start < conn.read_buf.len() {
+                                    // ── TLS-aware read ────────────────────────
+                                    #[cfg(feature = "tls")]
+                                    let read_result = if let Some(ref mut tls) =
+                                        conn.tls_session
+                                    {
+                                        // Drive handshake first if not complete
+                                        if !crate::tls::is_handshake_complete(tls) {
+                                            let _ = crate::tls::tls_flush_pending(fd, tls);
+                                        }
+                                        crate::tls::tls_read(
+                                            fd,
+                                            tls,
+                                            &mut conn.read_buf[read_start..],
+                                        )
+                                        .map_err(ChopinError::Io)
+                                    } else {
+                                        syscalls::read_nonblocking(
+                                            fd,
+                                            &mut conn.read_buf[read_start..],
+                                        )
+                                    };
+
+                                    #[cfg(not(feature = "tls"))]
+                                    let read_result = syscalls::read_nonblocking(
                                         fd,
                                         &mut conn.read_buf[read_start..],
-                                    ) {
+                                    );
+
+                                    match read_result {
                                         Ok(0) => {
                                             // EOF - client closed connection (if no data read)
                                             if read_start == 0 {
@@ -290,21 +400,38 @@ impl Worker {
                                         }
                                         Ok(n) => {
                                             conn.read_len += n as u16;
+                                            // Phase 1.3: proactively grow if ≥ 75% full
+                                            // so the next read still has headroom.
+                                            conn.maybe_grow_read_buf();
                                             next_state = ConnState::Parsing;
                                         }
                                         Err(ChopinError::Io(ref e))
                                             if e.kind() == std::io::ErrorKind::WouldBlock =>
                                         {
                                             // Not ready, keep waiting
+                                            // For TLS, also flush any pending handshake output
+                                            #[cfg(feature = "tls")]
+                                            if let Some(ref mut tls) = conn.tls_session {
+                                                if crate::tls::wants_write(tls) {
+                                                    let _ = crate::tls::tls_flush_pending(fd, tls);
+                                                }
+                                            }
                                         }
                                         Err(_) => {
                                             next_state = ConnState::Closing;
                                         }
                                     }
-                                } else {
-                                    // Buffer too full, can't read more without blowing up
-                                    next_state = ConnState::Closing;
+                                } else if read_start >= conn.read_buf.len() {
+                                    // Buffer completely full — Phase 1.3: try to grow
+                                    // before giving up and closing the connection.
+                                    conn.maybe_grow_read_buf();
+                                    if conn.read_len as usize >= conn.read_buf.len() {
+                                        // Still at maximum size — drop connection.
+                                        next_state = ConnState::Closing;
+                                    }
+                                    // else: grew successfully; next epoll event will read more.
                                 }
+                                // else: write_saturated — skip read; EPOLLOUT will drain
                             }
                         }
 
@@ -316,6 +443,8 @@ impl Worker {
                             // serialising each response into write_buf.
                             // Track read_offset for deferred compaction (single memcpy at end).
                             let mut read_offset: usize = 0;
+                            // Phase 3.2 Option C: count requests dispatched this iteration.
+                            let mut pipeline_count: u32 = 0;
                             while next_state == ConnState::Parsing {
                                 if let Some(conn) = slab.get_mut(idx) {
                                     let rl = conn.read_len as usize;
@@ -328,6 +457,20 @@ impl Worker {
                                     let wl = conn.write_len as usize;
                                     if wl + 512 > conn.write_buf.len() {
                                         next_state = ConnState::Writing;
+                                        break;
+                                    }
+
+                                    // Phase 3.2 Option C: enforce max pipeline depth.
+                                    // When set, flush queued responses before processing
+                                    // more requests, giving other connections a turn.
+                                    if self.max_pipeline_depth > 0
+                                        && pipeline_count >= self.max_pipeline_depth
+                                    {
+                                        next_state = if conn.write_len > 0 {
+                                            ConnState::Writing
+                                        } else {
+                                            ConnState::Reading
+                                        };
                                         break;
                                     }
 
@@ -363,6 +506,9 @@ impl Worker {
 
                                             self.metrics.inc_req();
                                             conn.requests_served += 1;
+                                            // Phase 3.1: track in-flight requests for future
+                                            // concurrent dispatch back-pressure.
+                                            conn.inflight = conn.inflight.saturating_add(1);
 
                                             // D.2: Cap keep-alive requests per connection
                                             if conn.requests_served >= KEEPALIVE_MAX_REQUESTS {
@@ -412,22 +558,37 @@ impl Worker {
                                             // ctx consumed → read_buf borrow released
                                             let wstart = conn.write_len as usize;
 
-                                            // Pre-flight body size guard.
-                                            // Body::Bytes and Body::Static are copied into write_buf
-                                            // (inline) or sent via the body_ptr writev path.  Either
-                                            // way the full body must fit within the write buffer's
-                                            // total capacity.  Bodies exceeding this limit replace
-                                            // the response with 500 before any bytes are written,
-                                            // so the client always receives a complete valid response.
-                                            // Body::File uses sendfile (no write-buf constraint).
-                                            // Body::Stream has unknown size and is handled inline.
+                                            // Pre-flight body size guard (Phase 1.3: adaptive).
+                                            // Body::Bytes/Static that exceed the write_buf
+                                            // can either:
+                                            //   a) Go via the writev zero-copy path when len >
+                                            //      WRITEV_THRESHOLD and wstart==0 — no inline
+                                            //      copy needed, only headers must fit.
+                                            //   b) Need to be inlined — try to grow write_buf
+                                            //      first; fall back to 500 only at max capacity.
+                                            // Body::File / Stream / Raw are unaffected.
+                                            const PREFLIGHT_WRITEV_THRESHOLD: usize = 4096;
+                                            const HEADER_OVERHEAD: usize = 512;
                                             let preflight_body_len = match &response.body {
                                                 crate::http::Body::Bytes(b) => b.len(),
                                                 crate::http::Body::Static(b) => b.len(),
                                                 _ => 0,
                                             };
-                                            if preflight_body_len > conn.write_buf.len() {
-                                                response = crate::http::Response::server_error();
+                                            // Large bodies at wstart==0 use writev —
+                                            // they never touch write_buf inline.
+                                            let will_writev = preflight_body_len
+                                                > PREFLIGHT_WRITEV_THRESHOLD
+                                                && wstart == 0;
+                                            if !will_writev && preflight_body_len > 0 {
+                                                let needed =
+                                                    wstart + HEADER_OVERHEAD + preflight_body_len;
+                                                if needed > conn.write_buf.len() {
+                                                    if !conn.try_grow_write_buf(needed) {
+                                                        // At maximum capacity — send 500.
+                                                        response =
+                                                            crate::http::Response::server_error();
+                                                    }
+                                                }
                                             }
 
                                             let wbuf = &mut conn.write_buf[wstart..];
@@ -499,11 +660,37 @@ impl Worker {
                                                     }
                                                 }
                                             } else {
-                                                let mut sl_buf = [0u8; 40];
-                                                let sl_len =
-                                                    status_line(response.status, &mut sl_buf);
-                                                w!(&sl_buf[..sl_len]);
-                                                w!(b"Server: chopin\r\n");
+                                                // Phase 2: Pre-baked status line + Server for common codes.
+                                                match response.status {
+                                                    201 => w!(b"HTTP/1.1 201 Created\r\nServer: chopin\r\n"),
+                                                    204 => w!(b"HTTP/1.1 204 No Content\r\nServer: chopin\r\n"),
+                                                    206 => w!(b"HTTP/1.1 206 Partial Content\r\nServer: chopin\r\n"),
+                                                    301 => w!(b"HTTP/1.1 301 Moved Permanently\r\nServer: chopin\r\n"),
+                                                    302 => w!(b"HTTP/1.1 302 Found\r\nServer: chopin\r\n"),
+                                                    304 => w!(b"HTTP/1.1 304 Not Modified\r\nServer: chopin\r\n"),
+                                                    400 => w!(b"HTTP/1.1 400 Bad Request\r\nServer: chopin\r\n"),
+                                                    401 => w!(b"HTTP/1.1 401 Unauthorized\r\nServer: chopin\r\n"),
+                                                    403 => w!(b"HTTP/1.1 403 Forbidden\r\nServer: chopin\r\n"),
+                                                    404 => w!(b"HTTP/1.1 404 Not Found\r\nServer: chopin\r\n"),
+                                                    405 => w!(b"HTTP/1.1 405 Method Not Allowed\r\nServer: chopin\r\n"),
+                                                    408 => w!(b"HTTP/1.1 408 Request Timeout\r\nServer: chopin\r\n"),
+                                                    409 => w!(b"HTTP/1.1 409 Conflict\r\nServer: chopin\r\n"),
+                                                    410 => w!(b"HTTP/1.1 410 Gone\r\nServer: chopin\r\n"),
+                                                    413 => w!(b"HTTP/1.1 413 Content Too Large\r\nServer: chopin\r\n"),
+                                                    422 => w!(b"HTTP/1.1 422 Unprocessable Entity\r\nServer: chopin\r\n"),
+                                                    429 => w!(b"HTTP/1.1 429 Too Many Requests\r\nServer: chopin\r\n"),
+                                                    500 => w!(b"HTTP/1.1 500 Internal Server Error\r\nServer: chopin\r\n"),
+                                                    501 => w!(b"HTTP/1.1 501 Not Implemented\r\nServer: chopin\r\n"),
+                                                    502 => w!(b"HTTP/1.1 502 Bad Gateway\r\nServer: chopin\r\n"),
+                                                    503 => w!(b"HTTP/1.1 503 Service Unavailable\r\nServer: chopin\r\n"),
+                                                    504 => w!(b"HTTP/1.1 504 Gateway Timeout\r\nServer: chopin\r\n"),
+                                                    _ => {
+                                                        let mut sl_buf = [0u8; 40];
+                                                        let sl_len = status_line(response.status, &mut sl_buf);
+                                                        w!(&sl_buf[..sl_len]);
+                                                        w!(b"Server: chopin\r\n");
+                                                    }
+                                                }
                                                 false
                                             };
 
@@ -530,24 +717,36 @@ impl Worker {
                                             } else {
                                                 w!(b"Content-Length: ");
                                                 let body_len = response.body.len();
-                                                let mut itoa_buf = [0u8; 10];
-                                                let itoa_len = {
+                                                // Phase 2: LUT-based encoding — 2 digits/iter, fills right-to-left, no reverse.
+                                                let mut itoa_buf = [0u8; 20];
+                                                let itoa_start = {
                                                     let mut n = body_len;
+                                                    let mut pos: usize = 20;
                                                     if n == 0 {
-                                                        itoa_buf[0] = b'0';
-                                                        1
+                                                        pos -= 1;
+                                                        itoa_buf[pos] = b'0';
                                                     } else {
-                                                        let mut i = 0;
-                                                        while n > 0 {
-                                                            itoa_buf[i] = b'0' + (n % 10) as u8;
-                                                            n /= 10;
-                                                            i += 1;
+                                                        while n >= 100 {
+                                                            let q = n / 100;
+                                                            let r = (n % 100) * 2;
+                                                            n = q;
+                                                            pos -= 2;
+                                                            itoa_buf[pos] = DEC_DIGITS_LUT[r];
+                                                            itoa_buf[pos + 1] = DEC_DIGITS_LUT[r + 1];
                                                         }
-                                                        itoa_buf[..i].reverse();
-                                                        i
+                                                        if n >= 10 {
+                                                            let r = n * 2;
+                                                            pos -= 2;
+                                                            itoa_buf[pos] = DEC_DIGITS_LUT[r];
+                                                            itoa_buf[pos + 1] = DEC_DIGITS_LUT[r + 1];
+                                                        } else {
+                                                            pos -= 1;
+                                                            itoa_buf[pos] = b'0' + n as u8;
+                                                        }
                                                     }
+                                                    pos
                                                 };
-                                                w!(&itoa_buf[..itoa_len]);
+                                                w!(&itoa_buf[itoa_start..]);
                                                 w!(b"\r\n");
                                             }
 
@@ -565,15 +764,10 @@ impl Worker {
                                             }
 
                                             // RFC 7231 §7.1.1.2: every response MUST include a Date.
-                                            // Dynamic generation — no caching.
-                                            // Measured overhead: <20 ns (negligible vs syscall cost).
-                                            {
-                                                let date_str =
-                                                    httpdate::fmt_http_date(SystemTime::now());
-                                                w!(b"Date: ");
-                                                w!(date_str.as_bytes());
-                                                w!(b"\r\n");
-                                            }
+                            // Phase 4: Per-worker cache refreshed at most once per second.
+                                            w!(b"Date: ");
+                                            w!(&self.date_cache);
+                                            w!(b"\r\n");
 
                                             w!(b"\r\n");
 
@@ -688,10 +882,15 @@ impl Worker {
 
                                             // Done using wbuf — NLL releases the borrow.
                                             conn.write_len = (wstart + pos) as u16;
+                                            // Phase 3.1: response serialized — decrement in-flight count.
+                                            conn.inflight = conn.inflight.saturating_sub(1);
 
                                             // Deferred compaction: track offset, compact once at end
                                             read_offset += consumed;
                                             conn.read_len = (rl - consumed) as u16;
+
+                                            // Phase 3.2 Option C: count this request toward depth limit.
+                                            pipeline_count += 1;
 
                                             // Sticky keep-alive flag
                                             if !keep_alive {
@@ -791,10 +990,32 @@ impl Worker {
                                                 conn.body_total as usize,
                                             )
                                         };
-                                        match syscalls::writev_nonblocking(
+
+                                        // TLS cannot use kernel writev — flatten through TLS.
+                                        #[cfg(feature = "tls")]
+                                        let writev_result = if let Some(ref mut tls) =
+                                            conn.tls_session
+                                        {
+                                            crate::tls::tls_writev(
+                                                fd,
+                                                tls,
+                                                &[header_slice, body_slice],
+                                            )
+                                            .map_err(ChopinError::Io)
+                                        } else {
+                                            syscalls::writev_nonblocking(
+                                                fd,
+                                                &[header_slice, body_slice],
+                                            )
+                                        };
+
+                                        #[cfg(not(feature = "tls"))]
+                                        let writev_result = syscalls::writev_nonblocking(
                                             fd,
                                             &[header_slice, body_slice],
-                                        ) {
+                                        );
+
+                                        match writev_result {
                                             Ok(n) if n > 0 => {
                                                 self.metrics.add_bytes(n);
                                                 if n >= write_total {
@@ -813,10 +1034,30 @@ impl Worker {
                                         }
                                     } else if ws < write_total {
                                         // Phase 1a: flush remaining headers only
-                                        match syscalls::write_nonblocking(
+                                        #[cfg(feature = "tls")]
+                                        let write_result = if let Some(ref mut tls) =
+                                            conn.tls_session
+                                        {
+                                            crate::tls::tls_write(
+                                                fd,
+                                                tls,
+                                                &conn.write_buf[ws..write_total],
+                                            )
+                                            .map_err(ChopinError::Io)
+                                        } else {
+                                            syscalls::write_nonblocking(
+                                                fd,
+                                                &conn.write_buf[ws..write_total],
+                                            )
+                                        };
+
+                                        #[cfg(not(feature = "tls"))]
+                                        let write_result = syscalls::write_nonblocking(
                                             fd,
                                             &conn.write_buf[ws..write_total],
-                                        ) {
+                                        );
+
+                                        match write_result {
                                             Ok(n) if n > 0 => {
                                                 self.metrics.add_bytes(n);
                                                 conn.write_pos += n as u16;
@@ -845,7 +1086,21 @@ impl Worker {
                                                 body_remaining,
                                             )
                                         };
-                                        match syscalls::write_nonblocking(fd, body_slice) {
+
+                                        #[cfg(feature = "tls")]
+                                        let body_write_result =
+                                            if let Some(ref mut tls) = conn.tls_session {
+                                                crate::tls::tls_write(fd, tls, body_slice)
+                                                    .map_err(ChopinError::Io)
+                                            } else {
+                                                syscalls::write_nonblocking(fd, body_slice)
+                                            };
+
+                                        #[cfg(not(feature = "tls"))]
+                                        let body_write_result =
+                                            syscalls::write_nonblocking(fd, body_slice);
+
+                                        match body_write_result {
                                             Ok(n) if n > 0 => {
                                                 self.metrics.add_bytes(n);
                                                 conn.body_sent += n as u32;
@@ -865,15 +1120,43 @@ impl Worker {
                                         && (conn.body_ptr == 0 || conn.body_sent >= conn.body_total)
                                         && conn.sendfile_remaining > 0
                                     {
-                                        match syscalls::sendfile_nonblocking(
+                                        // TLS cannot use kernel sendfile — read+write fallback.
+                                        #[cfg(feature = "tls")]
+                                        let sf_result = if let Some(ref mut tls) =
+                                            conn.tls_session
+                                        {
+                                            crate::tls::tls_sendfile(
+                                                fd,
+                                                tls,
+                                                conn.sendfile_fd,
+                                                &mut conn.sendfile_offset,
+                                                conn.sendfile_remaining,
+                                            )
+                                            .map_err(ChopinError::Io)
+                                        } else {
+                                            syscalls::sendfile_nonblocking(
+                                                fd,
+                                                conn.sendfile_fd,
+                                                &mut conn.sendfile_offset,
+                                                conn.sendfile_remaining,
+                                            )
+                                            .map(|n| n as u64)
+                                        };
+
+                                        #[cfg(not(feature = "tls"))]
+                                        let sf_result = syscalls::sendfile_nonblocking(
                                             fd,
                                             conn.sendfile_fd,
                                             &mut conn.sendfile_offset,
                                             conn.sendfile_remaining,
-                                        ) {
+                                        )
+                                        .map(|n| n as u64);
+
+                                        match sf_result {
                                             Ok(n) if n > 0 => {
-                                                self.metrics.add_bytes(n);
-                                                conn.sendfile_remaining -= n as u64;
+                                                self.metrics.add_bytes(n as usize);
+                                                conn.sendfile_remaining =
+                                                    conn.sendfile_remaining.saturating_sub(n);
                                             }
                                             Ok(_) => {} // WouldBlock — wait for EPOLLOUT
                                             Err(_) => {
@@ -903,6 +1186,10 @@ impl Worker {
                                             } else {
                                                 conn.state = ConnState::Reading;
                                                 next_state = ConnState::Reading;
+                                                // Phase 1.3: connection is now idle —
+                                                // shrink oversized buffers back toward
+                                                // the default to reclaim heap memory.
+                                                conn.maybe_shrink_bufs();
                                             }
                                         } else {
                                             conn.state = ConnState::Closing;
@@ -939,6 +1226,7 @@ impl Worker {
                             if let Some(conn) = slab.get_mut(idx) {
                                 conn.close_sendfile();
                                 conn.body_clear();
+                                conn.tls_clear();
                             }
                             epoll.delete(fd).ok();
                             unsafe {
@@ -968,6 +1256,7 @@ impl Worker {
                 if conn.state != ConnState::Free {
                     conn.close_sendfile();
                     conn.body_clear();
+                    conn.tls_clear();
                     unsafe {
                         libc::close(conn.fd);
                     }
@@ -1257,6 +1546,8 @@ impl Worker {
         let bytes_read = cqe.res as usize;
         if let Some(c) = slab.get_mut(idx) {
             c.read_len += bytes_read as u16;
+            // Phase 1.3: grow read_buf proactively if ≥ 75% utilised.
+            c.maybe_grow_read_buf();
             c.last_active = now;
         }
         self.pipeline_and_write(ring, slab, timer_wheel, idx, now, is_shutting_down)?;
@@ -1556,6 +1847,8 @@ impl Worker {
                 }
                 self.metrics.inc_req();
                 c.requests_served += 1;
+                // Phase 3.1: track in-flight requests.
+                c.inflight = c.inflight.saturating_add(1);
 
                 // D.2: Cap keep-alive requests per connection
                 if c.requests_served >= KEEPALIVE_MAX_REQUESTS {
@@ -1592,6 +1885,28 @@ impl Worker {
                 };
 
                 let wstart = c.write_len as usize;
+
+                // Phase 1.3: adaptive preflight — grow write_buf if the response
+                // body needs to be inlined and doesn't fit. Large bodies (> 4 KiB
+                // at wstart==0) are sent via writev and never inlined.
+                {
+                    const PREFLIGHT_WRITEV_THRESHOLD: usize = 4096;
+                    const HEADER_OVERHEAD: usize = 512;
+                    let pre_body_len = match &response.body {
+                        crate::http::Body::Bytes(b) => b.len(),
+                        crate::http::Body::Static(b) => b.len(),
+                        _ => 0,
+                    };
+                    let will_writev =
+                        pre_body_len > PREFLIGHT_WRITEV_THRESHOLD && wstart == 0;
+                    if !will_writev && pre_body_len > 0 {
+                        let needed = wstart + HEADER_OVERHEAD + pre_body_len;
+                        if needed > c.write_buf.len() && !c.try_grow_write_buf(needed) {
+                            response = crate::http::Response::server_error();
+                        }
+                    }
+                }
+
                 let wbuf = &mut c.write_buf[wstart..];
                 let mut pos: usize = 0;
                 let mut overflow = false;
@@ -1599,10 +1914,18 @@ impl Worker {
                 macro_rules! w {
                     ($src:expr) => {
                         if !overflow {
-                            let s = $src;
+                            let s: &[u8] = $src;
                             let end = pos + s.len();
-                            if let Some(sl) = wbuf.get_mut(pos..end) {
-                                sl.copy_from_slice(s);
+                            if end <= wbuf.len() {
+                                // Phase 2.2: copy_nonoverlapping — single bounds check, no Option.
+                                // SAFETY: end <= wbuf.len() verified above.
+                                unsafe {
+                                    std::ptr::copy_nonoverlapping(
+                                        s.as_ptr(),
+                                        wbuf.as_mut_ptr().add(pos),
+                                        s.len(),
+                                    );
+                                }
                                 pos = end;
                             } else {
                                 overflow = true;
@@ -1647,10 +1970,29 @@ impl Worker {
                         }
                     }
                 } else {
-                    let mut sl_buf = [0u8; 40];
-                    let sl_len = status_line(response.status, &mut sl_buf);
-                    w!(&sl_buf[..sl_len]);
-                    w!(b"Server: chopin\r\n");
+                    // Phase 2.3: Pre-baked status line + Server for common non-200 codes.
+                    match response.status {
+                        201 => w!(b"HTTP/1.1 201 Created\r\nServer: chopin\r\n"),
+                        204 => w!(b"HTTP/1.1 204 No Content\r\nServer: chopin\r\n"),
+                        206 => w!(b"HTTP/1.1 206 Partial Content\r\nServer: chopin\r\n"),
+                        301 => w!(b"HTTP/1.1 301 Moved Permanently\r\nServer: chopin\r\n"),
+                        302 => w!(b"HTTP/1.1 302 Found\r\nServer: chopin\r\n"),
+                        304 => w!(b"HTTP/1.1 304 Not Modified\r\nServer: chopin\r\n"),
+                        400 => w!(b"HTTP/1.1 400 Bad Request\r\nServer: chopin\r\n"),
+                        401 => w!(b"HTTP/1.1 401 Unauthorized\r\nServer: chopin\r\n"),
+                        403 => w!(b"HTTP/1.1 403 Forbidden\r\nServer: chopin\r\n"),
+                        404 => w!(b"HTTP/1.1 404 Not Found\r\nServer: chopin\r\n"),
+                        405 => w!(b"HTTP/1.1 405 Method Not Allowed\r\nServer: chopin\r\n"),
+                        429 => w!(b"HTTP/1.1 429 Too Many Requests\r\nServer: chopin\r\n"),
+                        500 => w!(b"HTTP/1.1 500 Internal Server Error\r\nServer: chopin\r\n"),
+                        503 => w!(b"HTTP/1.1 503 Service Unavailable\r\nServer: chopin\r\n"),
+                        _ => {
+                            let mut sl_buf = [0u8; 40];
+                            let sl_len = status_line(response.status, &mut sl_buf);
+                            w!(&sl_buf[..sl_len]);
+                            w!(b"Server: chopin\r\n");
+                        }
+                    }
                     false
                 };
 
@@ -1666,30 +2008,41 @@ impl Worker {
                     }
                 }
 
-                let is_chunked = matches!(response.body, crate::http::Body::Stream(_));
                 if is_chunked {
                     w!(b"Transfer-Encoding: chunked\r\n");
                 } else {
                     w!(b"Content-Length: ");
                     let body_len = response.body.len();
-                    let mut itoa_buf = [0u8; 10];
-                    let itoa_len = {
+                    // Phase 2.1: LUT-based encoding — 2 digits/iter, fills right-to-left.
+                    let mut itoa_buf = [0u8; 20];
+                    let itoa_start = {
                         let mut n = body_len;
+                        let mut p: usize = 20;
                         if n == 0 {
-                            itoa_buf[0] = b'0';
-                            1
+                            p -= 1;
+                            itoa_buf[p] = b'0';
                         } else {
-                            let mut i = 0;
-                            while n > 0 {
-                                itoa_buf[i] = b'0' + (n % 10) as u8;
-                                n /= 10;
-                                i += 1;
+                            while n >= 100 {
+                                let q = n / 100;
+                                let r = (n % 100) * 2;
+                                n = q;
+                                p -= 2;
+                                itoa_buf[p] = DEC_DIGITS_LUT[r];
+                                itoa_buf[p + 1] = DEC_DIGITS_LUT[r + 1];
                             }
-                            itoa_buf[..i].reverse();
-                            i
+                            if n >= 10 {
+                                let r = n * 2;
+                                p -= 2;
+                                itoa_buf[p] = DEC_DIGITS_LUT[r];
+                                itoa_buf[p + 1] = DEC_DIGITS_LUT[r + 1];
+                            } else {
+                                p -= 1;
+                                itoa_buf[p] = b'0' + n as u8;
+                            }
                         }
+                        p
                     };
-                    w!(&itoa_buf[..itoa_len]);
+                    w!(&itoa_buf[itoa_start..]);
                     w!(b"\r\n");
                 }
 
@@ -1707,11 +2060,10 @@ impl Worker {
                 }
 
                 // RFC 7231 §7.1.1.2: every response MUST include a Date.
-                // Dynamic generation — no caching.
+                // Phase 4.1: Per-worker cache on self.date_cache, refreshed ≤1×/s.
                 {
-                    let date_str = httpdate::fmt_http_date(SystemTime::now());
                     w!(b"Date: ");
-                    w!(date_str.as_bytes());
+                    w!(&self.date_cache);
                     w!(b"\r\n");
                 }
 
@@ -1808,6 +2160,8 @@ impl Worker {
                 }
 
                 c.write_len = (wstart + pos) as u16;
+                // Phase 3.1: response serialized — decrement in-flight count.
+                c.inflight = c.inflight.saturating_sub(1);
                 read_offset += consumed;
                 c.read_len = (c.read_len as usize - consumed) as u16;
 
@@ -1857,6 +2211,10 @@ impl Worker {
             } else if wt > ws {
                 self.submit_write(ring, slab, idx);
             } else if c.write_len == 0 {
+                // Connection idle — Phase 1.3: shrink oversized buffers.
+                if let Some(c_mut) = slab.get_mut(idx) {
+                    c_mut.maybe_shrink_bufs();
+                }
                 drop(c);
                 self.submit_read(ring, slab, idx);
             }
@@ -1925,10 +2283,17 @@ impl Worker {
 
             #[allow(clippy::manual_is_multiple_of)]
             if iter_count % 1024 == 0 {
-                now = SystemTime::now()
+                let sys_now = SystemTime::now();
+                now = sys_now
                     .duration_since(UNIX_EPOCH)
                     .map_err(|_| ChopinError::ClockError)?
                     .as_secs() as u32;
+                // Phase 4: Refresh Date header cache for io_uring pipeline_and_write().
+                if now != self.date_cache_secs {
+                    let new_date = httpdate::fmt_http_date(sys_now);
+                    self.date_cache.copy_from_slice(new_date.as_bytes());
+                    self.date_cache_secs = now;
+                }
                 if now - last_prune >= 1 {
                     self.prune_connections_wheel_uring(&mut ring, &mut slab, &mut timer_wheel, now);
                     last_prune = now;

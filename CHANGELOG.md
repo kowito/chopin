@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 #### chopin-core
 - **Response compression** — `Response::gzip()` behind the `compression` feature flag (flate2)
+- **Structured logging** — `tracing` façade always included; `tracing-subscriber` (JSON format, `RUST_LOG`-aware) behind `logging` feature; `Chopin::with_logging()` builder method; startup/shutdown/worker events instrumented
+- **Prometheus `/metrics` endpoint** — `Chopin::with_metrics(path)` mounts a Prometheus text-format scrape endpoint aggregating per-worker counters (`requests_total`, `active_connections`, `bytes_sent_total`, `uptime_seconds`) across all workers
+- **Built-in `/health` endpoint** — `Chopin::with_health(path)` returns `{"status":"ok","uptime_secs":…,"workers":…,"requests":…,"active_connections":…,"bytes_sent":…}` for Kubernetes probes and AWS ALB health checks
+- **TLS/HTTPS server** — `tls` feature flag adds `rustls` TLS 1.2/1.3 termination directly in the epoll worker; `Server::with_tls(cert, key)` and `Chopin::serve_tls(addr, cert, key)` builder APIs; TLS-aware read/write/writev/sendfile paths with `Conn::tls_session`; supports AWS ACM private CA bundles; `Chopin::serve_tls()` entry point
 - **Public API documentation** — doc comments and examples on `Router`, `Context`, `Response`, `Chopin`, `Server`, `FromRequest`, `Json`, `Query`, `Body`, `Method`, `IntoResponse`
 - **Usage guide** — database integration section covering `chopin-pg` and `chopin-orm`
 

@@ -1,7 +1,19 @@
 // src/conn.rs
 
-pub const DEFAULT_READ_BUF_SIZE: usize = 8192;
+pub const DEFAULT_READ_BUF_SIZE: usize = 32768; // Phase 1: 32 KiB read buffer (was 8 KiB)
 pub const DEFAULT_WRITE_BUF_SIZE: usize = 32768;
+
+/// Maximum size the adaptive buffer growth will reach.
+/// Capped at 65535 (u16::MAX) because `read_len`/`write_len` are `u16`.
+pub const MAX_READ_BUF_SIZE: usize = u16::MAX as usize; // 65535 bytes ≈ 64 KiB
+pub const MAX_WRITE_BUF_SIZE: usize = u16::MAX as usize;
+
+/// Grow threshold: grow when buffer is ≥ 75% utilised.
+const GROW_THRESH_NUM: usize = 3;
+const GROW_THRESH_DEN: usize = 4;
+
+/// Shrink threshold: shrink when buffer is > 2× default and utilisation is 0.
+const SHRINK_FACTOR: usize = 2;
 
 /// Connection flags (bit field)
 pub const CONN_KEEP_ALIVE: u8 = 1;
@@ -50,6 +62,17 @@ pub struct Conn {
     #[cfg(feature = "io-uring")]
     pub pending_op: u8,
 
+    /// Number of requests currently being processed on this connection (Phase 3.1).
+    /// Incremented when a request is dispatched to a handler, decremented when the
+    /// response is fully written. Allows future pipelining/concurrent dispatch logic
+    /// to gate reads based on in-flight back-pressure.
+    pub inflight: u8,
+
+    /// Per-connection TLS session. `None` for plain-text connections.
+    /// Populated immediately after `accept()` when the server is configured with TLS.
+    #[cfg(feature = "tls")]
+    pub tls_session: Option<Box<crate::tls::TlsSession>>,
+
     pub read_buf: Box<[u8]>,
     pub write_buf: Box<[u8]>,
 }
@@ -80,6 +103,9 @@ impl Conn {
             body_owned: None,
             #[cfg(feature = "io-uring")]
             pending_op: 0,
+            inflight: 0,
+            #[cfg(feature = "tls")]
+            tls_session: None,
             read_buf: vec![0u8; read_size].into_boxed_slice(),
             write_buf: vec![0u8; write_size].into_boxed_slice(),
         }
@@ -106,6 +132,71 @@ impl Conn {
         self.body_sent = 0;
         self.body_owned = None;
     }
+
+    /// Drop the TLS session associated with this connection (plain-text no-op).
+    #[inline]
+    pub fn tls_clear(&mut self) {
+        #[cfg(feature = "tls")]
+        {
+            self.tls_session = None;
+        }
+    }
+
+    // ── Phase 1.3: Adaptive buffer watermarks ────────────────────────────────
+
+    /// Grow `read_buf` by 2× (up to [`MAX_READ_BUF_SIZE`]) if the buffer is
+    /// above the high-watermark (≥ 75% full).  Existing data is preserved.
+    /// No-op when already at maximum size or below the watermark.
+    #[inline]
+    pub fn maybe_grow_read_buf(&mut self) {
+        let cap = self.read_buf.len();
+        let used = self.read_len as usize;
+        if used < cap * GROW_THRESH_NUM / GROW_THRESH_DEN || cap >= MAX_READ_BUF_SIZE {
+            return;
+        }
+        let new_cap = (cap * 2).min(MAX_READ_BUF_SIZE);
+        let mut new_buf = vec![0u8; new_cap].into_boxed_slice();
+        new_buf[..used].copy_from_slice(&self.read_buf[..used]);
+        self.read_buf = new_buf;
+    }
+
+    /// Grow `write_buf` so it is at least `needed` bytes.  Returns `true` when
+    /// the buffer is now large enough.  Returns `false` if `needed` exceeds
+    /// [`MAX_WRITE_BUF_SIZE`] (caller should fall back to a smaller response).
+    /// Existing write data (bytes `0..write_len`) is preserved.
+    #[inline]
+    pub fn try_grow_write_buf(&mut self, needed: usize) -> bool {
+        if needed <= self.write_buf.len() {
+            return true;
+        }
+        if needed > MAX_WRITE_BUF_SIZE {
+            return false;
+        }
+        let new_cap = needed
+            .next_power_of_two()
+            .max(self.write_buf.len() * 2)
+            .min(MAX_WRITE_BUF_SIZE);
+        let existing = self.write_len as usize;
+        let mut new_buf = vec![0u8; new_cap].into_boxed_slice();
+        if existing > 0 {
+            new_buf[..existing].copy_from_slice(&self.write_buf[..existing]);
+        }
+        self.write_buf = new_buf;
+        true
+    }
+
+    /// Shrink oversized buffers back toward the default when the connection is
+    /// idle (both buffers empty).  Reclaims heap memory after serving a large
+    /// request or response that triggered a grow.
+    #[inline]
+    pub fn maybe_shrink_bufs(&mut self) {
+        if self.read_len == 0 && self.read_buf.len() > DEFAULT_READ_BUF_SIZE * SHRINK_FACTOR {
+            self.read_buf = vec![0u8; DEFAULT_READ_BUF_SIZE].into_boxed_slice();
+        }
+        if self.write_len == 0 && self.write_buf.len() > DEFAULT_WRITE_BUF_SIZE * SHRINK_FACTOR {
+            self.write_buf = vec![0u8; DEFAULT_WRITE_BUF_SIZE].into_boxed_slice();
+        }
+    }
 }
 
 impl Default for Conn {
@@ -126,5 +217,83 @@ mod tests {
         // We only verify alignment and that size is a multiple of 64.
         let total_size = std::mem::size_of::<Conn>();
         assert_eq!(total_size % 64, 0, "Conn struct size not a multiple of 64!");
+    }
+
+    // ── Phase 1.3: watermark tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_maybe_grow_read_buf_triggers_at_75_percent() {
+        let mut conn = Conn::with_buf_sizes(64, 64);
+        // Fill to exactly 75% — should NOT grow yet (threshold is >=)
+        conn.read_len = 47; // 47/64 ≈ 73.4% — below threshold
+        conn.maybe_grow_read_buf();
+        assert_eq!(conn.read_buf.len(), 64);
+
+        // 48/64 = 75% — should grow
+        conn.read_len = 48;
+        conn.maybe_grow_read_buf();
+        assert_eq!(conn.read_buf.len(), 128);
+        // Existing data still accessible
+        assert_eq!(conn.read_len, 48);
+    }
+
+    #[test]
+    fn test_maybe_grow_read_buf_capped_at_max() {
+        let mut conn = Conn::with_buf_sizes(MAX_READ_BUF_SIZE, 64);
+        conn.read_len = MAX_READ_BUF_SIZE as u16;
+        conn.maybe_grow_read_buf();
+        assert_eq!(conn.read_buf.len(), MAX_READ_BUF_SIZE); // No growth past max
+    }
+
+    #[test]
+    fn test_try_grow_write_buf_basic() {
+        let mut conn = Conn::with_buf_sizes(64, 64);
+        // Already large enough
+        assert!(conn.try_grow_write_buf(32));
+        assert_eq!(conn.write_buf.len(), 64);
+
+        // Needs to grow
+        assert!(conn.try_grow_write_buf(100));
+        assert!(conn.write_buf.len() >= 100);
+    }
+
+    #[test]
+    fn test_try_grow_write_buf_preserves_data() {
+        let mut conn = Conn::with_buf_sizes(64, 64);
+        conn.write_buf[0] = 0xAB;
+        conn.write_buf[1] = 0xCD;
+        conn.write_len = 2;
+        conn.try_grow_write_buf(200);
+        assert_eq!(conn.write_buf[0], 0xAB);
+        assert_eq!(conn.write_buf[1], 0xCD);
+    }
+
+    #[test]
+    fn test_try_grow_write_buf_exceeds_max() {
+        let mut conn = Conn::with_buf_sizes(64, 64);
+        // Request that exceeds MAX_WRITE_BUF_SIZE — must return false
+        assert!(!conn.try_grow_write_buf(MAX_WRITE_BUF_SIZE + 1));
+        assert_eq!(conn.write_buf.len(), 64); // Unchanged
+    }
+
+    #[test]
+    fn test_maybe_shrink_bufs() {
+        // Buffers at > 2× default → empty → shrink
+        let mut conn = Conn::with_buf_sizes(DEFAULT_READ_BUF_SIZE * 3, DEFAULT_WRITE_BUF_SIZE * 3);
+        conn.read_len = 0;
+        conn.write_len = 0;
+        conn.maybe_shrink_bufs();
+        assert_eq!(conn.read_buf.len(), DEFAULT_READ_BUF_SIZE);
+        assert_eq!(conn.write_buf.len(), DEFAULT_WRITE_BUF_SIZE);
+    }
+
+    #[test]
+    fn test_maybe_shrink_bufs_nonempty_noop() {
+        let large = DEFAULT_READ_BUF_SIZE * 3;
+        let mut conn = Conn::with_buf_sizes(large, large);
+        conn.read_len = 1; // not empty — should NOT shrink
+        conn.write_len = 0;
+        conn.maybe_shrink_bufs();
+        assert_eq!(conn.read_buf.len(), large);
     }
 }

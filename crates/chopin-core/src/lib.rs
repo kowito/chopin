@@ -33,8 +33,10 @@ use mimalloc::MiMalloc;
 static GLOBAL: MiMalloc = MiMalloc;
 
 pub mod conn;
+pub mod bufpool;
 pub mod error;
 pub mod extract;
+pub mod filter;
 pub mod headers;
 pub mod http;
 pub mod http2;
@@ -49,12 +51,16 @@ pub mod server;
 pub mod slab;
 pub mod syscalls;
 pub mod timer;
+#[cfg(feature = "tls")]
+pub mod tls;
 pub mod websocket;
 pub mod worker;
 
 // Re-exports for users
 pub use error::{ChopinError, ChopinResult};
+pub use bufpool::{BufGuard, get as buf_get, get_with_capacity as buf_get_with_capacity};
 pub use extract::{FromRequest, Json, Query};
+pub use filter::{Filter, FilterStack, LoggingFilter, PassthroughFilter};
 pub use headers::{Header, HeaderValue, Headers, IntoHeaderValue};
 pub use http::{Body, Context, Method, OwnedFd, Request, Response};
 pub use json::KJson;

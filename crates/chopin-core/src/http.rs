@@ -304,11 +304,12 @@ impl Response {
     }
 
     /// 200 OK — serializes a typed value to JSON using the Schema-JIT engine.
-    /// This is the primary way to return structured data from a handler.
+    /// Uses the per-worker buffer pool (Phase 1.2) to avoid a fresh allocation
+    /// on every request.
     pub fn json<T: kowito_json::serialize::Serialize>(val: &T) -> Self {
-        let mut buf = Vec::with_capacity(128);
-        val.serialize(&mut buf);
-        Self::json_bytes(buf)
+        let mut buf = crate::bufpool::get_with_capacity(128);
+        val.serialize(&mut *buf);
+        Self::json_bytes(buf.into_vec())
     }
 
     /// 200 OK with a zero-copy static pre-serialized JSON body.
@@ -429,17 +430,40 @@ impl Response {
 
     /// Serve a file using zero-copy `sendfile`. Content-Type is inferred from the
     /// file extension. Returns 404 if the file does not exist or cannot be opened.
+    ///
+    /// Pass `range_header` (the value of the `Range:` request header, e.g.
+    /// `"bytes=0-1023"`) to honour RFC 7233 range requests.  A valid range
+    /// produces a `206 Partial Content` response with a `Content-Range` header;
+    /// an unsatisfiable range produces `416 Range Not Satisfiable`.
+    /// Pass `None` (or `Response::file(path)` without a range) for a full 200.
     pub fn file(path: &str) -> Self {
-        match Self::try_file(path) {
+        match Self::try_file(path, None) {
+            Ok(resp) => resp,
+            Err(_) => Self::not_found(),
+        }
+    }
+
+    /// Like [`Response::file`] but honours the `Range:` header value for partial
+    /// content delivery (RFC 7233).
+    ///
+    /// # Example
+    /// ```ignore
+    /// fn handler(ctx: Context) -> Response {
+    ///     let range = ctx.header("range");
+    ///     Response::file_range("./static/video.mp4", range)
+    /// }
+    /// ```
+    pub fn file_range(path: &str, range_header: Option<&str>) -> Self {
+        match Self::try_file(path, range_header) {
             Ok(resp) => resp,
             Err(_) => Self::not_found(),
         }
     }
 
     /// Internal: attempt to open a file and build a zero-copy response.
-    fn try_file(path: &str) -> io::Result<Self> {
+    fn try_file(path: &str, range_header: Option<&str>) -> io::Result<Self> {
         let fd = syscalls::open_file_readonly(path)?;
-        let size = match syscalls::file_size(fd) {
+        let total_size = match syscalls::file_size(fd) {
             Ok(s) => s,
             Err(e) => {
                 unsafe {
@@ -450,16 +474,68 @@ impl Response {
         };
         let content_type = mime_from_path(path);
 
-        Ok(Self {
+        // E.3: Range request handling (RFC 7233)
+        if let Some(range_val) = range_header {
+            match parse_range(range_val, total_size) {
+                RangeResult::Range(start, end) => {
+                    // 206 Partial Content
+                    let len = end - start + 1;
+                    // Build Content-Range: bytes START-END/TOTAL inline (no heap).
+                    // Max size: "bytes " + 20 + "-" + 20 + "/" + 20 = 67 bytes
+                    let mut cr_buf = [0u8; 68];
+                    let cr_len = fmt_content_range(&mut cr_buf, start, end, total_size);
+                    let cr_str = std::str::from_utf8(&cr_buf[..cr_len])
+                        .unwrap_or("")
+                        .to_owned(); // heap only for this header value
+                    let mut resp = Self {
+                        status: 206,
+                        body: Body::File {
+                            fd: OwnedFd::new(fd),
+                            offset: start,
+                            len,
+                        },
+                        content_type,
+                        headers: Headers::new(),
+                    };
+                    resp.headers.add("Content-Range", cr_str);
+                    resp.headers.add("Accept-Ranges", "bytes");
+                    return Ok(resp);
+                }
+                RangeResult::Unsatisfiable => {
+                    // 416 Range Not Satisfiable — include Content-Range: bytes */TOTAL
+                    unsafe {
+                        libc::close(fd);
+                    }
+                    let mut cr_buf = [0u8; 68];
+                    let cr_len = fmt_content_range_star(&mut cr_buf, total_size);
+                    let cr_str = std::str::from_utf8(&cr_buf[..cr_len])
+                        .unwrap_or("")
+                        .to_owned();
+                    let mut resp = Self {
+                        status: 416,
+                        body: Body::Empty,
+                        content_type: "text/plain",
+                        headers: Headers::new(),
+                    };
+                    resp.headers.add("Content-Range", cr_str);
+                    return Ok(resp);
+                }
+                RangeResult::None => {} // fall through to 200
+            }
+        }
+
+        let mut resp = Self {
             status: 200,
             body: Body::File {
                 fd: OwnedFd::new(fd),
                 offset: 0,
-                len: size,
+                len: total_size,
             },
             content_type,
             headers: Headers::new(),
-        })
+        };
+        resp.headers.add("Accept-Ranges", "bytes");
+        Ok(resp)
     }
 
     /// Serve a byte range of a file (e.g. for `Range` header support).
@@ -511,6 +587,119 @@ impl Response {
         }
         self
     }
+}
+
+// ── E.3: Range request helpers (RFC 7233) ────────────────────────────────────
+
+enum RangeResult {
+    /// Resolved byte range [start, end] (inclusive, 0-based).
+    Range(u64, u64),
+    /// Range header present but unsatisfiable (→ 416).
+    Unsatisfiable,
+    /// No range header or unparseable format (→ 200).
+    None,
+}
+
+/// Parse `Range: bytes=<start>-<end>` or `bytes=<start>-` (open-ended).
+/// Returns `RangeResult::None` for any syntax we cannot handle.
+#[inline]
+fn parse_range(header: &str, total: u64) -> RangeResult {
+    let s = header.trim();
+    let s = match s.strip_prefix("bytes=") {
+        Some(v) => v,
+        None => return RangeResult::None,
+    };
+    // Only handle the first range in a multi-range set.
+    let s = s.split(',').next().unwrap_or("").trim();
+    let dash = match s.find('-') {
+        Some(i) => i,
+        None => return RangeResult::None,
+    };
+    let start_str = &s[..dash];
+    let end_str = &s[dash + 1..];
+
+    // suffix-range: -N  (last N bytes)
+    if start_str.is_empty() {
+        let suffix: u64 = match end_str.parse() {
+            Ok(n) => n,
+            Err(_) => return RangeResult::None,
+        };
+        if suffix == 0 || total == 0 {
+            return RangeResult::Unsatisfiable;
+        }
+        let start = if suffix >= total { 0 } else { total - suffix };
+        return RangeResult::Range(start, total - 1);
+    }
+
+    let start: u64 = match start_str.parse() {
+        Ok(n) => n,
+        Err(_) => return RangeResult::None,
+    };
+
+    if start >= total {
+        return RangeResult::Unsatisfiable;
+    }
+
+    let end: u64 = if end_str.is_empty() {
+        total - 1
+    } else {
+        match end_str.parse::<u64>() {
+            Ok(n) => n.min(total - 1),
+            Err(_) => return RangeResult::None,
+        }
+    };
+
+    if end < start {
+        return RangeResult::Unsatisfiable;
+    }
+
+    RangeResult::Range(start, end)
+}
+
+/// Write `bytes START-END/TOTAL\0` into `buf`. Returns bytes written (no NUL).
+#[inline]
+fn fmt_content_range(buf: &mut [u8; 68], start: u64, end: u64, total: u64) -> usize {
+    let prefix = b"bytes ";
+    let mut pos = 0;
+    buf[pos..pos + prefix.len()].copy_from_slice(prefix);
+    pos += prefix.len();
+    pos += fmt_u64_into(&mut buf[pos..], start);
+    buf[pos] = b'-';
+    pos += 1;
+    pos += fmt_u64_into(&mut buf[pos..], end);
+    buf[pos] = b'/';
+    pos += 1;
+    pos += fmt_u64_into(&mut buf[pos..], total);
+    pos
+}
+
+/// Write `bytes */TOTAL` into `buf`. Returns bytes written.
+#[inline]
+fn fmt_content_range_star(buf: &mut [u8; 68], total: u64) -> usize {
+    let prefix = b"bytes */";
+    buf[..prefix.len()].copy_from_slice(prefix);
+    let mut pos = prefix.len();
+    pos += fmt_u64_into(&mut buf[pos..], total);
+    pos
+}
+
+/// Write a u64 as ASCII decimal into `dst`. Returns number of digits written.
+#[inline]
+fn fmt_u64_into(dst: &mut [u8], mut n: u64) -> usize {
+    if n == 0 {
+        dst[0] = b'0';
+        return 1;
+    }
+    let mut tmp = [0u8; 20];
+    let mut i = 0;
+    while n > 0 {
+        tmp[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        i += 1;
+    }
+    tmp[..i].reverse();
+    dst[..i].copy_from_slice(&tmp[..i]);
+    i
 }
 
 /// Infer a Content-Type from a file path's extension.

@@ -132,7 +132,7 @@ fn ensure_server() {
             Response::text(vec![b'A'; 14_000])
         });
 
-        // GET /overflow → 65 KB response (overflows write buffer → server returns 500)
+        // GET /overflow → 65 KB response (served via zero-copy writev, not inlined in write_buf)
         router.add(Method::Get, "/overflow", |_: Context| {
             Response::text(vec![b'B'; 65536])
         });
@@ -590,13 +590,14 @@ fn test_large_response_body_14kb() {
 #[test]
 fn test_response_overflow_returns_500() {
     ensure_server();
-    // A 65 536-byte body exceeds the 16 KB write buffer.  The server is
-    // expected to replace the response with a 500 Internal Server Error.
+    // A 65 536-byte body is served via zero-copy writev (not inlined into write_buf).
+    // Phase 1.3: adaptive buffers mean large-but-valid bodies no longer produce 500.
     let r = once(b"GET /overflow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     assert_eq!(
-        r.status, 500,
-        "write-buffer overflow must produce a 500 response"
+        r.status, 200,
+        "large body via writev must produce a 200 response"
     );
+    assert_eq!(r.body.len(), 65536, "full 65 KB body must be received");
 }
 
 #[test]

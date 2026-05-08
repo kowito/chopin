@@ -13,6 +13,8 @@ pub enum PgError {
     ConnectionClosed,
     /// Query returned no rows when one was expected.
     NoRows,
+    /// Query returned more than one row when exactly one was expected.
+    TooManyRows,
     /// Type conversion error.
     TypeConversion(String),
     /// Statement not found in cache.
@@ -81,7 +83,8 @@ impl PgError {
             PgError::TypeConversion(_)
             | PgError::BufferOverflow
             | PgError::StatementNotCached
-            | PgError::NoRows => ErrorClass::Client,
+            | PgError::NoRows
+            | PgError::TooManyRows => ErrorClass::Client,
             PgError::Protocol(_) | PgError::Auth(_) => ErrorClass::Permanent,
         }
     }
@@ -230,6 +233,7 @@ impl std::fmt::Display for PgError {
             }
             PgError::ConnectionClosed => write!(f, "Connection closed"),
             PgError::NoRows => write!(f, "No rows returned"),
+            PgError::TooManyRows => write!(f, "Too many rows returned"),
             PgError::TypeConversion(msg) => write!(f, "Type conversion: {}", msg),
             PgError::StatementNotCached => write!(f, "Statement not in cache"),
             PgError::BufferOverflow => write!(f, "Buffer overflow"),
