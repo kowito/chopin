@@ -33,16 +33,13 @@ impl<'a> Multipart<'a> {
         let first = needle[0];
         let mut offset = 0;
         while offset + needle.len() <= data.len() {
-            match memchr(first, &data[offset..]) {
-                Some(pos) => {
-                    let abs = offset + pos;
-                    if abs + needle.len() <= data.len() && data[abs..abs + needle.len()] == *needle
-                    {
-                        return Some(abs);
-                    }
-                    offset = abs + 1;
+            {
+                let pos = memchr(first, &data[offset..])?;
+                let abs = offset + pos;
+                if abs + needle.len() <= data.len() && data[abs..abs + needle.len()] == *needle {
+                    return Some(abs);
                 }
-                None => return None,
+                offset = abs + 1;
             }
         }
         None
