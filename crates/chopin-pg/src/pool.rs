@@ -294,12 +294,12 @@ impl PgPool {
             {
                 self.stats.validation_failures += 1;
                 self.stats.total_connections_closed += 1;
-                    if self.pool_config.auto_reconnect {
-                        // Replace with a fresh connection
-                        let new_conn = PgConnection::connect(&self.config)?;
-                        pooled = PooledConn::new(new_conn);
-                        self.stats.total_connections_created += 1;
-                    } else {
+                if self.pool_config.auto_reconnect {
+                    // Replace with a fresh connection
+                    let new_conn = PgConnection::connect(&self.config)?;
+                    pooled = PooledConn::new(new_conn);
+                    self.stats.total_connections_created += 1;
+                } else {
                     return Err(PgError::PoolValidationFailed);
                 }
             }
