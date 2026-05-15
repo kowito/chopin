@@ -1851,7 +1851,7 @@ impl Worker {
                     keep_alive = false;
                 }
 
-                let response = match self.router.match_route(ctx.req.method, ctx.req.path) {
+                let mut response = match self.router.match_route(ctx.req.method, ctx.req.path) {
                     Some((handler, params, param_count, composed)) => {
                         ctx.params = params;
                         ctx.param_count = param_count;
@@ -2209,10 +2209,10 @@ impl Worker {
                 self.submit_write(ring, slab, idx);
             } else if c.write_len == 0 {
                 // Connection idle — Phase 1.3: shrink oversized buffers.
+                drop(c);
                 if let Some(c_mut) = slab.get_mut(idx) {
                     c_mut.maybe_shrink_bufs();
                 }
-                drop(c);
                 self.submit_read(ring, slab, idx);
             }
         }
