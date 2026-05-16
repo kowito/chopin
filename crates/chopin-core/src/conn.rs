@@ -42,6 +42,10 @@ pub struct Conn {
     pub fd: i32,              // File Descriptor or Free List Next Index
     pub state: ConnState,     // State machine enum
     pub flags: u8,            // Bit 0: keep-alive (was padding)
+    /// IPv6-mapped peer address captured at accept time via `getpeername(2)`.
+    /// IPv4 addresses are stored as IPv4-mapped IPv6 (`::ffff:a.b.c.d`).
+    /// Falls back to `[0u8; 16]` on UNIX sockets or errors.
+    pub peer_addr: [u8; 16],
     pub read_len: u16,        // Valid bytes in read_buf
     pub write_pos: u32,       // Bytes already written (for partial write resume)
     pub write_len: u32,       // Total bytes to write in write_buf
@@ -92,6 +96,7 @@ impl Conn {
             fd: -1,
             state: ConnState::Free,
             flags: 0,
+            peer_addr: [0u8; 16],
             read_len: 0,
             write_pos: 0u32,
             write_len: 0u32,

@@ -324,6 +324,7 @@ impl Worker {
                                             conn.flags = crate::conn::CONN_KEEP_ALIVE;
                                             conn.last_active = now;
                                             conn.requests_served = 0;
+                                            conn.peer_addr = crate::syscalls::get_peer_addr(client_fd);
                                             // Initialise TLS session if server is TLS-enabled
                                             #[cfg(feature = "tls")]
                                             if let Some(ref tls_cfg) = self.tls_config {
@@ -492,6 +493,7 @@ impl Worker {
                                                 req,
                                                 params: [("", ""); crate::http::MAX_PARAMS],
                                                 param_count: 0,
+                                                peer_addr: conn.peer_addr,
                                             };
 
                                             let mut keep_alive =
@@ -1514,6 +1516,7 @@ impl Worker {
                 c.flags = conn::CONN_KEEP_ALIVE;
                 c.last_active = now;
                 c.requests_served = 0;
+                c.peer_addr = crate::syscalls::get_peer_addr(client_fd);
                 c.pending_op = 0;
                 self.metrics.inc_conn();
                 timer_wheel.insert(idx, now);
@@ -1838,6 +1841,7 @@ impl Worker {
                     req,
                     params: [("", ""); crate::http::MAX_PARAMS],
                     param_count: 0,
+                    peer_addr: c.peer_addr,
                 };
                 let mut keep_alive = (c.flags & conn::CONN_KEEP_ALIVE) != 0;
                 if is_shutting_down {

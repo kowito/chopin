@@ -806,6 +806,9 @@ pub struct Context<'a> {
     pub req: Request<'a>,
     pub params: [(&'a str, &'a str); MAX_PARAMS],
     pub param_count: u8,
+    /// IPv6-mapped peer address from the socket layer (set at accept time).
+    /// Use this for rate limiting and audit logging — it cannot be forged by clients.
+    pub peer_addr: [u8; 16],
 }
 
 impl<'a> Context<'a> {

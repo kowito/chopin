@@ -503,6 +503,37 @@ pub fn accept_connection(listen_fd: c_int) -> ChopinResult<Option<c_int>> {
     }
 }
 
+/// Returns the peer address of a connected socket as an IPv6-mapped 16-byte key.
+///
+/// IPv4 addresses are returned as IPv4-mapped IPv6 (`::ffff:a.b.c.d`).
+/// IPv6 addresses fill all 16 bytes directly.
+/// Returns `[0u8; 16]` on any error (UNIX sockets, already-closed fds, etc.).
+pub fn get_peer_addr(fd: c_int) -> [u8; 16] {
+    unsafe {
+        let mut storage: libc::sockaddr_storage = std::mem::zeroed();
+        let mut addrlen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        if libc::getpeername(fd, &mut storage as *mut _ as *mut libc::sockaddr, &mut addrlen) < 0 {
+            return [0u8; 16];
+        }
+        match storage.ss_family as i32 {
+            libc::AF_INET => {
+                let sin = &*(&storage as *const _ as *const libc::sockaddr_in);
+                let raw = sin.sin_addr.s_addr.to_ne_bytes(); // host byte order on all platforms
+                let mut key = [0u8; 16];
+                key[10] = 0xff;
+                key[11] = 0xff;
+                key[12..16].copy_from_slice(&raw);
+                key
+            }
+            libc::AF_INET6 => {
+                let sin6 = &*(&storage as *const _ as *const libc::sockaddr_in6);
+                sin6.sin6_addr.s6_addr
+            }
+            _ => [0u8; 16],
+        }
+    }
+}
+
 // ---- Epoll Operations (Linux Only) ----
 
 #[cfg(target_os = "linux")]
