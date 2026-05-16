@@ -66,6 +66,9 @@
                 <li><a href="#middleware"><i class='bx bx-shield-quarter'></i> Middleware &amp; Auth</a></li>
                 <li><a href="#persistence"><i class='bx bx-data'></i> Persistence Deep-Dive</a></li>
                 <li><a href="#orm-manual"><i class='bx bx-book-content'></i> ORM Reference</a></li>
+                <li><a href="#websocket"><i class='bx bx-wifi'></i> WebSocket</a></li>
+                <li><a href="#tls"><i class='bx bx-lock-alt'></i> TLS / HTTPS</a></li>
+                <li><a href="#observability"><i class='bx bx-line-chart'></i> Observability</a></li>
 
                 <li class="nav-label">Community</li>
                 <li><a href="https://github.com/kowito/chopin" target="_blank"><i class='bx bxl-github'></i> GitHub</a>
@@ -164,7 +167,7 @@
                 </div>
 
                 <div class="glass-panel" style="margin-top: 2rem; padding: 2rem;">
-                    <h3>v0.5.9 Performance Features</h3>
+                    <h3>Performance Features</h3>
                     <div
                         style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 2rem; margin-top: 1.5rem;">
                         <div>
@@ -226,17 +229,27 @@
                             <tr>
                                 <td><strong>HTTP/1.1</strong></td>
                                 <td>Production Ready</td>
-                                <td>Zero-copy parsing; <code>writev</code> header+body flush; HTTP pipelining.</td>
+                                <td>Zero-copy parsing; <code>writev</code> header+body flush; HTTP pipelining; configurable pipeline depth.</td>
                             </tr>
                             <tr>
-                                <td><strong>Static Files</strong></td>
+                                <td><strong>Static Files + Range Requests</strong></td>
                                 <td>Zero-Copy (<code>sendfile</code>)</td>
-                                <td>Kernel-space file transfer; auto MIME detection (~30 types).</td>
+                                <td>Kernel-space file transfer; RFC 7233 range requests (<code>206 Partial Content</code>); auto MIME detection (~30 types).</td>
+                            </tr>
+                            <tr>
+                                <td><strong>TLS/HTTPS</strong></td>
+                                <td>rustls (1.2/1.3)</td>
+                                <td>In-worker TLS via <code>tls</code> feature; <code>Chopin::serve_tls(addr, cert, key)</code>; AWS ACM CA bundle support.</td>
+                            </tr>
+                            <tr>
+                                <td><strong>WebSocket (RFC 6455)</strong></td>
+                                <td>Native</td>
+                                <td>Upgrade handshake, frame codec (text/binary/ping/pong/close), fragmentation handling.</td>
                             </tr>
                             <tr>
                                 <td><strong>PostgreSQL</strong></td>
                                 <td>Native (Port 5432)</td>
-                                <td>Direct Extended Query Protocol usage with SASL/MD5 authentication support.</td>
+                                <td>Extended Query Protocol; SASL/SCRAM-SHA-256 + MD5 auth; TLS/SSL; COPY IN/OUT; LISTEN/NOTIFY; savepoints.</td>
                             </tr>
                             <tr>
                                 <td><strong>JSON (RFC 8259)</strong></td>
@@ -246,12 +259,22 @@
                             <tr>
                                 <td><strong>JWT (RFC 7519)</strong></td>
                                 <td>Zero-Allocation</td>
-                                <td>Lazy decoding and validation integrated into high-speed middleware.</td>
+                                <td>HS256/RS256/ES256; role &amp; scope middleware macros; token revocation; Argon2id password hashing; OAuth PKCE.</td>
                             </tr>
                             <tr>
                                 <td><strong>Multipart (RFC 7578)</strong></td>
                                 <td>Streaming</td>
                                 <td>Iterative parsing of <code>form-data</code> without whole-body buffering.</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Compression</strong></td>
+                                <td>gzip (<code>compression</code> feature)</td>
+                                <td><code>Response::gzip()</code> via <code>flate2</code>; automatic <code>Content-Encoding: gzip</code> header.</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Observability</strong></td>
+                                <td>Prometheus + Structured Logging</td>
+                                <td><code>Chopin::with_metrics(path)</code> Prometheus endpoint; <code>with_health(path)</code> k8s probe; JSON logging via <code>logging</code> feature.</td>
                             </tr>
                         </tbody>
                     </table>
@@ -343,11 +366,11 @@ Hyper      [██████████████████████  
                 <p>Or add individual crates to your <code>Cargo.toml</code>:</p>
                 <div class="code-block glass-panel">
                     <pre><code class="language-toml">[dependencies]
-chopin-core = "0.5.9"
-chopin-macros = "0.5.9"    # For attribute routing
-chopin-pg = "0.5.9"        # High-performance PostgreSQL driver
-chopin-orm = "0.5.9"       # Zero-allocation ORM layer
-kowito-json = "0.2.11"   # Schema-JIT SIMD JSON serializer
+chopin-core = "0.5.27"
+chopin-macros = "0.5.27"   # For attribute routing
+chopin-pg = "0.5.27"       # High-performance PostgreSQL driver
+chopin-orm = "0.5.27"      # Zero-allocation ORM layer
+kowito-json = "0.2.18"     # Schema-JIT SIMD JSON serializer
 </code></pre>
                 </div>
             </section>
@@ -412,8 +435,12 @@ kowito-json = "0.2.11"   # Schema-JIT SIMD JSON serializer
                                 <td>Restore database from a dump file.</td>
                             </tr>
                             <tr>
+                                <td><code>chopin generate model &lt;name&gt; [field:type …]</code></td>
+                                <td>Scaffold a <code>#[derive(Model)]</code> struct + timestamped SQL migration files.</td>
+                            </tr>
+                            <tr>
                                 <td><code>chopin migrate up/down</code></td>
-                                <td>(Coming Soon) Native migration management.</td>
+                                <td>Run pending SQL migrations up or roll back the last applied migration.</td>
                             </tr>
                         </tbody>
                     </table>
@@ -621,7 +648,11 @@ fn download(ctx: Context) -> Response {
                             <tr><td><code>Response::text_static(body)</code></td><td>200</td><td><strong>Zero-alloc.</strong> Takes <code>&amp;'static [u8]</code>. Ideal for fixed messages.</td></tr>
                             <tr><td><code>Response::json(&amp;val)</code></td><td>200</td><td>Serializes <code>T: Serialize</code> via Schema-JIT engine.</td></tr>
                             <tr><td><code>Response::json_bytes(body)</code></td><td>200</td><td>Pre-serialized JSON bytes. Sets <code>application/json</code>.</td></tr>
+                            <tr><td><code>Response::json_static(body)</code></td><td>200</td><td><strong>Zero-alloc.</strong> Takes <code>&amp;'static [u8]</code> for pre-serialized JSON known at compile time.</td></tr>
+                            <tr><td><code>Response::raw(bytes)</code></td><td>200</td><td><strong>Ultra-fast.</strong> Writes a complete pre-baked HTTP/1.1 response verbatim — bypasses all header serialization.</td></tr>
+                            <tr><td><code>Response::stream(iter)</code></td><td>200</td><td>Chunked streaming body from an iterator of <code>Vec&lt;u8&gt;</code>.</td></tr>
                             <tr><td><code>Response::file(path)</code></td><td>200/404</td><td>Zero-copy <code>sendfile</code>. Auto Content-Type. Returns 404 on missing file.</td></tr>
+                            <tr><td><code>Response::file_range(path, range)</code></td><td>200/206/416</td><td>Serves file with RFC 7233 Range support. Pass <code>ctx.header("range")</code>.</td></tr>
                             <tr><td><code>Response::sendfile(fd, offset, len, ct)</code></td><td>200</td><td>Custom range sendfile with explicit content-type.</td></tr>
                             <tr><td><code>Response::new(status)</code></td><td>any</td><td>Empty body with given status code.</td></tr>
                             <tr><td><code>Response::not_found()</code></td><td>404</td><td>Plain-text "Not Found".</td></tr>
@@ -1198,6 +1229,144 @@ DB.with(|db| {
 
     tx.commit().unwrap();          // Atomic success
 });</code></pre>
+                </div>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- WebSocket Section -->
+            <section id="websocket">
+                <h2>WebSocket (RFC 6455)</h2>
+                <p>Chopin provides a built-in WebSocket upgrade handshake and a full RFC 6455 frame codec with no
+                    external dependencies.</p>
+
+                <h3>Upgrade a connection</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_core::websocket;
+
+#[get("/ws")]
+fn ws_handler(ctx: Context) -> Response {
+    // Validate Upgrade headers and build 101 Switching Protocols response
+    match websocket::ws_upgrade(&amp;ctx) {
+        Some(resp) => resp,  // 101 — caller should now use the raw fd for frames
+        None       => Response::bad_request(),
+    }
+}</code></pre>
+                </div>
+
+                <h3>Frame codec</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_core::websocket::{decode_frame, encode_frame, WsMessage, OPCODE_TEXT};
+
+// Decode a received frame from a byte buffer
+let (frame, consumed) = decode_frame(&amp;buf)?;
+
+// Build an outgoing text frame
+let bytes = encode_frame(OPCODE_TEXT, b"hello from server", false);
+
+// High-level message assembly (handles fragmentation)
+let msg = WsMessage::Text("hello".into());</code></pre>
+                </div>
+
+                <div class="table-wrapper glass-panel" style="margin-top: 1.5rem;">
+                    <table>
+                        <thead><tr><th>Feature</th><th>Status</th></tr></thead>
+                        <tbody>
+                            <tr><td>Upgrade handshake (<code>Sec-WebSocket-Accept</code>)</td><td>✅ Production</td></tr>
+                            <tr><td>Text / Binary frames</td><td>✅ Production</td></tr>
+                            <tr><td>Ping / Pong / Close frames</td><td>✅ Production</td></tr>
+                            <tr><td>Frame fragmentation (continuation)</td><td>✅ Production</td></tr>
+                            <tr><td>Client-side masking validation</td><td>✅ RFC-compliant</td></tr>
+                            <tr><td>Max frame payload (16 MiB)</td><td>✅ Configurable constant</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- TLS Section -->
+            <section id="tls">
+                <h2>TLS / HTTPS</h2>
+                <p>Enable TLS with the <code>tls</code> feature flag. Chopin uses <strong>rustls</strong>
+                    (TLS 1.2/1.3) for in-worker encryption — no separate proxy required.</p>
+
+                <h3>Enable in Cargo.toml</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-toml">[dependencies]
+chopin-core = { version = "0.5.27", features = ["tls"] }</code></pre>
+                </div>
+
+                <h3>Serve with TLS</h3>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_core::{get, Context, Response, Chopin};
+
+#[get("/")]
+fn index(_ctx: Context) -> Response {
+    Response::text("Hello, secure world!")
+}
+
+fn main() {
+    Chopin::new()
+        .mount_all_routes()
+        .serve_tls("0.0.0.0:443", "certs/cert.pem", "certs/key.pem")
+        .unwrap();
+}</code></pre>
+                </div>
+
+                <p>Both PEM certificate chains and private keys are supported. Compatible with AWS ACM
+                    private CA bundles and self-signed certs for development.</p>
+            </section>
+
+            <hr class="section-divider">
+
+            <!-- Observability Section -->
+            <section id="observability">
+                <h2>Observability</h2>
+
+                <h3>Prometheus metrics endpoint</h3>
+                <p>Mount a Prometheus-compatible scrape endpoint that aggregates counters across all worker threads.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">Chopin::new()
+    .mount_all_routes()
+    .with_metrics("/metrics")   // GET /metrics  → Prometheus text format
+    .with_health("/health")     // GET /health   → JSON probe (k8s / ALB)
+    .serve("0.0.0.0:8080")
+    .unwrap();</code></pre>
+                </div>
+
+                <div class="table-wrapper glass-panel" style="margin-top: 1rem;">
+                    <table>
+                        <thead><tr><th>Metric</th><th>Type</th><th>Description</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>chopin_requests_total</code></td><td>Counter</td><td>Total HTTP requests handled across all workers.</td></tr>
+                            <tr><td><code>chopin_active_connections</code></td><td>Gauge</td><td>Currently open connections across all workers.</td></tr>
+                            <tr><td><code>chopin_bytes_sent_total</code></td><td>Counter</td><td>Total response bytes sent.</td></tr>
+                            <tr><td><code>chopin_uptime_seconds</code></td><td>Gauge</td><td>Server uptime in seconds.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3>Health endpoint</h3>
+                <p><code>GET /health</code> returns <code>200 OK</code> with a JSON body suitable for Kubernetes
+                    liveness/readiness probes and AWS ALB health checks:</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-json">{"status":"ok","uptime_secs":1234,"workers":8,"requests":9876543,"active_connections":42,"bytes_sent":987654321}</code></pre>
+                </div>
+
+                <h3>Structured JSON logging</h3>
+                <p>Enable JSON-structured logging to stderr with the <code>logging</code> feature. Log level is
+                    controlled by the <code>RUST_LOG</code> environment variable.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-toml">[dependencies]
+chopin-core = { version = "0.5.27", features = ["logging"] }</code></pre>
+                </div>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">Chopin::new()
+    .mount_all_routes()
+    .with_logging()    // reads RUST_LOG; default: info
+    .serve("0.0.0.0:8080")
+    .unwrap();</code></pre>
                 </div>
             </section>
 

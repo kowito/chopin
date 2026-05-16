@@ -57,7 +57,7 @@
                 <li><a href="#advanced"><i class='bx bx-bolt-circle'></i> 6. Advanced Logic</a></li>
                 <li><a href="#performance"><i class='bx bx-stats'></i> 7. Performance</a></li>
                 <li><a href="#testing"><i class='bx bx-check-shield'></i> 8. Testing &amp; Quality</a></li>
-                <li><a href="#deployment"><i class='bx bx-cloud-upload'></i> 9. Deployment</a></li>
+                <li><a href="#deployment"><i class='bx bx-cloud-upload'></i> 9. Deployment &amp; Observability</a></li>
             </ul>
         </nav>
 
@@ -75,7 +75,7 @@
             <section id="setup">
                 <h2>1. Foundation & Setup</h2>
                 <p>Welcome to the official developer guide for the <strong>Chopin HTTP Framework</strong>. Chopin
-                    requires a <strong>Rust nightly toolchain</strong>. It's optimized for UNIX-like environments (Linux
+                    requires <strong>Rust 1.75+ (stable)</strong>. It's optimized for UNIX-like environments (Linux
                     <code>epoll</code> and macOS <code>kqueue</code>).</p>
 
                 <h3>Environment Configuration</h3>
@@ -411,6 +411,51 @@ Response::json(&data)
     .with_header("Cache-Control", "max-age=3600")
     .with_header("Content-Disposition", "attachment; filename=\"data.json\"")</code></pre>
                 </div>
+
+                <h3>Pre-baked Raw Responses</h3>
+                <p>For maximum throughput on a fixed response (e.g. health checks or benchmarks), pre-bake the full
+                    HTTP response as a <code>&amp;'static [u8]</code>. The worker writes it verbatim — no header
+                    serialization, one <code>memcpy</code>.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">static PONG: &[u8] = b"HTTP/1.1 200 OK\r\n\
+    Server: chopin\r\n\
+    Content-Type: text/plain\r\n\
+    Content-Length: 4\r\n\
+    Connection: keep-alive\r\n\
+    \r\n\
+    pong";
+
+#[get("/ping")]
+fn ping(_ctx: Context) -> Response { Response::raw(PONG) }</code></pre>
+                </div>
+
+                <h3>RFC 7233 Range Requests</h3>
+                <p>Use <code>Response::file_range(path, range_header)</code> to honour HTTP range requests
+                    (e.g. video seeking, resumable downloads):</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">#[get("/video/:name")]
+fn serve_video(ctx: Context) -> Response {
+    let name = ctx.param("name").unwrap_or("");
+    let range = ctx.header("range"); // e.g. Some("bytes=0-1048575")
+    // Returns 206 Partial Content + Content-Range on valid range
+    // Returns 416 Range Not Satisfiable on invalid range
+    Response::file_range(&format!("media/{}", name), range)
+}</code></pre>
+                </div>
+
+                <h3>WebSocket Upgrade</h3>
+                <p>Chopin includes RFC 6455 support: upgrade handshake + a full frame codec.</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">use chopin_core::websocket;
+
+#[get("/ws")]
+fn ws_handler(ctx: Context) -> Response {
+    match websocket::ws_upgrade(&ctx) {
+        Some(resp) => resp,  // 101 Switching Protocols
+        None       => Response::bad_request(),
+    }
+}</code></pre>
+                </div>
             </section>
 
             <hr class="section-divider">
@@ -490,14 +535,44 @@ wrk -t10 -c200 -d10s http://localhost:8080/ping</code></pre>
             <!-- Section 9 -->
             <section id="deployment">
                 <h2>9. Deployment &amp; Observability</h2>
+
                 <h3>Dockerization</h3>
                 <div class="code-block glass-panel">
                     <pre><code class="language-bash">chopin deploy docker</code></pre>
                 </div>
-                <h3>Live Metrics</h3>
-                <p>Metrics are piped to <code>stdout</code> automatically every 5 seconds.</p>
+
+                <h3>Prometheus Metrics</h3>
+                <p>Mount a Prometheus scrape endpoint and a k8s-compatible health probe:</p>
                 <div class="code-block glass-panel">
-                    <pre><code class="language-text">[Metrics] Active Connections: 194 | Total Requests: 1248030</code></pre>
+                    <pre><code class="language-rust">Chopin::new()
+    .mount_all_routes()
+    .with_metrics("/metrics")   // GET /metrics  → Prometheus text format
+    .with_health("/health")     // GET /health   → JSON body for k8s / ALB
+    .serve("0.0.0.0:8080")
+    .unwrap();</code></pre>
+                </div>
+
+                <h3>Structured Logging</h3>
+                <p>Enable JSON-structured logging to stderr (controlled by <code>RUST_LOG</code>):</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-toml"># Cargo.toml
+chopin-core = { version = "0.5.27", features = ["logging"] }</code></pre>
+                </div>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-bash">RUST_LOG=info cargo run</code></pre>
+                </div>
+
+                <h3>TLS / HTTPS</h3>
+                <p>Enable TLS (rustls 1.2/1.3) with the <code>tls</code> feature flag:</p>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-toml"># Cargo.toml
+chopin-core = { version = "0.5.27", features = ["tls"] }</code></pre>
+                </div>
+                <div class="code-block glass-panel">
+                    <pre><code class="language-rust">Chopin::new()
+    .mount_all_routes()
+    .serve_tls("0.0.0.0:443", "certs/cert.pem", "certs/key.pem")
+    .unwrap();</code></pre>
                 </div>
             </section>
 

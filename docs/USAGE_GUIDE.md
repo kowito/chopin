@@ -14,6 +14,9 @@ A practical guide to using the Chopin HTTP framework and its companion crates.
 6. [ORM (`chopin-orm`)](#orm-chopin-orm)
 7. [Authentication (`chopin-auth`)](#authentication-chopin-auth)
 8. [Multipart / File Uploads](#multipart--file-uploads)
+9. [WebSocket](#websocket)
+10. [TLS / HTTPS](#tls--https)
+11. [Observability](#observability)
 
 ---
 
@@ -23,9 +26,9 @@ Add the crates to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-chopin-core = "0.5.21"
-chopin-orm  = "0.5.21"   # optional — PostgreSQL ORM
-chopin-auth = "0.5.21"   # optional — JWT auth
+chopin-core = "0.5.27"
+chopin-orm  = "0.5.27"   # optional — PostgreSQL ORM
+chopin-auth = "0.5.27"   # optional — JWT auth
 ```
 
 ### Minimal server
@@ -229,8 +232,12 @@ fn list_items(ctx: Context) -> Response {
 | `Response::text_static(b"...")` | 200 | `text/plain` (zero-copy) |
 | `Response::json(&value)` | 200 | `application/json` |
 | `Response::json_bytes(bytes)` | 200 | `application/json` |
-| `Response::file("path/to/file")` | 200 | inferred from extension |
-| `Response::stream(iter)` | 200 | `application/octet-stream` |
+| `Response::json_static(b"...")` | 200 | `application/json` (zero-copy, zero-alloc) |
+| `Response::raw(bytes)` | 200 | — (pre-baked full HTTP response, no header serialization) |
+| `Response::stream(iter)` | 200 | `application/octet-stream` (chunked) |
+| `Response::file("path")` | 200/404 | inferred from extension |
+| `Response::file_range("path", range)` | 200/206/416 | inferred; RFC 7233 partial content |
+| `Response::sendfile(fd, offset, len, ct)` | 200 | explicit |
 | `Response::not_found()` | 404 | `text/plain` |
 | `Response::bad_request()` | 400 | `text/plain` |
 | `Response::unauthorized()` | 401 | `text/plain` |
@@ -386,8 +393,8 @@ router.get("/users", list_users);
 **Cargo.toml:**
 ```toml
 [dependencies]
-chopin-orm = "0.5.21"
-chopin-pg  = "0.5.21"
+chopin-orm = "0.5.27"
+chopin-pg  = "0.5.27"
 ```
 
 ### Defining a model
@@ -599,7 +606,7 @@ let users = User::find().join_child::<Post>().all(&mut pool)?;
 **Cargo.toml:**
 ```toml
 [dependencies]
-chopin-auth = "0.5.21"
+chopin-auth = "0.5.27"
 ```
 
 ### Setup — `JwtManager`
@@ -865,4 +872,97 @@ let all = User::find_with_trashed().all(&mut pool)?;
 ```rust
 User::sync_schema(&mut pool)?;
 // Creates the table if it doesn't exist, or adds missing columns
+```
+
+---
+
+## WebSocket
+
+Chopin has built-in RFC 6455 WebSocket support — upgrade handshake, frame codec, and message assembly.
+
+### Upgrade a connection
+
+```rust
+use chopin_core::websocket;
+
+#[get("/ws")]
+fn ws_handler(ctx: Context) -> Response {
+    // Validates Upgrade headers; returns 101 Switching Protocols on success
+    websocket::ws_upgrade(&ctx).unwrap_or_else(Response::bad_request)
+}
+```
+
+### Frame codec
+
+```rust
+use chopin_core::websocket::{decode_frame, encode_frame, WsMessage, OPCODE_TEXT, OPCODE_PONG};
+
+// Decode an incoming frame
+let (frame, consumed) = decode_frame(&buf)?;
+
+// Encode an outgoing text frame
+let outgoing = encode_frame(OPCODE_TEXT, b"hello", false);
+
+// High-level message type
+let msg = WsMessage::Text("hello".into());
+```
+
+---
+
+## TLS / HTTPS
+
+Enable TLS (rustls 1.2/1.3) with the `tls` feature flag.
+
+**Cargo.toml:**
+```toml
+[dependencies]
+chopin-core = { version = "0.5.27", features = ["tls"] }
+```
+
+### Serve over HTTPS
+
+```rust
+Chopin::new()
+    .mount_all_routes()
+    .serve_tls("0.0.0.0:443", "certs/cert.pem", "certs/key.pem")
+    .unwrap();
+```
+
+Both PEM certificate chains and private keys are accepted. Compatible with AWS ACM private CA bundles.
+
+---
+
+## Observability
+
+### Prometheus metrics
+
+```rust
+Chopin::new()
+    .mount_all_routes()
+    .with_metrics("/metrics")   // GET /metrics → Prometheus text format
+    .with_health("/health")     // GET /health  → JSON for k8s / ALB probes
+    .serve("0.0.0.0:8080")
+    .unwrap();
+```
+
+Available Prometheus metrics: `chopin_requests_total`, `chopin_active_connections`,
+`chopin_bytes_sent_total`, `chopin_uptime_seconds`.
+
+### Structured JSON logging
+
+```toml
+# Cargo.toml
+chopin-core = { version = "0.5.27", features = ["logging"] }
+```
+
+```rust
+Chopin::new()
+    .mount_all_routes()
+    .with_logging()   // reads RUST_LOG env var; default: info
+    .serve("0.0.0.0:8080")
+    .unwrap();
+```
+
+```bash
+RUST_LOG=debug cargo run
 ```

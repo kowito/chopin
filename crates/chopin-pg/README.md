@@ -8,7 +8,7 @@
 
 > **High-fidelity engineering for the modern virtuoso.**
 
-`chopin-pg` is a high‑performance, zero‑dependency PostgreSQL driver for the Chopin suite. Built for thread‑per‑core architectures with synchronous non‑blocking I/O, per‑worker connection pools, and zero external runtime dependencies (only `libc`).
+`chopin-pg` is a high‑performance, synchronous, non‑blocking PostgreSQL driver for the Chopin suite. It targets thread‑per‑core architectures with per‑worker connection pools and minimal dependencies (only `libc` by default). The crate provides a low-latency, zero-runtime-overhead alternative to async drivers for high-throughput backends.
 
 ## Features
 

@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "A high-performance, asynchronous PostgreSQL driver for the Chopin framework."
+description = "A high-performance, synchronous, non-blocking PostgreSQL driver for the Chopin framework."
 
 [dependencies]
 libc = "0.2.180"

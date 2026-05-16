@@ -290,11 +290,39 @@ chopin deploy docker
 ```
 This scaffolding generates `amd64` / `arm64` tuned deployment images leveraging `musl` compilation.
 
-### Health Metrics
-Every Chopin Server automatically spins a background thread dedicated exclusively to metrics. Active connection slabs and throughput aggregates are piped regularly to standard out (`stdout`), providing out-of-the-box infrastructure monitoring:
+### Prometheus Metrics
+Mount a Prometheus-compatible scrape endpoint and a JSON health probe:
+```rust
+Chopin::new()
+    .mount_all_routes()
+    .with_metrics("/metrics")   // GET /metrics → Prometheus text format
+    .with_health("/health")     // GET /health  → JSON for k8s / ALB probes
+    .serve("0.0.0.0:8080")
+    .unwrap();
+```
+Exposes `chopin_requests_total`, `chopin_active_connections`, `chopin_bytes_sent_total`, `chopin_uptime_seconds`.
 
-```text
-[Metrics] Active Connections: 194 | Total Requests: 1248030
+### Structured JSON Logging
+Enable the `logging` feature and call `.with_logging()` before `.serve()`:
+```toml
+# Cargo.toml
+chopin-core = { version = "0.5.27", features = ["logging"] }
+```
+```bash
+RUST_LOG=info cargo run
+```
+
+### TLS / HTTPS
+Enable the `tls` feature to get in-worker rustls TLS 1.2/1.3 termination:
+```toml
+# Cargo.toml
+chopin-core = { version = "0.5.27", features = ["tls"] }
+```
+```rust
+Chopin::new()
+    .mount_all_routes()
+    .serve_tls("0.0.0.0:443", "certs/cert.pem", "certs/key.pem")
+    .unwrap();
 ```
 
 ---
