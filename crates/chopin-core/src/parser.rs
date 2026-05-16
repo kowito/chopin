@@ -4,6 +4,7 @@ use memchr::memchr;
 
 /// Hard limit on total request size (headers + body).  Requests exceeding this
 /// are rejected with `ParseError::TooLarge` to prevent OOM from huge bodies.
+/// This is the *default* used when no per-server override is configured.
 pub const MAX_REQUEST_SIZE: usize = 1_048_576; // 1 MiB
 
 #[derive(Debug)]
@@ -15,8 +16,12 @@ pub enum ParseError {
 
 /// Parses an HTTP request out of the given buffer.
 /// Returns the parsed Request and the total number of bytes consumed (length of headers + body).
+///
+/// `max_size` caps the total allowed request size (headers + body).  Pass
+/// [`MAX_REQUEST_SIZE`] for the 1 MiB default or a custom value configured via
+/// [`Server::with_max_request_size`].
 #[inline(always)]
-pub fn parse_request(buf_mut: &mut [u8]) -> Result<(Request<'_>, usize), ParseError> {
+pub fn parse_request(buf_mut: &mut [u8], max_size: usize) -> Result<(Request<'_>, usize), ParseError> {
     let ptr = buf_mut.as_mut_ptr();
     let len = buf_mut.len();
     let buf = &*buf_mut;
@@ -169,7 +174,7 @@ pub fn parse_request(buf_mut: &mut [u8]) -> Result<(Request<'_>, usize), ParseEr
                 usize::from_str_radix(hex_str.trim(), 16).map_err(|_| ParseError::InvalidFormat)?;
 
             // D.1: Enforce size limit on chunked bodies
-            if write_pos + chunk_len > MAX_REQUEST_SIZE - header_end {
+            if write_pos + chunk_len > max_size.saturating_sub(header_end) {
                 return Err(ParseError::TooLarge);
             }
 
@@ -204,7 +209,7 @@ pub fn parse_request(buf_mut: &mut [u8]) -> Result<(Request<'_>, usize), ParseEr
             return Err(ParseError::Incomplete);
         }
         // D.1: Check size limit only when we have the complete body
-        if header_end + expected_len > MAX_REQUEST_SIZE {
+        if header_end + expected_len > max_size {
             return Err(ParseError::TooLarge);
         }
         let body_ptr = remaining.as_ptr();
@@ -233,7 +238,7 @@ mod tests {
     #[test]
     fn test_parse_basic_request() {
         let mut req = b"GET /some/path?foo=bar HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\n\r\nBodyContent".to_vec();
-        let (request, consumed) = parse_request(&mut req).unwrap();
+        let (request, consumed) = parse_request(&mut req, MAX_REQUEST_SIZE).unwrap();
 
         assert_eq!(request.method, Method::Get);
         assert_eq!(request.path, "/some/path");
@@ -247,7 +252,7 @@ mod tests {
     fn test_parse_incomplete_request() {
         let mut req = b"GET /some/path?foo=bar HTT".to_vec();
         assert!(matches!(
-            parse_request(&mut req),
+            parse_request(&mut req, MAX_REQUEST_SIZE),
             Err(ParseError::Incomplete)
         ));
     }
@@ -255,7 +260,7 @@ mod tests {
     #[test]
     fn test_parse_chunked_request() {
         let mut req = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n5\r\npedia\r\nE\r\n in\r\n\r\nchunks.\r\n0\r\n\r\n".to_vec();
-        let (request, _consumed) = parse_request(&mut req).unwrap();
+        let (request, _consumed) = parse_request(&mut req, MAX_REQUEST_SIZE).unwrap();
         assert_eq!(request.body, b"Wikipedia in\r\n\r\nchunks.");
     }
 
@@ -265,7 +270,7 @@ mod tests {
         // Parser should wait for body bytes first.
         let mut req = b"POST / HTTP/1.1\r\nContent-Length: 2000000\r\n\r\n".to_vec();
         assert!(matches!(
-            parse_request(&mut req),
+            parse_request(&mut req, MAX_REQUEST_SIZE),
             Err(ParseError::Incomplete)
         ));
     }
@@ -278,14 +283,14 @@ mod tests {
             format!("POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
         req.extend_from_slice(&body);
 
-        assert!(matches!(parse_request(&mut req), Err(ParseError::TooLarge)));
+        assert!(matches!(parse_request(&mut req, MAX_REQUEST_SIZE), Err(ParseError::TooLarge)));
     }
 
     #[test]
     fn test_parse_within_size_limit() {
         // Small body within limit → OK
         let mut req = b"POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello".to_vec();
-        let (request, _consumed) = parse_request(&mut req).unwrap();
+        let (request, _consumed) = parse_request(&mut req, MAX_REQUEST_SIZE).unwrap();
         assert_eq!(request.body, b"hello");
     }
 }

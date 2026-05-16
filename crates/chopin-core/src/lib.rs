@@ -46,6 +46,7 @@ pub mod metrics;
 pub mod multipart;
 pub mod openapi;
 pub mod parser;
+pub mod rate_limit;
 pub mod router;
 pub mod server;
 pub mod slab;

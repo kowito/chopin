@@ -116,6 +116,10 @@ pub struct Worker {
     /// Configurable via `CHOPIN_MAX_PIPELINE_DEPTH` env var or
     /// `Server::with_max_pipeline_depth()`.
     max_pipeline_depth: u32,
+    /// Maximum allowed total request size (headers + body) in bytes.
+    /// Requests exceeding this are rejected with 413 Content Too Large.
+    /// Defaults to `MAX_REQUEST_SIZE` (1 MiB).
+    max_request_size: usize,
     #[cfg(feature = "tls")]
     tls_config: Option<crate::tls::TlsServerConfig>,
     // Phase 4: Per-worker Date header cache. Refreshed at most once per second.
@@ -141,6 +145,11 @@ impl Worker {
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(0); // 0 = unlimited
 
+        let max_request_size = std::env::var("CHOPIN_MAX_REQUEST_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(crate::parser::MAX_REQUEST_SIZE);
+
         Self {
             id,
             router,
@@ -149,8 +158,7 @@ impl Worker {
             slab_capacity,
             epoll_timeout_ms,
             max_pipeline_depth,
-            #[cfg(feature = "tls")]
-            tls_config: None,
+            max_request_size,
             date_cache: {
                 let s = httpdate::fmt_http_date(std::time::SystemTime::now());
                 let mut buf = [0u8; 29];
@@ -176,6 +184,12 @@ impl Worker {
     /// chance to be served.
     pub fn set_max_pipeline_depth(&mut self, depth: u32) {
         self.max_pipeline_depth = depth;
+    }
+
+    /// Override the per-request size limit.  Called by the server builder when
+    /// `Server::with_max_request_size()` is configured.
+    pub fn set_max_request_size(&mut self, size: usize) {
+        self.max_request_size = size;
     }
 
     /// Dispatches to the io_uring event loop on Linux with the `io-uring` feature,
@@ -472,7 +486,7 @@ impl Worker {
                                     }
 
                                     let buf = &mut conn.read_buf[read_offset..read_offset + rl];
-                                    match crate::parser::parse_request(buf) {
+                                    match crate::parser::parse_request(buf, self.max_request_size) {
                                         Ok((req, consumed)) => {
                                             let mut ctx = crate::http::Context {
                                                 req,
@@ -620,11 +634,11 @@ impl Worker {
                                                 if overflow {
                                                     // If raw fits nowhere, this is a bug in buffer size vs response size.
                                                     // For now, just stop batching and let it fail/partial write.
-                                                    conn.write_len = (wstart + pos) as u16;
+                                                    conn.write_len = (wstart + pos) as u32;
                                                     next_state = ConnState::Writing;
                                                     break;
                                                 }
-                                                conn.write_len = (wstart + pos) as u16;
+                                                conn.write_len = (wstart + pos) as u32;
                                                 read_offset += consumed;
                                                 conn.read_len = (rl - consumed) as u16;
                                                 if !keep_alive {
@@ -880,7 +894,7 @@ impl Worker {
                                             }
 
                                             // Done using wbuf — NLL releases the borrow.
-                                            conn.write_len = (wstart + pos) as u16;
+                                            conn.write_len = (wstart + pos) as u32;
                                             // Phase 3.1: response serialized — decrement in-flight count.
                                             conn.inflight = conn.inflight.saturating_sub(1);
 
@@ -932,7 +946,7 @@ impl Worker {
                                             if end <= conn.write_buf.len() {
                                                 conn.write_buf[wstart..end]
                                                     .copy_from_slice(err_413);
-                                                conn.write_len = end as u16;
+                                                conn.write_len = end as u32;
                                             }
                                             conn.flags &= !crate::conn::CONN_KEEP_ALIVE;
                                             next_state = ConnState::Writing;
@@ -1017,10 +1031,10 @@ impl Worker {
                                             Ok(n) if n > 0 => {
                                                 self.metrics.add_bytes(n);
                                                 if n >= write_total {
-                                                    conn.write_pos = write_total as u16;
+                                                    conn.write_pos = write_total as u32;
                                                     conn.body_sent = (n - write_total) as u32;
                                                 } else {
-                                                    conn.write_pos = n as u16;
+                                                    conn.write_pos = n as u32;
                                                 }
                                             }
                                             Ok(_) => {} // WouldBlock — wait for EPOLLOUT
@@ -1057,7 +1071,7 @@ impl Worker {
                                         match write_result {
                                             Ok(n) if n > 0 => {
                                                 self.metrics.add_bytes(n);
-                                                conn.write_pos += n as u16;
+                                                conn.write_pos += n as u32;
                                             }
                                             Ok(_) => {} // WouldBlock — wait for EPOLLOUT
                                             Err(_) => {
@@ -1577,13 +1591,13 @@ impl Worker {
             if ws < wt {
                 if ws == 0 && c.body_ptr != 0 && c.body_sent == 0 {
                     if bytes_written >= wt {
-                        c.write_pos = wt as u16;
+                        c.write_pos = wt as u32;
                         c.body_sent = (bytes_written - wt) as u32;
                     } else {
-                        c.write_pos = bytes_written as u16;
+                        c.write_pos = bytes_written as u32;
                     }
                 } else {
-                    c.write_pos += bytes_written as u16;
+                    c.write_pos += bytes_written as u32;
                 }
             } else if c.body_ptr != 0 && c.body_sent < c.body_total {
                 c.body_sent += bytes_written as u32;
@@ -1761,7 +1775,7 @@ impl Worker {
             let parse_result = if let Some(c) = slab.get_mut(idx) {
                 let rl = c.read_len as usize;
                 let buf = &mut c.read_buf[read_offset..read_offset + rl];
-                match crate::parser::parse_request(buf) {
+                match crate::parser::parse_request(buf, self.max_request_size) {
                     Ok((req, consumed)) => {
                         // SAFETY: `c.read_buf` lives inside `ConnectionSlab`'s `Box<[Conn]>` —
                         // a heap-pinned allocation that is never freed or moved until the slab
@@ -1799,7 +1813,7 @@ impl Worker {
                             let end = wstart + err_413.len();
                             if end <= c.write_buf.len() {
                                 c.write_buf[wstart..end].copy_from_slice(err_413);
-                                c.write_len = end as u16;
+                                c.write_len = end as u32;
                             }
                             c.flags &= !conn::CONN_KEEP_ALIVE;
                         }
@@ -1933,10 +1947,10 @@ impl Worker {
                 if let crate::http::Body::Raw(raw_bytes) = &response.body {
                     w!(raw_bytes);
                     if overflow {
-                        c.write_len = (wstart + pos) as u16;
+                        c.write_len = (wstart + pos) as u32;
                         break;
                     }
-                    c.write_len = (wstart + pos) as u16;
+                    c.write_len = (wstart + pos) as u32;
                     c.read_len = (rl - consumed) as u16;
                     if !keep_alive {
                         c.flags &= !crate::conn::CONN_KEEP_ALIVE;
@@ -2156,7 +2170,7 @@ impl Worker {
                     keep_alive = false;
                 }
 
-                c.write_len = (wstart + pos) as u16;
+                c.write_len = (wstart + pos) as u32;
                 // Phase 3.1: response serialized — decrement in-flight count.
                 c.inflight = c.inflight.saturating_sub(1);
                 read_offset += consumed;

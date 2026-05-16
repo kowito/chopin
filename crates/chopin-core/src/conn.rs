@@ -3,10 +3,13 @@
 pub const DEFAULT_READ_BUF_SIZE: usize = 32768; // Phase 1: 32 KiB read buffer (was 8 KiB)
 pub const DEFAULT_WRITE_BUF_SIZE: usize = 32768;
 
-/// Maximum size the adaptive buffer growth will reach.
-/// Capped at 65535 (u16::MAX) because `read_len`/`write_len` are `u16`.
+/// Maximum size the adaptive read buffer growth will reach.
 pub const MAX_READ_BUF_SIZE: usize = u16::MAX as usize; // 65535 bytes ≈ 64 KiB
-pub const MAX_WRITE_BUF_SIZE: usize = u16::MAX as usize;
+/// Maximum size the write buffer is allowed to grow to.
+/// 16 MiB gives ample headroom for large JSON API responses; responses larger
+/// than this threshold will still be served via the zero-copy writev path
+/// (Body::Bytes / Body::Static) which bypasses the write buffer entirely.
+pub const MAX_WRITE_BUF_SIZE: usize = 16 * 1024 * 1024; // 16 MiB
 
 /// Grow threshold: grow when buffer is ≥ 75% utilised.
 const GROW_THRESH_NUM: usize = 3;
@@ -40,8 +43,8 @@ pub struct Conn {
     pub state: ConnState,     // State machine enum
     pub flags: u8,            // Bit 0: keep-alive (was padding)
     pub read_len: u16,        // Valid bytes in read_buf
-    pub write_pos: u16,       // Bytes already written (for partial write resume)
-    pub write_len: u16,       // Total bytes to write in write_buf
+    pub write_pos: u32,       // Bytes already written (for partial write resume)
+    pub write_len: u32,       // Total bytes to write in write_buf
     pub last_active: u32,     // Cached timestamp in seconds
     pub requests_served: u32, // Number of HTTP requests served on this keep-alive connection
 
@@ -90,8 +93,8 @@ impl Conn {
             state: ConnState::Free,
             flags: 0,
             read_len: 0,
-            write_pos: 0,
-            write_len: 0,
+            write_pos: 0u32,
+            write_len: 0u32,
             last_active: 0,
             requests_served: 0,
             sendfile_fd: -1,
@@ -185,6 +188,14 @@ impl Conn {
         true
     }
 
+    /// Overwrite the current write buffer position/length accounting directly.
+    /// For use in tests only.
+    #[cfg(test)]
+    pub fn set_write_cursor(&mut self, pos: u32, len: u32) {
+        self.write_pos = pos;
+        self.write_len = len;
+    }
+
     /// Shrink oversized buffers back toward the default when the connection is
     /// idle (both buffers empty).  Reclaims heap memory after serving a large
     /// request or response that triggered a grow.
@@ -271,9 +282,18 @@ mod tests {
     #[test]
     fn test_try_grow_write_buf_exceeds_max() {
         let mut conn = Conn::with_buf_sizes(64, 64);
-        // Request that exceeds MAX_WRITE_BUF_SIZE — must return false
+        // Request that exceeds MAX_WRITE_BUF_SIZE (16 MiB) — must return false
         assert!(!conn.try_grow_write_buf(MAX_WRITE_BUF_SIZE + 1));
         assert_eq!(conn.write_buf.len(), 64); // Unchanged
+    }
+
+    #[test]
+    fn test_try_grow_write_buf_large_response() {
+        // Ensure buffers can grow well past the old 64 KiB u16 limit
+        let mut conn = Conn::with_buf_sizes(64, 64);
+        let target = 4 * 1024 * 1024; // 4 MiB — previously impossible
+        assert!(conn.try_grow_write_buf(target));
+        assert!(conn.write_buf.len() >= target);
     }
 
     #[test]

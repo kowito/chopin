@@ -31,6 +31,7 @@ use std::thread;
 /// ```
 pub struct Chopin {
     router: Router,
+    max_request_size: Option<usize>,
 }
 
 impl Default for Chopin {
@@ -44,6 +45,7 @@ impl Chopin {
     pub fn new() -> Self {
         Self {
             router: Router::new(),
+            max_request_size: None,
         }
     }
 
@@ -116,9 +118,31 @@ impl Chopin {
         self
     }
 
+    /// Override the maximum allowed request size (headers + body) in bytes.
+    ///
+    /// Requests exceeding this are rejected with `413 Content Too Large`.
+    /// Defaults to 1 MiB (overridable via `CHOPIN_MAX_REQUEST_SIZE` env var).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// Chopin::new()
+    ///     .mount_all_routes()
+    ///     .with_max_request_size(10 * 1024 * 1024) // 10 MiB
+    ///     .serve("0.0.0.0:8080")
+    ///     .unwrap();
+    /// ```
+    pub fn with_max_request_size(mut self, bytes: usize) -> Self {
+        self.max_request_size = Some(bytes);
+        self
+    }
+
     /// Start the server, binding to `host_port` (e.g. `"0.0.0.0:8080"`).
     pub fn serve(self, host_port: &str) -> crate::error::ChopinResult<()> {
-        let server = Server::bind(host_port);
+        let mut server = Server::bind(host_port);
+        if let Some(size) = self.max_request_size {
+            server = server.with_max_request_size(size);
+        }
         server.serve(self.router)
     }
 
@@ -132,7 +156,10 @@ impl Chopin {
         cert_path: &str,
         key_path: &str,
     ) -> crate::error::ChopinResult<()> {
-        let server = Server::bind(host_port).with_tls(cert_path, key_path)?;
+        let mut server = Server::bind(host_port).with_tls(cert_path, key_path)?;
+        if let Some(size) = self.max_request_size {
+            server = server.with_max_request_size(size);
+        }
         server.serve(self.router)
     }
 }
@@ -164,6 +191,9 @@ pub struct Server {
     /// Phase 3.2 Option C: cap on pipelined requests batched per event-loop
     /// iteration.  0 = unlimited (default).
     max_pipeline_depth: u32,
+    /// Maximum allowed request size (headers + body) in bytes.
+    /// `None` means use the worker default (1 MiB / env override).
+    max_request_size: Option<usize>,
     #[cfg(feature = "tls")]
     tls_config: Option<crate::tls::TlsServerConfig>,
 }
@@ -175,6 +205,7 @@ impl Server {
             host_port: host_port.to_string(),
             workers: num_cpus::get(),
             max_pipeline_depth: 0,
+            max_request_size: None,
             #[cfg(feature = "tls")]
             tls_config: None,
         }
@@ -198,6 +229,24 @@ impl Server {
     /// clients.
     pub fn with_max_pipeline_depth(mut self, depth: u32) -> Self {
         self.max_pipeline_depth = depth;
+        self
+    }
+
+    /// Override the maximum allowed request size (headers + body combined) in bytes.
+    ///
+    /// Requests that exceed this limit are rejected with `413 Content Too Large`.
+    /// Defaults to 1 MiB (overridable via the `CHOPIN_MAX_REQUEST_SIZE` env var).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// Server::bind("0.0.0.0:8080")
+    ///     .with_max_request_size(10 * 1024 * 1024) // 10 MiB
+    ///     .serve(router)
+    ///     .unwrap();
+    /// ```
+    pub fn with_max_request_size(mut self, bytes: usize) -> Self {
+        self.max_request_size = Some(bytes);
         self
     }
 
@@ -269,6 +318,7 @@ impl Server {
             let tls_clone = self.tls_config.clone();
 
             let max_pipeline_depth_clone = self.max_pipeline_depth;
+            let max_request_size_clone = self.max_request_size;
 
             let handle = thread::Builder::new()
                 .name(format!("chopin-worker-{}", i))
@@ -290,6 +340,9 @@ impl Server {
                             }
                             if max_pipeline_depth_clone > 0 {
                                 worker.set_max_pipeline_depth(max_pipeline_depth_clone);
+                            }
+                            if let Some(max_req) = max_request_size_clone {
+                                worker.set_max_request_size(max_req);
                             }
                             if let Err(e) = worker.run(shutdown) {
                                 tracing::error!(worker_id = i, error = %e, "Worker exited with error");
