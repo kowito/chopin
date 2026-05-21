@@ -54,10 +54,7 @@ pub fn derive_into_response(input: TokenStream) -> TokenStream {
                 if !attr.path().is_ident("status") {
                     return None;
                 }
-                attr.parse_args::<syn::LitInt>()
-                    .ok()?
-                    .base10_parse()
-                    .ok()
+                attr.parse_args::<syn::LitInt>().ok()?.base10_parse().ok()
             })
             .unwrap_or(500u16);
 

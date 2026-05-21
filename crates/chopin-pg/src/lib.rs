@@ -108,10 +108,8 @@ thread_local! {
 /// ```
 pub fn init_pool(url: &str, size: usize) -> PgResult<()> {
     let config = connection::PgConfig::from_url(url)?;
-    let pg_pool = PgPool::connect_with_config(
-        config,
-        pool::PgPoolConfig::new().max_size(size).min_size(1),
-    )?;
+    let pg_pool =
+        PgPool::connect_with_config(config, pool::PgPoolConfig::new().max_size(size).min_size(1))?;
     let raw = Box::into_raw(Box::new(pg_pool));
     // If a pool was already initialised on this thread (e.g. during hot reload),
     // drop it cleanly before replacing.

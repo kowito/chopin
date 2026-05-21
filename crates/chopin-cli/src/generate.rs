@@ -323,7 +323,11 @@ pub fn generate_scaffold(project_dir: &Path, name: &str, field_defs: &[String]) 
 
     let app_dir = project_dir.join("src/apps").join(&snake_name);
     if app_dir.exists() {
-        anyhow::bail!("App '{}' already exists at {}", snake_name, app_dir.display());
+        anyhow::bail!(
+            "App '{}' already exists at {}",
+            snake_name,
+            app_dir.display()
+        );
     }
     std::fs::create_dir_all(&app_dir)?;
 
@@ -413,11 +417,7 @@ impl From<chopin_orm::OrmError> for {struct_name}Error {{
     // Build the set/field lines for update (only if Some)
     let update_fields: String = fields
         .iter()
-        .map(|(n, _, _)| {
-            format!(
-                "    if let Some(v) = body.{n} {{ m.set(\"{n}\", v.into()); }}\n"
-            )
-        })
+        .map(|(n, _, _)| format!("    if let Some(v) = body.{n} {{ m.set(\"{n}\", v.into()); }}\n"))
         .collect();
 
     // Initial struct literal for create (id=0 for generated PK)
@@ -555,9 +555,8 @@ pub fn destroy(ctx: Context) -> Response {{
     let migrations_dir = project_dir.join("migrations").join(&migration_name);
     std::fs::create_dir_all(&migrations_dir)?;
 
-    let mut up_sql = format!(
-        "CREATE TABLE IF NOT EXISTS {table_name} (\n    id SERIAL PRIMARY KEY"
-    );
+    let mut up_sql =
+        format!("CREATE TABLE IF NOT EXISTS {table_name} (\n    id SERIAL PRIMARY KEY");
     for (fname, _, sql_ty) in &fields {
         up_sql.push_str(&format!(",\n    {fname} {sql_ty}"));
     }
@@ -569,7 +568,11 @@ pub fn destroy(ctx: Context) -> Response {{
     )?;
 
     // ── summary ─────────────────────────────────────────────────────────
-    println!("{} Scaffold generated: {}", "✓".green().bold(), struct_name.cyan());
+    println!(
+        "{} Scaffold generated: {}",
+        "✓".green().bold(),
+        struct_name.cyan()
+    );
     println!("  src/apps/{}/", snake_name);
     println!("    ├── mod.rs");
     println!("    ├── models.rs      ({struct_name}, Create{struct_name}, Update{struct_name})");
@@ -579,7 +582,10 @@ pub fn destroy(ctx: Context) -> Response {{
     println!("  migrations/{migration_name}/up.sql");
     println!();
     println!("  Next steps:");
-    println!("    1. Add {} to your src/apps/mod.rs", format!("pub mod {snake_name};").yellow());
+    println!(
+        "    1. Add {} to your src/apps/mod.rs",
+        format!("pub mod {snake_name};").yellow()
+    );
     println!("    2. Run {}", "chopin migrate up".green());
 
     Ok(())
