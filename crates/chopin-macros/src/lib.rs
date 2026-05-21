@@ -1,6 +1,89 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{ItemFn, parse_macro_input};
+use syn::{Data, DeriveInput, Fields, ItemFn, parse_macro_input};
+
+// ─── #[derive(IntoResponse)] ─────────────────────────────────────────────────
+
+/// Derive `From<YourError> for chopin_core::http::Response` for an error enum.
+///
+/// Each variant must be annotated with `#[status(N)]` where `N` is the HTTP
+/// status code.  Variants without `#[status]` default to `500`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use chopin_macros::IntoResponse;
+///
+/// #[derive(IntoResponse)]
+/// pub enum PostError {
+///     #[status(404)] NotFound(i32),
+///     #[status(422)] Validation(String),
+///     #[status(500)] Db(chopin_orm::OrmError),
+/// }
+///
+/// // Handlers can now use `?` directly:
+/// #[get("/posts/:id")]
+/// fn show(ctx: Context) -> Response {
+///     let id: i32 = ctx.param_parse("id")?;
+///     let post = services::get(id)?;   // PostError converts → Response
+///     Response::json(&post)
+/// }
+/// ```
+#[proc_macro_derive(IntoResponse, attributes(status))]
+pub fn derive_into_response(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+
+    let data_enum = match &input.data {
+        Data::Enum(e) => e,
+        _ => {
+            return syn::Error::new_spanned(name, "#[derive(IntoResponse)] only works on enums")
+                .to_compile_error()
+                .into();
+        }
+    };
+
+    let arms = data_enum.variants.iter().map(|variant| {
+        let variant_name = &variant.ident;
+
+        // Read #[status(N)], default 500.
+        let status_code: u16 = variant
+            .attrs
+            .iter()
+            .find_map(|attr| {
+                if !attr.path().is_ident("status") {
+                    return None;
+                }
+                attr.parse_args::<syn::LitInt>()
+                    .ok()?
+                    .base10_parse()
+                    .ok()
+            })
+            .unwrap_or(500u16);
+
+        match &variant.fields {
+            Fields::Unit => quote! {
+                #name::#variant_name => ::chopin_core::http::Response::new(#status_code),
+            },
+            Fields::Unnamed(_) => quote! {
+                #name::#variant_name(..) => ::chopin_core::http::Response::new(#status_code),
+            },
+            Fields::Named(_) => quote! {
+                #name::#variant_name { .. } => ::chopin_core::http::Response::new(#status_code),
+            },
+        }
+    });
+
+    TokenStream::from(quote! {
+        impl From<#name> for ::chopin_core::http::Response {
+            fn from(e: #name) -> Self {
+                match e {
+                    #(#arms)*
+                }
+            }
+        }
+    })
+}
 
 #[proc_macro_attribute]
 pub fn get(attr: TokenStream, item: TokenStream) -> TokenStream {

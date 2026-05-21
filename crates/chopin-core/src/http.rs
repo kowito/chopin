@@ -857,6 +857,24 @@ impl<'a> Context<'a> {
     pub fn json<T: crate::json::Serialize>(&self, val: &T) -> Response {
         Response::json(val)
     }
+
+    /// Extract and parse a URL path parameter by name.
+    ///
+    /// Returns `Err(400 Bad Request)` if the parameter is absent or fails to
+    /// parse as `T`.  Works for any type that implements [`std::str::FromStr`].
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// #[get("/posts/:id")]
+    /// fn show(ctx: Context) -> Response {
+    ///     let id: i32 = ctx.param_parse("id")?;
+    ///     // ...
+    /// }
+    /// ```
+    pub fn param_parse<T: std::str::FromStr>(&self, key: &str) -> Result<T, Response> {
+        let raw = self.param(key).ok_or_else(Response::bad_request)?;
+        raw.parse::<T>().map_err(|_| Response::bad_request())
+    }
 }
 
 #[cfg(test)]

@@ -82,6 +82,16 @@ enum GenerateCommands {
         #[arg(required = true)]
         fields: Vec<String>,
     },
+    /// Generate a full CRUD scaffold: model, migration, services, handlers, errors
+    ///
+    /// Usage: chopin generate scaffold Post title:String body:String published:bool
+    Scaffold {
+        /// Model name in PascalCase (e.g., "Post")
+        name: String,
+        /// Field definitions as name:type pairs (e.g. title:String body:text published:bool)
+        #[arg(required = true)]
+        fields: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -100,6 +110,8 @@ enum DbCommands {
         #[arg(short, long)]
         file: String,
     },
+    /// Run the seed script (src/db/seeds.rs compiled into the binary as `chopin_seeds::run`)
+    Seed,
 }
 
 #[derive(Subcommand)]
@@ -213,6 +225,20 @@ async fn main() -> Result<()> {
                     cmd.arg("-f").arg(&file);
                     cmd.spawn()?.wait()?;
                 }
+                DbCommands::Seed => {
+                    println!("{} Running seed script...", "🌱".bold());
+                    // Build then exec the project binary with CHOPIN_SEED=1 env var.
+                    // The project's main.rs should check this env var and call its
+                    // seed function before returning.
+                    let exit = std::process::Command::new("cargo")
+                        .args(["run", "--", "--seed"])
+                        .env("CHOPIN_SEED", "1")
+                        .status()?;
+                    if !exit.success() {
+                        anyhow::bail!("Seed script exited with status: {}", exit);
+                    }
+                    println!("{} Seed complete.", "✓".green().bold());
+                }
             }
         }
         Commands::Generate { command } => match command {
@@ -231,6 +257,10 @@ async fn main() -> Result<()> {
             GenerateCommands::Model { name, fields } => {
                 let project_dir = std::env::current_dir()?;
                 generate::generate_model(&project_dir, &name, &fields)?;
+            }
+            GenerateCommands::Scaffold { name, fields } => {
+                let project_dir = std::env::current_dir()?;
+                generate::generate_scaffold(&project_dir, &name, &fields)?;
             }
         },
         Commands::Check => {

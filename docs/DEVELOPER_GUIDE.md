@@ -142,19 +142,40 @@ fn main() {
 Chopin implements a natively synchronous, high-throughput Postgres connection via `chopin-pg`, overlaid with the zero-allocation `chopin-orm`.
 
 ### Worker-Local Pooling
-Because Chopin is Shared-Nothing, you should NOT use an `Arc<Mutex<Pool>>`. Rely on `thread_local!` to initialize a Postgres pool inside each worker thread seamlessly.
+Because Chopin is Shared-Nothing, you should NOT use an `Arc<Mutex<Pool>>`.  Use
+`chopin_pg::init_pool` + `Chopin::with_worker_init` — each worker thread gets its
+own isolated `PgPool` with zero synchronisation overhead.
 
 ```rust
-use chopin_pg::{PgPool, PgConfig};
-use std::cell::RefCell;
+fn main() {
+    Chopin::new()
+        .mount_all_routes()
+        .with_worker_init(|| {
+            chopin_pg::init_pool(
+                "postgres://user:pass@localhost/main",
+                10, // connections PER WORKER
+            ).expect("DB pool init failed");
+        })
+        .serve("0.0.0.0:8080")
+        .unwrap();
+}
+```
 
-thread_local! {
-    pub static DB: RefCell<PgPool> = RefCell::new(
-        PgPool::connect(
-            PgConfig::from_url("postgres://user:pass@localhost/main").unwrap(),
-            10 // 10 connections PER WORKER
-        ).expect("Database panic")
-    );
+Inside any handler, call `chopin_pg::pool()` — no argument passing or `DB.with`
+closures needed:
+
+```rust
+#[get("/products/:id")]
+fn show_product(ctx: Context) -> Response {
+    let id: i32 = match ctx.param_parse("id") {
+        Ok(v)  => v,
+        Err(r) => return r,
+    };
+    match Product::find_by_id(chopin_pg::pool(), id) {
+        Ok(Some(p)) => Response::json(&p),
+        Ok(None)    => Response::new(404),
+        Err(_)      => Response::new(500),
+    }
 }
 ```
 
@@ -167,25 +188,30 @@ For fine-grained control over updates, use `ActiveModel`. It tracks modified fie
 ```rust
 #[get("/products/:id")]
 fn update_price(ctx: Context) -> Response {
-    let id: i32 = ctx.param("id").unwrap().parse().unwrap();
-    
-    DB.with(|db| {
-        let mut pool = db.borrow_mut();
-        
-        // 1. Fetch existing model
-        let product = Product::find().filter(ProductColumn::id.eq(id)).one(&mut *pool).unwrap().unwrap();
-        
-        // 2. Wrap in ActiveModel
-        let mut active = ProductActiveModel::from(product);
-        
-        // 3. Set ONLY the fields that changed
-        active.set("price", 4000);
-        
-        // 4. Save - intelligently issues UPDATE or INSERT
-        active.save(&mut *pool).unwrap();
-    });
+    let id: i32 = match ctx.param_parse("id") {
+        Ok(v)  => v,
+        Err(r) => return r,
+    };
+    let pool = chopin_pg::pool();
 
-    Response::new(200)
+    // 1. Fetch existing model
+    let product = match Product::find_by_id(pool, id) {
+        Ok(Some(p)) => p,
+        Ok(None)    => return Response::new(404),
+        Err(_)      => return Response::new(500),
+    };
+
+    // 2. Wrap in ActiveModel
+    let mut active = ProductActiveModel::from(product);
+
+    // 3. Set ONLY the fields that changed
+    active.set("price", 4000);
+
+    // 4. Save - intelligently issues UPDATE or INSERT
+    match active.save(pool) {
+        Ok(_)  => Response::new(200),
+        Err(_) => Response::new(500),
+    }
 }
 ```
 

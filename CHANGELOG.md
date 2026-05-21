@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.31] — 2026-05-21
+
+### Added
+
+#### chopin-pg
+- **Thread-local pool API** — `chopin_pg::init_pool(url, size) -> PgResult<()>` initialises a per-thread `PgPool` (stored in a `Cell<*mut PgPool>` thread-local). `chopin_pg::pool() -> &'static mut PgPool` returns the pool with zero synchronisation cost. Designed to be called from `Chopin::with_worker_init`. Re-initialising replaces the old pool cleanly.
+
+#### chopin-core
+- **`ctx.param_parse::<T>()`** — typed path-parameter extraction on `Context`. Parses the raw segment with `std::str::FromStr`; returns `Err(400 Bad Request)` automatically when the parameter is absent or cannot be parsed. Eliminates `.unwrap()` / `parse().unwrap()` boilerplate in every handler.
+- **`Chopin::with_worker_init(f)`** — builder method that accepts a `Fn() + Send + Sync + 'static` closure and runs it once inside each spawned worker thread before the event loop starts. The idiomatic hook for `chopin_pg::init_pool` or any other per-thread resource initialisation. Mirrored on `Server::with_worker_init` for manual `Server` usage.
+
+#### chopin-macros
+- **`#[derive(IntoResponse)]`** — proc-macro derive for error enums. Each variant is annotated with `#[status(N)]` (defaults to `500` if absent); the macro generates `impl From<YourError> for chopin_core::http::Response`. Enables ergonomic `e.into()` conversion in handlers and `?` propagation in service functions.
+
+#### chopin-cli
+- **`chopin generate scaffold <Name> field:type …`** — generates a complete, production-ready CRUD resource: `#[derive(Model)]` struct, `Create`/`Update` DTOs, type-safe service layer (using `chopin_pg::pool()`), five REST handlers (index / show / create / update / destroy) wired with `ctx.param_parse`, an `#[derive(IntoResponse)]` error enum, and timestamped up/down migrations. No TODO stubs.
+- **`chopin db seed`** — runs seed data by invoking `cargo run -- --seed` with `CHOPIN_SEED=1`, following Chopin's synchronous binary model.
+
+---
+
 ## [0.5.27] — 2026-05-08
 
 ### Security

@@ -159,11 +159,23 @@ fn handler(ctx: Context) -> Response {
 }
 ```
 
-#### Reading path parameters
+#### Reading path parameters (typed)
+
+`ctx.param_parse::<T>()` parses the raw path segment via `FromStr` and returns `Err(400 Bad Request)` automatically if the segment is absent or cannot be parsed. Eliminates `.unwrap()` boilerplate for numeric IDs and other typed values.
 
 ```rust
-let id = ctx.param("id").unwrap_or("0");
+#[get("/posts/:id")]
+fn show_post(ctx: Context) -> Response {
+    let id: i32 = match ctx.param_parse("id") {
+        Ok(v)  => v,
+        Err(r) => return r,  // automatic 400
+    };
+    // id is now a typed i32 — no unwrap needed
+    Response::text(format!("post {}", id))
+}
 ```
+
+Works for any type implementing `std::str::FromStr`, including `i32`, `u64`, `f64`, `uuid::Uuid`, custom types, etc.
 
 #### Reading the raw body
 
@@ -835,11 +847,57 @@ Each `Part` exposes:
 Chopin ships with a synchronous, zero-dependency PostgreSQL driver (`chopin-pg`) and
 a derive-macro ORM (`chopin-orm`) that sits on top of it.
 
+### Thread-local pool API (recommended)
+
+The easiest way to wire up a database in a Chopin app is the built-in thread-local
+pool API combined with `Chopin::with_worker_init`.  Each worker thread gets its own
+`PgPool` — zero `Arc`, zero `Mutex`, no cross-thread contention.
+
+```rust
+use chopin_core::Chopin;
+
+fn main() {
+    Chopin::new()
+        .mount_all_routes()
+        .with_worker_init(|| {
+            chopin_pg::init_pool("postgres://user:pass@localhost/myapp", 10)
+                .expect("DB pool init failed");
+        })
+        .serve("0.0.0.0:8080")
+        .unwrap();
+}
+```
+
+Inside any handler, call `chopin_pg::pool()` to access the pool directly — no
+argument passing required:
+
+```rust
+use chopin_macros::get;
+use chopin_core::{Context, Response};
+
+#[get("/users/:id")]
+fn show_user(ctx: Context) -> Response {
+    let id: i32 = match ctx.param_parse("id") {
+        Ok(v)  => v,
+        Err(r) => return r,
+    };
+    match User::find_by_id(chopin_pg::pool(), id) {
+        Ok(Some(u)) => Response::json(&u),
+        Ok(None)    => Response::new(404),
+        Err(_)      => Response::new(500),
+    }
+}
+```
+
+`init_pool(url, pool_size)` must be called exactly once per thread (inside the
+`with_worker_init` closure).  Calling `chopin_pg::pool()` before `init_pool` panics
+with a clear message.
+
 ### Direct driver usage (`chopin-pg`)
 
 ```toml
 [dependencies]
-chopin-pg = "0.5.21"
+chopin-pg = "0.5.30"
 ```
 
 #### Connecting
@@ -996,6 +1054,106 @@ let outgoing = encode_frame(OPCODE_TEXT, b"hello", false);
 // High-level message type
 let msg = WsMessage::Text("hello".into());
 ```
+
+---
+
+## Error Handling with `#[derive(IntoResponse)]`
+
+Define your domain error type once and convert it to a `Response` automatically.
+Annotate each variant with `#[status(N)]` to declare its HTTP status code.
+
+```rust
+use chopin_macros::IntoResponse;
+
+#[derive(IntoResponse)]
+pub enum PostError {
+    #[status(404)] NotFound(i32),
+    #[status(422)] Validation(String),
+    #[status(500)] Db(chopin_orm::OrmError),
+}
+
+impl From<chopin_orm::OrmError> for PostError {
+    fn from(e: chopin_orm::OrmError) -> Self { PostError::Db(e) }
+}
+```
+
+The derive macro generates:
+
+```rust
+impl From<PostError> for chopin_core::http::Response {
+    fn from(e: PostError) -> Self {
+        match e {
+            PostError::NotFound(..)   => Response::new(404),
+            PostError::Validation(..) => Response::new(422),
+            PostError::Db(..)         => Response::new(500),
+        }
+    }
+}
+```
+
+Use it in handlers via `.into()` or `?`:
+
+```rust
+#[get("/posts/:id")]
+fn show_post(ctx: Context) -> Response {
+    let id: i32 = match ctx.param_parse("id") {
+        Ok(v)  => v,
+        Err(r) => return r,
+    };
+    match services::get_post(id) {
+        Ok(post) => Response::json(&post),
+        Err(e)   => e.into(),   // PostError → Response with correct status
+    }
+}
+```
+
+Variants without `#[status]` default to `500`.
+
+---
+
+## Code Generation (`chopin generate scaffold`)
+
+Generate a complete, fully-wired CRUD resource in one command:
+
+```bash
+chopin generate scaffold Post title:String body:text published:bool
+```
+
+This creates:
+
+```text
+src/apps/posts/
+  mod.rs        — public re-exports
+  models.rs     — Post, CreatePost, UpdatePost (with #[derive(Model)])
+  services.rs   — list / get / create / update / delete via chopin_pg::pool()
+  errors.rs     — PostError with #[derive(IntoResponse)]
+  handlers.rs   — 5 REST handlers (GET/POST/PUT/DELETE) fully wired
+migrations/20260521120000_create_posts/
+  up.sql        — CREATE TABLE posts (...)
+  down.sql      — DROP TABLE posts
+```
+
+All handlers use `ctx.param_parse`, all services use `chopin_pg::pool()`, and
+`PostError` converts to `Response` via `#[derive(IntoResponse)]` — no TODOs, no
+stubs. Wire it into your app in two steps:
+
+```rust
+// src/apps/mod.rs
+pub mod posts;
+
+// Then in main.rs (or wherever you configure Chopin):
+// Routes are auto-discovered via #[get]/#[post]/… inventory — nothing extra needed.
+```
+
+### Field types
+
+| CLI type | Rust type | SQL type |
+|---|---|---|
+| `String` / `text` / `string` | `String` | `TEXT NOT NULL` |
+| `i32` / `int` / `integer` | `i32` | `INTEGER NOT NULL` |
+| `i64` / `bigint` | `i64` | `BIGINT NOT NULL` |
+| `f64` / `float` | `f64` | `DOUBLE PRECISION NOT NULL` |
+| `bool` / `boolean` | `bool` | `BOOLEAN NOT NULL` |
 
 ---
 

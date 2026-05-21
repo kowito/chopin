@@ -41,6 +41,8 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 - **Radix Router**: Static paths, labeled parameters (`:id`), and wildcards (`*path`) with O(K) matching.
 - **Declarative Extractors**: `FromRequest` trait for automatic `Json<T>`, `Query<X>`, and custom extractor support.
 - **Route Macros**: `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`, `#[head]`, `#[options]`, `#[trace]`, `#[connect]` via `chopin-macros`; inventory-based auto-discovery with zero per-request cost.
+- **`ctx.param_parse::<T>()`**: Typed path-parameter extraction on `Context` — parses the raw segment with `FromStr`, returns `Err(400 Bad Request)` automatically on absent or unparseable values; eliminates `.unwrap()` boilerplate.
+- **`Chopin::with_worker_init(f)`**: Builder method that runs a closure once inside each spawned worker thread before the event loop starts — the idiomatic hook for `chopin_pg::init_pool()` or any other per-thread initialisation.
 - **Zero-Copy File Serving**: `Response::file(path)` via platform `sendfile` (Linux/macOS) with automatic MIME detection (~30 types).
 - **writev Body Flush**: Headers and body written in one `writev` syscall — no memcpy into the write buffer.
 - **Pre-Composed Middleware**: Chains resolved once at `finalize()`; zero `Arc::new` allocations on the hot path.
@@ -66,6 +68,7 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 - **LISTEN/NOTIFY**: Notification buffering during active query processing.
 - **Rich Type System**: 40+ OIDs — bool, int2/4/8, float4/8, text, varchar, bytea, char, oid, uuid, json, jsonb, date, time, timestamp, timestamptz, interval, numeric, inet, cidr, macaddr, macaddr8, point, line, lseg, box, path, polygon, circle, bit, varbit, int4/8/num/ts/tstz range types, and typed arrays.
 - **Connection Pool**: Worker-local `PgPool` with RAII `ConnectionGuard`, FIFO idle queue, `try_get()`/`get()` with configurable checkout timeout, and `PoolStats`.
+- **Thread-Local Pool API**: `chopin_pg::init_pool(url, size)` initialises a per-thread `PgPool`; `chopin_pg::pool()` returns a `&'static mut PgPool` with zero synchronisation cost — designed to be called from `Chopin::with_worker_init`. Re-initialising replaces the old pool cleanly.
 - **Error Classification**: Transient vs permanent errors for retry logic.
 - **Non-blocking I/O**: Sockets set non-blocking post-connect; poll-based reads/writes with configurable timeouts.
 
@@ -91,6 +94,7 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 - **Route macros**: `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`, `#[head]`, `#[options]`, `#[trace]`, `#[connect]` — register handlers via `inventory` at link time, zero runtime overhead.
 - **`#[require_role(ClaimsType, Role::Admin)]`**: Inline RBAC guard. Decodes the `Authorization: Bearer` token, verifies the role, and short-circuits with `401`/`403` — no boilerplate in the handler body.
 - **`#[require_scope(ClaimsType, "scope:name")]`**: Inline OAuth 2.0 scope guard. Same short-circuit pattern for `401`/`403`.
+- **`#[derive(IntoResponse)]`**: Derive macro for error enums. Annotate each variant with `#[status(N)]` to auto-generate `impl From<YourError> for Response` — enables `?` propagation from handlers and services.
 
   ```rust
   // Place auth guards ABOVE the route macro so they wrap the body first.
@@ -109,7 +113,9 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 - `chopin bench` — run benchmarks.
 - `chopin db` — database utilities.
 - `chopin generate app/handler/model` — code scaffolding (app modules, handler functions, model structs + migrations from field definitions).
+- `chopin generate scaffold <Name> field:type …` — generate a **complete CRUD resource** in one command: `#[derive(Model)]` struct, `Create`/`Update` DTOs, type-safe services using `chopin_pg::pool()`, REST handlers (index/show/create/update/destroy) wired with `ctx.param_parse`, an `#[derive(IntoResponse)]` error enum, and up/down migrations. No TODOs, no stubs — production-ready from the start.
 - `chopin generate auth` — scaffold a complete authentication module: `User` model, `Role` enum, `register`/`login`/`logout`/`refresh` handlers and services, `AuthError` domain type, and a `CREATE TABLE users` migration — all wired to `StandardClaims<Role>` and `PasswordHasher` out of the box.
+- `chopin db seed` — run seed data (via `CHOPIN_SEED=1 cargo run -- --seed`).
 - `chopin check` — architectural linter.
 - `chopin deploy docker` — optimized Dockerfile generation.
 - `chopin openapi` — scrape routes and emit OpenAPI 3.0 spec.
@@ -136,6 +142,37 @@ fn main() {
 }
 ```
 
+### With a database pool (thread-local, zero-Arc)
+
+```rust
+use chopin_core::{Chopin, Context, Response};
+use chopin_macros::get;
+
+#[get("/posts/:id")]
+fn show_post(ctx: Context) -> Response {
+    let id: i32 = match ctx.param_parse("id") {
+        Ok(v) => v,
+        Err(r) => return r,   // 400 Bad Request
+    };
+    match Post::find_by_id(chopin_pg::pool(), id) {
+        Ok(Some(post)) => Response::json(&post),
+        Ok(None)       => Response::new(404),
+        Err(_)         => Response::new(500),
+    }
+}
+
+fn main() {
+    Chopin::new()
+        .mount_all_routes()
+        .with_worker_init(|| {
+            chopin_pg::init_pool("postgres://localhost/myapp", 10)
+                .expect("DB pool init failed");
+        })
+        .serve("0.0.0.0:8080")
+        .unwrap();
+}
+```
+
 ## 🎹 CLI at a Glance
 
 The `chopin` CLI handles everything from project scaffolding to production deployment.
@@ -143,9 +180,12 @@ The `chopin` CLI handles everything from project scaffolding to production deplo
 ```bash
 cargo install chopin-cli
 chopin new my_app
-chopin dev          # Hot-reload development
-chopin check        # Architectural linter
-chopin openapi      # Generate spec
+chopin dev                                # hot-reload development
+chopin check                              # architectural linter
+chopin generate scaffold Post title:String body:text   # full CRUD resource
+chopin migrate up                         # run pending migrations
+chopin db seed                            # load seed data
+chopin openapi                            # generate OpenAPI spec
 ```
 
 ## 📊 Performance Benchmark

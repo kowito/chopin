@@ -76,3 +76,69 @@ pub use statement::Statement;
 #[cfg(feature = "tls")]
 pub use tls::SslMode;
 pub use types::{FromSql, PgValue, ToParam, ToSql, TypeRegistry, encode_inet_binary};
+
+// ─── Thread-local pool ───────────────────────────────────────────────────────
+//
+// Each worker thread maintains its own heap-allocated PgPool via a raw pointer
+// stored in a thread-local Cell.  There is no cross-thread synchronisation —
+// the Shared-Nothing architecture guarantees that only the owning thread ever
+// calls init_pool / pool.
+
+use std::cell::Cell;
+
+thread_local! {
+    /// Raw pointer to the per-thread PgPool. Null until `init_pool()` is called.
+    static POOL_PTR: Cell<*mut PgPool> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+/// Initialise the calling thread's connection pool from a Postgres URL.
+///
+/// Call this once per worker thread, typically inside
+/// [`Chopin::with_worker_init`](chopin_core::Chopin::with_worker_init):
+///
+/// ```rust,ignore
+/// Chopin::new()
+///     .with_worker_init(|| {
+///         chopin_pg::init_pool("postgres://user:pass@localhost/mydb", 4)
+///             .expect("pool init failed");
+///     })
+///     .mount_all_routes()
+///     .serve("0.0.0.0:8080")
+///     .unwrap();
+/// ```
+pub fn init_pool(url: &str, size: usize) -> PgResult<()> {
+    let config = connection::PgConfig::from_url(url)?;
+    let pg_pool = PgPool::connect_with_config(
+        config,
+        pool::PgPoolConfig::new().max_size(size).min_size(1),
+    )?;
+    let raw = Box::into_raw(Box::new(pg_pool));
+    // If a pool was already initialised on this thread (e.g. during hot reload),
+    // drop it cleanly before replacing.
+    let old = POOL_PTR.with(|p| p.replace(raw));
+    if !old.is_null() {
+        // SAFETY: old was allocated by a prior init_pool call on this same thread.
+        drop(unsafe { Box::from_raw(old) });
+    }
+    Ok(())
+}
+
+/// Return a mutable reference to the calling thread's [`PgPool`].
+///
+/// # Panics
+/// Panics with a clear message if [`init_pool`] has not been called on this thread.
+///
+/// # Safety
+/// The reference is valid for the lifetime of this thread. Thread-locals
+/// guarantee that only one thread can hold this reference at a time.
+pub fn pool() -> &'static mut PgPool {
+    let ptr = POOL_PTR.with(|p| p.get());
+    assert!(
+        !ptr.is_null(),
+        "chopin_pg: thread-local pool not initialized — \
+         call chopin_pg::init_pool(url, size) inside Chopin::with_worker_init(...)"
+    );
+    // SAFETY: ptr is a valid Box<PgPool> allocated in init_pool(), it lives for
+    // the duration of this thread, and thread-locals enforce single-threaded access.
+    unsafe { &mut *ptr }
+}

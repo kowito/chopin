@@ -288,6 +288,303 @@ pub struct {} {{
     Ok(())
 }
 
+/// Scaffold a complete, wired-up CRUD resource — model, migration, services,
+/// handlers, and errors — all with real ORM calls (no TODOs).
+///
+/// Usage: `chopin generate scaffold Post title:String body:String published:bool`
+///
+/// Generated layout:
+/// ```text
+/// src/apps/posts/
+///   mod.rs        — public API re-exports
+///   models.rs     — Post + CreatePost + UpdatePost structs
+///   services.rs   — list / get / create / update / delete via chopin_pg::pool()
+///   errors.rs     — PostError with #[derive(IntoResponse)]
+///   handlers.rs   — 5 REST handlers wired to services
+/// migrations/<ts>_create_posts/
+///   up.sql / down.sql
+/// ```
+pub fn generate_scaffold(project_dir: &Path, name: &str, field_defs: &[String]) -> Result<()> {
+    let struct_name = to_pascal_case(name);
+    let snake_name = to_snake_case(name);
+    let table_name = snake_name.clone() + "s";
+    let route_base = format!("/{}", table_name);
+
+    // ── Parse fields ────────────────────────────────────────────────────
+    let mut fields: Vec<(String, &'static str, &'static str)> = Vec::new();
+    for def in field_defs {
+        let parts: Vec<&str> = def.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("Invalid field '{}'. Expected name:type", def);
+        }
+        let (rust_ty, sql_ty) = map_field_type(parts[1]);
+        fields.push((parts[0].to_string(), rust_ty, sql_ty));
+    }
+
+    let app_dir = project_dir.join("src/apps").join(&snake_name);
+    if app_dir.exists() {
+        anyhow::bail!("App '{}' already exists at {}", snake_name, app_dir.display());
+    }
+    std::fs::create_dir_all(&app_dir)?;
+
+    // ── mod.rs ──────────────────────────────────────────────────────────
+    std::fs::write(
+        app_dir.join("mod.rs"),
+        "pub mod errors;\npub mod handlers;\npub mod models;\npub mod services;\n",
+    )?;
+
+    // ── models.rs ───────────────────────────────────────────────────────
+    let field_decls: String = fields
+        .iter()
+        .map(|(n, t, _)| format!("    pub {n}: {t},\n"))
+        .collect();
+
+    let create_decls: String = fields
+        .iter()
+        .map(|(n, t, _)| format!("    pub {n}: {t},\n"))
+        .collect();
+
+    let update_decls: String = fields
+        .iter()
+        .map(|(n, t, _)| {
+            // Wrap all fields in Option for partial updates
+            let inner = if t.starts_with("Option<") {
+                (*t).to_string()
+            } else {
+                format!("Option<{t}>")
+            };
+            format!("    pub {n}: {inner},\n")
+        })
+        .collect();
+
+    let models_rs = format!(
+        r#"use chopin_orm::Model;
+use chopin_macros::IntoResponse;
+use serde::{{Deserialize, Serialize}};
+
+#[derive(Debug, Clone, Model, Serialize, Deserialize)]
+#[model(table_name = "{table_name}")]
+pub struct {struct_name} {{
+    #[model(primary_key, generated)]
+    pub id: i32,
+{field_decls}}}
+
+#[derive(Debug, Deserialize)]
+pub struct Create{struct_name} {{
+{create_decls}}}
+
+#[derive(Debug, Deserialize)]
+pub struct Update{struct_name} {{
+{update_decls}}}
+"#
+    );
+    std::fs::write(app_dir.join("models.rs"), &models_rs)?;
+
+    // ── errors.rs ───────────────────────────────────────────────────────
+    let errors_rs = format!(
+        r#"use chopin_macros::IntoResponse;
+
+#[derive(IntoResponse)]
+pub enum {struct_name}Error {{
+    #[status(404)]
+    NotFound(i32),
+    #[status(422)]
+    Validation(String),
+    #[status(500)]
+    Db(chopin_orm::OrmError),
+}}
+
+impl From<chopin_orm::OrmError> for {struct_name}Error {{
+    fn from(e: chopin_orm::OrmError) -> Self {{
+        {struct_name}Error::Db(e)
+    }}
+}}
+"#
+    );
+    std::fs::write(app_dir.join("errors.rs"), &errors_rs)?;
+
+    // ── services.rs ─────────────────────────────────────────────────────
+    // Build the set/field lines for create
+    let create_fields: String = fields
+        .iter()
+        .map(|(n, _, _)| format!("    m.set(\"{n}\", body.{n}.into());\n"))
+        .collect();
+
+    // Build the set/field lines for update (only if Some)
+    let update_fields: String = fields
+        .iter()
+        .map(|(n, _, _)| {
+            format!(
+                "    if let Some(v) = body.{n} {{ m.set(\"{n}\", v.into()); }}\n"
+            )
+        })
+        .collect();
+
+    // Initial struct literal for create (id=0 for generated PK)
+    let create_struct_fields: String = fields
+        .iter()
+        .map(|(n, t, _)| {
+            let default = if t.starts_with("Option<") {
+                "None".to_string()
+            } else if *t == "bool" {
+                "false".to_string()
+            } else if *t == "String" {
+                "body.".to_string() + n + ".clone()"
+            } else {
+                "body.".to_string() + n
+            };
+            format!("            {n}: {default},\n")
+        })
+        .collect();
+
+    let services_rs = format!(
+        r#"use chopin_orm::{{ActiveModel, Model}};
+use super::errors::{struct_name}Error;
+use super::models::{{{struct_name}, Create{struct_name}, Update{struct_name}}};
+
+pub fn list() -> Result<Vec<{struct_name}>, {struct_name}Error> {{
+    {struct_name}::find_all(chopin_pg::pool()).map_err({struct_name}Error::Db)
+}}
+
+pub fn get(id: i32) -> Result<{struct_name}, {struct_name}Error> {{
+    {struct_name}::find_by_id(chopin_pg::pool(), id)?
+        .ok_or({struct_name}Error::NotFound(id))
+}}
+
+pub fn create(body: Create{struct_name}) -> Result<{struct_name}, {struct_name}Error> {{
+    let model = {struct_name} {{
+        id: 0,
+{create_struct_fields}    }};
+    let mut m = ActiveModel::new_insert(model);
+{create_fields}    m.save(chopin_pg::pool()).map_err({struct_name}Error::Db)
+}}
+
+pub fn update(id: i32, body: Update{struct_name}) -> Result<{struct_name}, {struct_name}Error> {{
+    let existing = get(id)?;
+    let mut m = ActiveModel::from_model(existing);
+{update_fields}    m.save(chopin_pg::pool()).map_err({struct_name}Error::Db)
+}}
+
+pub fn delete(id: i32) -> Result<(), {struct_name}Error> {{
+    {struct_name}::delete_by_id(chopin_pg::pool(), id)
+        .map(|_| ())
+        .map_err({struct_name}Error::Db)
+}}
+"#
+    );
+    std::fs::write(app_dir.join("services.rs"), &services_rs)?;
+
+    // ── handlers.rs ─────────────────────────────────────────────────────
+    let handlers_rs = format!(
+        r#"use chopin_core::{{Context, Response}};
+use chopin_core::extract::Json;
+use chopin_macros::{{delete, get, post, put}};
+use super::models::{{Create{struct_name}, Update{struct_name}}};
+use super::services;
+
+#[get("{route_base}")]
+pub fn index(_ctx: Context) -> Response {{
+    match services::list() {{
+        Ok(items) => Response::json(&items),
+        Err(e) => e.into(),
+    }}
+}}
+
+#[get("{route_base}/:id")]
+pub fn show(ctx: Context) -> Response {{
+    let id: i32 = match ctx.param_parse("id") {{
+        Ok(v) => v,
+        Err(r) => return r,
+    }};
+    match services::get(id) {{
+        Ok(item) => Response::json(&item),
+        Err(e) => e.into(),
+    }}
+}}
+
+#[post("{route_base}")]
+pub fn create(ctx: Context) -> Response {{
+    let Json(body) = match ctx.extract::<Json<Create{struct_name}>>() {{
+        Ok(v) => v,
+        Err(r) => return r,
+    }};
+    match services::create(body) {{
+        Ok(item) => {{
+            let mut r = Response::json(&item);
+            r.status = 201;
+            r
+        }}
+        Err(e) => e.into(),
+    }}
+}}
+
+#[put("{route_base}/:id")]
+pub fn update(ctx: Context) -> Response {{
+    let id: i32 = match ctx.param_parse("id") {{
+        Ok(v) => v,
+        Err(r) => return r,
+    }};
+    let Json(body) = match ctx.extract::<Json<Update{struct_name}>>() {{
+        Ok(v) => v,
+        Err(r) => return r,
+    }};
+    match services::update(id, body) {{
+        Ok(item) => Response::json(&item),
+        Err(e) => e.into(),
+    }}
+}}
+
+#[delete("{route_base}/:id")]
+pub fn destroy(ctx: Context) -> Response {{
+    let id: i32 = match ctx.param_parse("id") {{
+        Ok(v) => v,
+        Err(r) => return r,
+    }};
+    match services::delete(id) {{
+        Ok(_) => Response::new(204),
+        Err(e) => e.into(),
+    }}
+}}
+"#
+    );
+    std::fs::write(app_dir.join("handlers.rs"), &handlers_rs)?;
+
+    // ── migration ───────────────────────────────────────────────────────
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
+    let migration_name = format!("{}_create_{}", timestamp, table_name);
+    let migrations_dir = project_dir.join("migrations").join(&migration_name);
+    std::fs::create_dir_all(&migrations_dir)?;
+
+    let mut up_sql = format!(
+        "CREATE TABLE IF NOT EXISTS {table_name} (\n    id SERIAL PRIMARY KEY"
+    );
+    for (fname, _, sql_ty) in &fields {
+        up_sql.push_str(&format!(",\n    {fname} {sql_ty}"));
+    }
+    up_sql.push_str("\n);\n");
+    std::fs::write(migrations_dir.join("up.sql"), &up_sql)?;
+    std::fs::write(
+        migrations_dir.join("down.sql"),
+        format!("DROP TABLE IF EXISTS {table_name};\n"),
+    )?;
+
+    // ── summary ─────────────────────────────────────────────────────────
+    println!("{} Scaffold generated: {}", "✓".green().bold(), struct_name.cyan());
+    println!("  src/apps/{}/", snake_name);
+    println!("    ├── mod.rs");
+    println!("    ├── models.rs      ({struct_name}, Create{struct_name}, Update{struct_name})");
+    println!("    ├── services.rs    (list / get / create / update / delete)");
+    println!("    ├── errors.rs      ({struct_name}Error with #[derive(IntoResponse)])");
+    println!("    └── handlers.rs    (GET/POST/PUT/DELETE — fully wired)");
+    println!("  migrations/{migration_name}/up.sql");
+    println!();
+    println!("  Next steps:");
+    println!("    1. Add {} to your src/apps/mod.rs", format!("pub mod {snake_name};").yellow());
+    println!("    2. Run {}", "chopin migrate up".green());
+
+    Ok(())
+}
+
 /// Scaffold a complete authentication module with User model, CRUD handlers,
 /// business-logic services, domain errors, and a database migration.
 ///

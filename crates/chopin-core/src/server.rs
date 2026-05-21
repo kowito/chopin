@@ -32,6 +32,7 @@ use std::thread;
 pub struct Chopin {
     router: Router,
     max_request_size: Option<usize>,
+    worker_init: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Default for Chopin {
@@ -46,7 +47,27 @@ impl Chopin {
         Self {
             router: Router::new(),
             max_request_size: None,
+            worker_init: None,
         }
+    }
+
+    /// Register a callback that runs once on every worker thread at startup.
+    ///
+    /// Use this to initialise per-thread resources such as database pools:
+    ///
+    /// ```rust,ignore
+    /// Chopin::new()
+    ///     .with_worker_init(|| {
+    ///         chopin_pg::init_pool("postgres://user:pass@localhost/mydb", 4)
+    ///             .expect("pool init failed");
+    ///     })
+    ///     .mount_all_routes()
+    ///     .serve("0.0.0.0:8080")
+    ///     .unwrap();
+    /// ```
+    pub fn with_worker_init(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.worker_init = Some(Arc::new(f));
+        self
     }
 
     /// Discover and register all routes annotated with `#[get]`, `#[post]`, etc.
@@ -143,6 +164,9 @@ impl Chopin {
         if let Some(size) = self.max_request_size {
             server = server.with_max_request_size(size);
         }
+        if let Some(init) = self.worker_init {
+            server = server.with_worker_init_arc(init);
+        }
         server.serve(self.router)
     }
 
@@ -159,6 +183,9 @@ impl Chopin {
         let mut server = Server::bind(host_port).with_tls(cert_path, key_path)?;
         if let Some(size) = self.max_request_size {
             server = server.with_max_request_size(size);
+        }
+        if let Some(init) = self.worker_init {
+            server = server.with_worker_init_arc(init);
         }
         server.serve(self.router)
     }
@@ -194,6 +221,9 @@ pub struct Server {
     /// Maximum allowed request size (headers + body) in bytes.
     /// `None` means use the worker default (1 MiB / env override).
     max_request_size: Option<usize>,
+    /// Optional callback invoked once per worker thread at startup.
+    /// Used to initialise per-thread resources (e.g. database pools).
+    worker_init: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(feature = "tls")]
     tls_config: Option<crate::tls::TlsServerConfig>,
 }
@@ -206,9 +236,34 @@ impl Server {
             workers: num_cpus::get(),
             max_pipeline_depth: 0,
             max_request_size: None,
+            worker_init: None,
             #[cfg(feature = "tls")]
             tls_config: None,
         }
+    }
+
+    /// Register a callback that runs once on every worker thread at startup.
+    ///
+    /// Ideal for initialising per-thread resources such as database pools:
+    ///
+    /// ```rust,ignore
+    /// Server::bind("0.0.0.0:8080")
+    ///     .with_worker_init(|| {
+    ///         chopin_pg::init_pool("postgres://user:pass@localhost/mydb", 4)
+    ///             .expect("pool init failed");
+    ///     })
+    ///     .serve(router)
+    ///     .unwrap();
+    /// ```
+    pub fn with_worker_init(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.worker_init = Some(Arc::new(f));
+        self
+    }
+
+    /// Internal: accept a pre-boxed init fn (used by `Chopin::serve`).
+    pub(crate) fn with_worker_init_arc(mut self, f: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.worker_init = Some(f);
+        self
     }
 
     /// Set the number of worker threads (defaults to `num_cpus::get()`).
@@ -319,12 +374,18 @@ impl Server {
 
             let max_pipeline_depth_clone = self.max_pipeline_depth;
             let max_request_size_clone = self.max_request_size;
+            let worker_init_clone = self.worker_init.clone();
 
             let handle = thread::Builder::new()
                 .name(format!("chopin-worker-{}", i))
                 .spawn(move || {
                     if let Some(id) = core_id {
                         core_affinity::set_for_current(id);
+                    }
+
+                    // Invoke the user-supplied per-thread init callback (e.g. db pool init).
+                    if let Some(ref init_fn) = worker_init_clone {
+                        init_fn();
                     }
 
                     tracing::debug!(worker_id = i, "Worker thread started");
