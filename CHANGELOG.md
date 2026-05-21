@@ -21,7 +21,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.5.30] — 2026-05-21
+
+### Added
+
+#### chopin-auth
+- **`StandardClaims<R>`** — generic, batteries-included claims struct (`sub`, `jti`, `exp`, `iat`, `role: Option<R>`, `scope: Option<String>`). Implements `HasJti`, `RoleCheck<R>`, and `ScopeCheck` out of the box. `StandardClaims::new(sub, ttl_secs, role, scope)` auto-generates a unique `jti` (atomic counter + unix timestamp) and sets `iat`/`exp`. Eliminates claims boilerplate for the vast majority of projects.
+
+#### chopin-macros
+- **`#[require_role(ClaimsType, role_expr)]`** — inline RBAC guard attribute macro. Decodes the `Authorization: Bearer` token via `GLOBAL_JWT_MANAGER`, checks the role with `RoleCheck::has_role`, and short-circuits with `401`/`403` before the handler body executes. Zero heap allocations — no closures, no middleware chain overhead.
+- **`#[require_scope(ClaimsType, "scope")]`** — inline OAuth 2.0 scope guard. Same pattern as `#[require_role]` but delegates to `ScopeCheck::has_scope`.
+- Both guards must be placed **above** the route macro (`#[get]`, `#[post]`, …) so the wrapper is applied before the handler is registered in the inventory.
+
+#### chopin-cli
+- **`chopin generate auth`** — scaffolds a complete authentication module: `src/apps/auth/{mod,models,handlers,services,errors}.rs` and a `migrations/<ts>_create_users/{up,down}.sql` migration. Pre-wired to `StandardClaims<Role>` and `PasswordHasher`; DB query stubs marked with `TODO` comments.
+
+---
+
+## [0.5.29] — 2026-05-21
 
 ### Added
 
