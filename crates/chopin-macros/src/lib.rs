@@ -201,7 +201,7 @@ pub fn require_role(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    func.block = Box::new(new_block);
+    *func.block = new_block;
     TokenStream::from(quote! { #func })
 }
 
@@ -273,7 +273,7 @@ pub fn require_scope(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    func.block = Box::new(new_block);
+    *func.block = new_block;
     TokenStream::from(quote! { #func })
 }
 
