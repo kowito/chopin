@@ -40,7 +40,7 @@ use crate::http::{Context, Response};
 use crate::router::BoxedHandler;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Instant;
 
 // ── Global configuration ──────────────────────────────────────────────────────
@@ -92,7 +92,10 @@ struct Bucket {
 
 impl Bucket {
     fn new(capacity: f64) -> Self {
-        Self { tokens: capacity, last_refill: Instant::now() }
+        Self {
+            tokens: capacity,
+            last_refill: Instant::now(),
+        }
     }
 
     fn try_consume(&mut self, capacity: f64, window_secs: f64) -> bool {
@@ -117,7 +120,9 @@ impl Bucket {
     }
 
     fn is_idle(&self, capacity: f64, window_secs: f64) -> bool {
-        let elapsed = Instant::now().duration_since(self.last_refill).as_secs_f64();
+        let elapsed = Instant::now()
+            .duration_since(self.last_refill)
+            .as_secs_f64();
         self.tokens + elapsed * (capacity / window_secs) >= capacity
     }
 }
@@ -212,7 +217,11 @@ pub fn per_ip(ctx: Context, next: BoxedHandler) -> Response {
         evict_if_full(&mut map, capacity, window_secs);
         let bucket = map.entry(ip_key).or_insert_with(|| Bucket::new(capacity));
         let allowed = bucket.try_consume(capacity, window_secs);
-        let retry = if allowed { 0 } else { bucket.retry_after_secs(capacity, window_secs) };
+        let retry = if allowed {
+            0
+        } else {
+            bucket.retry_after_secs(capacity, window_secs)
+        };
         (allowed, retry)
     });
 
@@ -247,7 +256,10 @@ mod tests {
     fn test_bucket_refills_over_time() {
         let capacity = 10.0;
         let window = 1.0;
-        let mut b = Bucket { tokens: 0.0, last_refill: Instant::now() };
+        let mut b = Bucket {
+            tokens: 0.0,
+            last_refill: Instant::now(),
+        };
         b.last_refill = Instant::now() - Duration::from_millis(500);
         // 0.5s × 10 tokens/s = 5 tokens refilled; consume all 5
         for _ in 0..5 {
@@ -339,7 +351,9 @@ mod tests {
             let mut key = [0u8; 16];
             key[12..16].copy_from_slice(&i.to_be_bytes());
             let mut b = Bucket::new(capacity);
-            for _ in 0..capacity as usize { b.try_consume(capacity, window); }
+            for _ in 0..capacity as usize {
+                b.try_consume(capacity, window);
+            }
             map.insert(key, b); // all tokens consumed = not idle
         }
         let before = map.len();

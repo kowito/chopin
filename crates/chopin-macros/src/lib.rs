@@ -47,6 +47,206 @@ pub fn connect(attr: TokenStream, item: TokenStream) -> TokenStream {
     generate_route("Connect", attr, item)
 }
 
+// ─── #[require_role] ──────────────────────────────────────────────────────────
+
+/// Inline role guard that wraps a Chopin handler with a JWT + RBAC check.
+///
+/// Returns `401` for missing/invalid tokens and `403` for insufficient role.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use chopin_macros::{get, require_role};
+/// use chopin_auth::{Role, StandardClaims};
+///
+/// #[derive(Debug, Clone, PartialEq)]
+/// enum MyRole { Admin, User }
+/// impl Role for MyRole {}
+///
+/// type Claims = StandardClaims<MyRole>;
+///
+/// // Place #[require_role] ABOVE #[get] so it wraps the handler body
+/// // before the route is registered in the inventory.
+/// #[require_role(Claims, MyRole::Admin)]
+/// #[get("/admin/dashboard")]
+/// pub fn admin_dashboard(ctx: chopin_core::Context) -> chopin_core::Response {
+///     ctx.json(&"welcome, admin")
+/// }
+/// ```
+///
+/// # Requirements
+/// - `chopin_auth` must be a dependency of the consuming crate.
+/// - [`chopin_auth::init_jwt_manager`] must be called before the server starts.
+/// - The claims type must implement [`chopin_auth::HasJti`].
+/// - The claims type must implement [`chopin_auth::middleware::RoleCheck<R>`]
+///   for the given role type (satisfied automatically by [`chopin_auth::StandardClaims<R>`]).
+#[proc_macro_attribute]
+pub fn require_role(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as RequireRoleArgs);
+    let mut func = parse_macro_input!(item as ItemFn);
+
+    let claims_type = &args.claims_type;
+    let role_expr = &args.role_expr;
+    let ctx_ident = first_param_ident(&func);
+
+    let original_stmts = func.block.stmts.clone();
+
+    let new_block: syn::Block = syn::parse_quote! {
+        {
+            let __chopin_token = (0..#ctx_ident.req.header_count as usize)
+                .find_map(|__ci| {
+                    let (__ck, __cv) = #ctx_ident.req.headers[__ci];
+                    if __ck.eq_ignore_ascii_case("Authorization") {
+                        __cv.strip_prefix("Bearer ")
+                    } else {
+                        None
+                    }
+                });
+            let Some(__chopin_token) = __chopin_token else {
+                return ::chopin_core::http::Response::new(401);
+            };
+            let Some(__chopin_mgr) = ::chopin_auth::extractor::GLOBAL_JWT_MANAGER.get() else {
+                return ::chopin_core::http::Response::server_error();
+            };
+            let __chopin_claims = match __chopin_mgr.decode::<#claims_type>(__chopin_token) {
+                ::std::result::Result::Ok(__c) => __c,
+                ::std::result::Result::Err(_) => {
+                    return ::chopin_core::http::Response::new(401);
+                }
+            };
+            if !::chopin_auth::middleware::RoleCheck::has_role(&__chopin_claims, &#role_expr) {
+                return ::chopin_core::http::Response::new(403);
+            }
+            #(#original_stmts)*
+        }
+    };
+
+    func.block = Box::new(new_block);
+    TokenStream::from(quote! { #func })
+}
+
+// ─── #[require_scope] ─────────────────────────────────────────────────────────
+
+/// Inline OAuth 2.0 scope guard that wraps a Chopin handler with a JWT + scope check.
+///
+/// Returns `401` for missing/invalid tokens and `403` for insufficient scope.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use chopin_macros::{get, require_scope};
+/// use chopin_auth::StandardClaims;
+///
+/// type Claims = StandardClaims<()>;
+///
+/// // Place #[require_scope] ABOVE #[get].
+/// #[require_scope(Claims, "read:reports")]
+/// #[get("/reports")]
+/// pub fn list_reports(ctx: chopin_core::Context) -> chopin_core::Response {
+///     ctx.json(&"reports")
+/// }
+/// ```
+///
+/// # Requirements
+/// - `chopin_auth` must be a dependency of the consuming crate.
+/// - [`chopin_auth::init_jwt_manager`] must be called before the server starts.
+/// - The claims type must implement [`chopin_auth::middleware::ScopeCheck`]
+///   (satisfied automatically by [`chopin_auth::StandardClaims<R>`]).
+#[proc_macro_attribute]
+pub fn require_scope(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as RequireScopeArgs);
+    let mut func = parse_macro_input!(item as ItemFn);
+
+    let claims_type = &args.claims_type;
+    let scope = &args.scope;
+    let ctx_ident = first_param_ident(&func);
+
+    let original_stmts = func.block.stmts.clone();
+
+    let new_block: syn::Block = syn::parse_quote! {
+        {
+            let __chopin_token = (0..#ctx_ident.req.header_count as usize)
+                .find_map(|__ci| {
+                    let (__ck, __cv) = #ctx_ident.req.headers[__ci];
+                    if __ck.eq_ignore_ascii_case("Authorization") {
+                        __cv.strip_prefix("Bearer ")
+                    } else {
+                        None
+                    }
+                });
+            let Some(__chopin_token) = __chopin_token else {
+                return ::chopin_core::http::Response::new(401);
+            };
+            let Some(__chopin_mgr) = ::chopin_auth::extractor::GLOBAL_JWT_MANAGER.get() else {
+                return ::chopin_core::http::Response::server_error();
+            };
+            let __chopin_claims = match __chopin_mgr.decode::<#claims_type>(__chopin_token) {
+                ::std::result::Result::Ok(__c) => __c,
+                ::std::result::Result::Err(_) => {
+                    return ::chopin_core::http::Response::new(401);
+                }
+            };
+            if !::chopin_auth::middleware::ScopeCheck::has_scope(&__chopin_claims, #scope) {
+                return ::chopin_core::http::Response::new(403);
+            }
+            #(#original_stmts)*
+        }
+    };
+
+    func.block = Box::new(new_block);
+    TokenStream::from(quote! { #func })
+}
+
+// ─── Argument parsers ─────────────────────────────────────────────────────────
+
+struct RequireRoleArgs {
+    claims_type: syn::Type,
+    role_expr: syn::Expr,
+}
+
+impl syn::parse::Parse for RequireRoleArgs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let claims_type = input.parse::<syn::Type>()?;
+        input.parse::<syn::Token![,]>()?;
+        let role_expr = input.parse::<syn::Expr>()?;
+        Ok(RequireRoleArgs {
+            claims_type,
+            role_expr,
+        })
+    }
+}
+
+struct RequireScopeArgs {
+    claims_type: syn::Type,
+    scope: syn::LitStr,
+}
+
+impl syn::parse::Parse for RequireScopeArgs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let claims_type = input.parse::<syn::Type>()?;
+        input.parse::<syn::Token![,]>()?;
+        let scope = input.parse::<syn::LitStr>()?;
+        Ok(RequireScopeArgs { claims_type, scope })
+    }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Extract the identifier of the first function parameter (typically `ctx`).
+fn first_param_ident(func: &ItemFn) -> proc_macro2::Ident {
+    func.sig
+        .inputs
+        .first()
+        .and_then(|arg| match arg {
+            syn::FnArg::Typed(pt) => match pt.pat.as_ref() {
+                syn::Pat::Ident(pi) => Some(pi.ident.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap_or_else(|| syn::Ident::new("ctx", proc_macro2::Span::call_site()))
+}
+
 fn generate_route(method: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     let path = parse_macro_input!(attr as syn::LitStr).value();
     let input_fn = parse_macro_input!(item as ItemFn);

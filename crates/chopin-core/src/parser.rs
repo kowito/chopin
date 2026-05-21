@@ -21,7 +21,10 @@ pub enum ParseError {
 /// [`MAX_REQUEST_SIZE`] for the 1 MiB default or a custom value configured via
 /// [`Server::with_max_request_size`].
 #[inline(always)]
-pub fn parse_request(buf_mut: &mut [u8], max_size: usize) -> Result<(Request<'_>, usize), ParseError> {
+pub fn parse_request(
+    buf_mut: &mut [u8],
+    max_size: usize,
+) -> Result<(Request<'_>, usize), ParseError> {
     let ptr = buf_mut.as_mut_ptr();
     let len = buf_mut.len();
     let buf = &*buf_mut;
@@ -283,7 +286,10 @@ mod tests {
             format!("POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
         req.extend_from_slice(&body);
 
-        assert!(matches!(parse_request(&mut req, MAX_REQUEST_SIZE), Err(ParseError::TooLarge)));
+        assert!(matches!(
+            parse_request(&mut req, MAX_REQUEST_SIZE),
+            Err(ParseError::TooLarge)
+        ));
     }
 
     #[test]

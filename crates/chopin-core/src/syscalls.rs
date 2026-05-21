@@ -512,7 +512,12 @@ pub fn get_peer_addr(fd: c_int) -> [u8; 16] {
     unsafe {
         let mut storage: libc::sockaddr_storage = std::mem::zeroed();
         let mut addrlen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-        if libc::getpeername(fd, &mut storage as *mut _ as *mut libc::sockaddr, &mut addrlen) < 0 {
+        if libc::getpeername(
+            fd,
+            &mut storage as *mut _ as *mut libc::sockaddr,
+            &mut addrlen,
+        ) < 0
+        {
             return [0u8; 16];
         }
         match storage.ss_family as i32 {

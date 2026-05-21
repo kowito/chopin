@@ -288,9 +288,389 @@ pub struct {} {{
     Ok(())
 }
 
+/// Scaffold a complete authentication module with User model, CRUD handlers,
+/// business-logic services, domain errors, and a database migration.
+///
+/// Generated layout:
+/// ```text
+/// src/apps/auth/
+///   mod.rs        — public API re-exports
+///   models.rs     — User struct (id, email, password_hash, role, created_at)
+///   handlers.rs   — POST /auth/register, POST /auth/login,
+///                   POST /auth/logout,   POST /auth/refresh
+///   services.rs   — register(), login(), issue_tokens()
+///   errors.rs     — AuthError (InvalidCredentials, UserNotFound, …)
+/// migrations/<ts>_create_users/
+///   up.sql        — CREATE TABLE users …
+///   down.sql      — DROP TABLE users
+/// ```
+pub fn generate_auth(project_dir: &Path) -> Result<()> {
+    let auth_dir = project_dir.join("src/apps/auth");
+
+    if auth_dir.exists() {
+        anyhow::bail!("Auth module already exists at {}", auth_dir.display());
+    }
+
+    std::fs::create_dir_all(&auth_dir)?;
+
+    // ─── mod.rs ───────────────────────────────────────────────────────────
+    let mod_rs = r#"pub mod errors;
+pub mod handlers;
+pub mod models;
+pub mod services;
+"#;
+    std::fs::write(auth_dir.join("mod.rs"), mod_rs)?;
+
+    // ─── models.rs ────────────────────────────────────────────────────────
+    let models_rs = r#"use serde::{Deserialize, Serialize};
+
+/// Role enum for role-based access control.
+///
+/// Implement [`chopin_auth::Role`] so it works with
+/// `StandardClaims<Role>` and `#[require_role]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Admin,
+    User,
+}
+
+impl chopin_auth::Role for Role {}
+
+/// Persisted user record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub id: i64,
+    pub email: String,
+    #[serde(skip_serializing)]
+    pub password_hash: String,
+    pub role: Role,
+    pub created_at: String,
+}
+
+/// Payload for `POST /auth/register`.
+#[derive(Debug, Deserialize)]
+pub struct RegisterRequest {
+    pub email: String,
+    pub password: String,
+}
+
+/// Payload for `POST /auth/login`.
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+/// Response returned after a successful login or token refresh.
+#[derive(Debug, Serialize)]
+pub struct TokenResponse {
+    pub access_token: String,
+    pub token_type: &'static str,
+    pub expires_in: u64,
+}
+"#;
+    std::fs::write(auth_dir.join("models.rs"), models_rs)?;
+
+    // ─── errors.rs ────────────────────────────────────────────────────────
+    let errors_rs = r#"use std::fmt;
+
+/// Domain errors for the auth module.
+#[derive(Debug)]
+pub enum AuthError {
+    /// Email is already registered.
+    EmailTaken,
+    /// No user found with that email.
+    UserNotFound,
+    /// Password does not match the stored hash.
+    InvalidCredentials,
+    /// JWT encoding / decoding failed.
+    Token(String),
+    /// Underlying database error.
+    Database(String),
+}
+
+impl fmt::Display for AuthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmailTaken => f.write_str("email already registered"),
+            Self::UserNotFound => f.write_str("user not found"),
+            Self::InvalidCredentials => f.write_str("invalid credentials"),
+            Self::Token(e) => write!(f, "token error: {e}"),
+            Self::Database(e) => write!(f, "database error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for AuthError {}
+"#;
+    std::fs::write(auth_dir.join("errors.rs"), errors_rs)?;
+
+    // ─── services.rs ──────────────────────────────────────────────────────
+    let services_rs = r#"//! Business logic for registration, login, and token issuance.
+use chopin_auth::{PasswordHasher, StandardClaims};
+use chopin_auth::extractor::GLOBAL_JWT_MANAGER;
+
+use super::errors::AuthError;
+use super::models::{LoginRequest, RegisterRequest, Role, TokenResponse, User};
+
+/// Access token lifetime in seconds (1 hour).
+pub const ACCESS_TTL: u64 = 3600;
+
+/// Register a new user.
+///
+/// Hashes the password with Argon2 and inserts the record.
+/// Returns the created [`User`] on success.
+///
+/// # Errors
+/// - [`AuthError::EmailTaken`] if the email is already in use.
+/// - [`AuthError::Database`] on persistence failure.
+pub fn register(
+    _db: &mut impl chopin_pg::connection::Execute,
+    req: RegisterRequest,
+) -> Result<User, AuthError> {
+    let hash = PasswordHasher::interactive()
+        .hash(req.password.as_bytes())
+        .map_err(|e| AuthError::Database(e.to_string()))?;
+
+    // TODO: INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'user')
+    //       returning id, created_at — replace the placeholder below.
+    let user = User {
+        id: 1,
+        email: req.email,
+        password_hash: hash,
+        role: Role::User,
+        created_at: "now".into(),
+    };
+
+    Ok(user)
+}
+
+/// Verify credentials and return a signed access token.
+///
+/// # Errors
+/// - [`AuthError::UserNotFound`] if no account exists for that email.
+/// - [`AuthError::InvalidCredentials`] if the password is wrong.
+/// - [`AuthError::Token`] if JWT signing fails.
+pub fn login(
+    _db: &mut impl chopin_pg::connection::Execute,
+    req: LoginRequest,
+) -> Result<TokenResponse, AuthError> {
+    // TODO: SELECT * FROM users WHERE email = $1 — replace the placeholder.
+    let placeholder_hash = "$argon2id$placeholder";
+    let email_clone = req.email.clone();
+
+    let valid = chopin_auth::verify_password(req.password.as_bytes(), placeholder_hash)
+        .unwrap_or(false);
+    if !valid {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    issue_tokens(email_clone, Role::User)
+}
+
+/// Issue a signed `StandardClaims<Role>` access token for the given subject.
+pub fn issue_tokens(sub: String, role: Role) -> Result<TokenResponse, AuthError> {
+    let claims = StandardClaims::new(sub, ACCESS_TTL, Some(role), None);
+    let manager = GLOBAL_JWT_MANAGER
+        .get()
+        .ok_or_else(|| AuthError::Token("JwtManager not initialised".into()))?;
+    let token = manager
+        .encode(&claims)
+        .map_err(|e| AuthError::Token(e.to_string()))?;
+
+    Ok(TokenResponse {
+        access_token: token,
+        token_type: "Bearer",
+        expires_in: ACCESS_TTL,
+    })
+}
+"#;
+    std::fs::write(auth_dir.join("services.rs"), services_rs)?;
+
+    // ─── handlers.rs ──────────────────────────────────────────────────────
+    let handlers_rs = r##"//! HTTP handlers for the auth module.
+//!
+//! Mount these via `Chopin::new().mount_all_routes()` — they are registered
+//! automatically through the `#[post]` inventory macros.
+use chopin_core::{Context, Json, Response};
+use chopin_macros::post;
+
+use super::models::{LoginRequest, RegisterRequest};
+use super::services;
+
+/// Register a new user.
+///
+/// `POST /auth/register`
+///
+/// Body: `{"email": "...", "password": "..."}`
+#[post("/auth/register")]
+pub fn register(ctx: Context) -> Response {
+    let Ok(Json(req)) = ctx.extract::<Json<RegisterRequest>>() else {
+        return Response::new(400);
+    };
+    // TODO: pass a real db connection — e.g. from a thread-local pool.
+    match services::register(&mut todo!("db"), req) {
+        Ok(user) => ctx.json(&user),
+        Err(e) => {
+            let body = format!(r#"{{"error":"{}"}}"#, e);
+            Response::json(409, body)
+        }
+    }
+}
+
+/// Authenticate and return a JWT access token.
+///
+/// `POST /auth/login`
+///
+/// Body: `{"email": "...", "password": "..."}`
+#[post("/auth/login")]
+pub fn login(ctx: Context) -> Response {
+    let Ok(Json(req)) = ctx.extract::<Json<LoginRequest>>() else {
+        return Response::new(400);
+    };
+    match services::login(&mut todo!("db"), req) {
+        Ok(token_resp) => ctx.json(&token_resp),
+        Err(_) => Response::new(401),
+    }
+}
+
+/// Invalidate the current token (add its JTI to the blacklist).
+///
+/// `POST /auth/logout`
+///
+/// Requires: `Authorization: Bearer <token>`
+#[post("/auth/logout")]
+pub fn logout(ctx: Context) -> Response {
+    use chopin_auth::extractor::GLOBAL_JWT_MANAGER;
+    use chopin_auth::HasJti;
+    use chopin_auth::StandardClaims;
+
+    type Claims = StandardClaims<()>;
+
+    let token = (0..ctx.req.header_count as usize).find_map(|i| {
+        let (k, v) = ctx.req.headers[i];
+        if k.eq_ignore_ascii_case("Authorization") {
+            v.strip_prefix("Bearer ")
+        } else {
+            None
+        }
+    });
+
+    let Some(token) = token else {
+        return Response::new(401);
+    };
+
+    let Some(manager) = GLOBAL_JWT_MANAGER.get() else {
+        return Response::server_error();
+    };
+
+    if let Ok(claims) = manager.decode::<Claims>(token) {
+        if let Some(jti) = claims.jti() {
+            if let Some(bl) = manager.blacklist() {
+                bl.revoke(jti.to_string(), Some(claims.exp));
+            }
+        }
+    }
+
+    Response::new(204)
+}
+
+/// Refresh the access token.
+///
+/// `POST /auth/refresh`
+///
+/// Requires: `Authorization: Bearer <token>`
+#[post("/auth/refresh")]
+pub fn refresh(ctx: Context) -> Response {
+    use chopin_auth::extractor::GLOBAL_JWT_MANAGER;
+    use chopin_auth::StandardClaims;
+
+    use super::models::Role;
+
+    type Claims = StandardClaims<Role>;
+
+    let token = (0..ctx.req.header_count as usize).find_map(|i| {
+        let (k, v) = ctx.req.headers[i];
+        if k.eq_ignore_ascii_case("Authorization") {
+            v.strip_prefix("Bearer ")
+        } else {
+            None
+        }
+    });
+
+    let Some(token) = token else {
+        return Response::new(401);
+    };
+
+    let Some(manager) = GLOBAL_JWT_MANAGER.get() else {
+        return Response::server_error();
+    };
+
+    match manager.decode::<Claims>(token) {
+        Ok(old) => match services::issue_tokens(old.sub, old.role.unwrap_or(Role::User)) {
+            Ok(resp) => ctx.json(&resp),
+            Err(_) => Response::server_error(),
+        },
+        Err(_) => Response::new(401),
+    }
+}
+"##;
+    std::fs::write(auth_dir.join("handlers.rs"), handlers_rs)?;
+
+    // ─── Migration ────────────────────────────────────────────────────────
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
+    let migration_name = format!("{}_create_users", timestamp);
+    let migrations_dir = project_dir
+        .join("migrations")
+        .join(&migration_name.to_string());
+    std::fs::create_dir_all(&migrations_dir)?;
+
+    let up_sql = r#"CREATE TABLE IF NOT EXISTS users (
+    id            BIGSERIAL    PRIMARY KEY,
+    email         TEXT         NOT NULL UNIQUE,
+    password_hash TEXT         NOT NULL,
+    role          TEXT         NOT NULL DEFAULT 'user',
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS users_email_idx ON users (email);
+"#;
+    std::fs::write(migrations_dir.join("up.sql"), up_sql)?;
+
+    let down_sql = "DROP TABLE IF EXISTS users;\n";
+    std::fs::write(migrations_dir.join("down.sql"), down_sql)?;
+
+    // ─── Output ───────────────────────────────────────────────────────────
+    println!("{} Generated auth module", "✓".green().bold());
+    println!("  Created: src/apps/auth/");
+    println!("    ├── mod.rs       (public API)");
+    println!("    ├── models.rs    (User, Role, request/response types)");
+    println!("    ├── handlers.rs  (register, login, logout, refresh)");
+    println!("    ├── services.rs  (register, login, issue_tokens)");
+    println!("    └── errors.rs    (AuthError)");
+    println!("  Created: migrations/{}/up.sql", migration_name);
+    println!("  Created: migrations/{}/down.sql", migration_name);
+    println!();
+    println!("  {} Add to your main.rs:", "Next:".cyan());
+    println!(
+        "    {}",
+        "use chopin_auth::{JwtManager, TokenBlacklist, init_jwt_manager};".yellow()
+    );
+    println!("    {}", "let bl = TokenBlacklist::new();".yellow());
+    println!(
+        "    {}",
+        "init_jwt_manager(JwtManager::new(b\"your-secret\").with_blacklist(bl));".yellow()
+    );
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── existing tests ────────────────────────────────────────────────────────
 
     #[test]
     fn test_to_pascal_case() {
@@ -361,5 +741,94 @@ mod tests {
         generate_app(dir.path(), "product").unwrap();
         let result = generate_app(dir.path(), "product");
         assert!(result.is_err(), "duplicate app should fail");
+    }
+
+    // ── generate_auth tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_generate_auth_creates_all_files() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_auth(dir.path()).unwrap();
+
+        let auth_dir = dir.path().join("src/apps/auth");
+        assert!(auth_dir.join("mod.rs").exists(), "mod.rs missing");
+        assert!(auth_dir.join("models.rs").exists(), "models.rs missing");
+        assert!(auth_dir.join("handlers.rs").exists(), "handlers.rs missing");
+        assert!(auth_dir.join("services.rs").exists(), "services.rs missing");
+        assert!(auth_dir.join("errors.rs").exists(), "errors.rs missing");
+    }
+
+    #[test]
+    fn test_generate_auth_creates_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_auth(dir.path()).unwrap();
+
+        let migrations_dir = dir.path().join("migrations");
+        let entries: Vec<_> = std::fs::read_dir(&migrations_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(entries.len(), 1, "expected exactly one migration directory");
+
+        let mig_dir = entries[0].path();
+        assert!(mig_dir.join("up.sql").exists(), "up.sql missing");
+        assert!(mig_dir.join("down.sql").exists(), "down.sql missing");
+    }
+
+    #[test]
+    fn test_generate_auth_migration_sql_content() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_auth(dir.path()).unwrap();
+
+        let migrations_dir = dir.path().join("migrations");
+        let mig_dir = std::fs::read_dir(&migrations_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .next()
+            .unwrap()
+            .path();
+
+        let up = std::fs::read_to_string(mig_dir.join("up.sql")).unwrap();
+        assert!(up.contains("CREATE TABLE IF NOT EXISTS users"));
+        assert!(up.contains("email"));
+        assert!(up.contains("password_hash"));
+        assert!(up.contains("role"));
+
+        let down = std::fs::read_to_string(mig_dir.join("down.sql")).unwrap();
+        assert!(down.contains("DROP TABLE IF EXISTS users"));
+    }
+
+    #[test]
+    fn test_generate_auth_models_contains_role_enum() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_auth(dir.path()).unwrap();
+
+        let models = std::fs::read_to_string(dir.path().join("src/apps/auth/models.rs")).unwrap();
+        assert!(models.contains("enum Role"));
+        assert!(models.contains("Admin"));
+        assert!(models.contains("User"));
+        assert!(models.contains("struct User"));
+        assert!(models.contains("password_hash"));
+    }
+
+    #[test]
+    fn test_generate_auth_handlers_contain_all_routes() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_auth(dir.path()).unwrap();
+
+        let handlers =
+            std::fs::read_to_string(dir.path().join("src/apps/auth/handlers.rs")).unwrap();
+        assert!(handlers.contains("/auth/register"));
+        assert!(handlers.contains("/auth/login"));
+        assert!(handlers.contains("/auth/logout"));
+        assert!(handlers.contains("/auth/refresh"));
+    }
+
+    #[test]
+    fn test_generate_auth_duplicate_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_auth(dir.path()).unwrap();
+        let result = generate_auth(dir.path());
+        assert!(result.is_err(), "duplicate auth scaffold should fail");
     }
 }

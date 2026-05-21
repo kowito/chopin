@@ -39,9 +39,9 @@ pub enum ConnState {
 // 64-byte aligned struct avoiding false sharing and fitting cache lines
 #[repr(C, align(64))]
 pub struct Conn {
-    pub fd: i32,              // File Descriptor or Free List Next Index
-    pub state: ConnState,     // State machine enum
-    pub flags: u8,            // Bit 0: keep-alive (was padding)
+    pub fd: i32,          // File Descriptor or Free List Next Index
+    pub state: ConnState, // State machine enum
+    pub flags: u8,        // Bit 0: keep-alive (was padding)
     /// IPv6-mapped peer address captured at accept time via `getpeername(2)`.
     /// IPv4 addresses are stored as IPv4-mapped IPv6 (`::ffff:a.b.c.d`).
     /// Falls back to `[0u8; 16]` on UNIX sockets or errors.

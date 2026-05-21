@@ -324,7 +324,8 @@ impl Worker {
                                             conn.flags = crate::conn::CONN_KEEP_ALIVE;
                                             conn.last_active = now;
                                             conn.requests_served = 0;
-                                            conn.peer_addr = crate::syscalls::get_peer_addr(client_fd);
+                                            conn.peer_addr =
+                                                crate::syscalls::get_peer_addr(client_fd);
                                             // Initialise TLS session if server is TLS-enabled
                                             #[cfg(feature = "tls")]
                                             if let Some(ref tls_cfg) = self.tls_config {

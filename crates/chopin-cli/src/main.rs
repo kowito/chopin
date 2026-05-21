@@ -70,6 +70,8 @@ enum GenerateCommands {
         /// Name of the handler function
         name: String,
     },
+    /// Generate a complete authentication module (User model, register/login/logout/refresh)
+    Auth,
     /// Generate a model struct + migration from field definitions
     ///
     /// Usage: chopin generate model User name:string email:string age:i32
@@ -214,6 +216,10 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Generate { command } => match command {
+            GenerateCommands::Auth => {
+                let project_dir = std::env::current_dir()?;
+                generate::generate_auth(&project_dir)?;
+            }
             GenerateCommands::App { name } => {
                 let project_dir = std::env::current_dir()?;
                 generate::generate_app(&project_dir, &name)?;

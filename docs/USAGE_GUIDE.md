@@ -702,6 +702,96 @@ require_role_middleware!(require_admin, Claims, AppRole::Admin, claims_has_role)
 router.use_middleware("/admin", require_admin);
 ```
 
+### `StandardClaims<R>` — zero-boilerplate claims
+
+`StandardClaims<R>` is a generic claims struct that covers the common JWT fields (`sub`, `jti`, `exp`, `iat`, `role`, `scope`) and implements `HasJti`, `RoleCheck<R>`, and `ScopeCheck` out of the box. Use it instead of writing your own claims type for ~95 % of projects.
+
+```rust
+use chopin_auth::{StandardClaims, Role};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+enum AppRole { Admin, User }
+impl Role for AppRole {}
+
+type Claims = StandardClaims<AppRole>;
+
+// Create and sign a token in one step:
+let claims = Claims::new("user-42", 3600, Some(AppRole::Admin), Some("read write".into()));
+let token = manager.encode(&claims).unwrap();
+
+// Decode and check:
+let decoded: Claims = manager.decode(&token).unwrap();
+assert_eq!(decoded.sub, "user-42");
+assert_eq!(decoded.role, Some(AppRole::Admin));
+```
+
+`StandardClaims::new` automatically generates a unique `jti` (atomic counter + unix timestamp), sets `iat` to now, and computes `exp = now + ttl_secs`.
+
+### `#[require_role]` and `#[require_scope]` attribute macros
+
+The `chopin-macros` crate provides inline auth guards that wrap a handler body before route registration. Unlike middleware, they are zero-allocation (no heap-allocated closures) and require no separate wiring.
+
+> **Important**: Place `#[require_role]` / `#[require_scope]` **above** the route macro (`#[get]`, `#[post]`, …) so the wrapper is applied before the handler is registered in the inventory.
+
+```toml
+[dependencies]
+chopin-macros = "0.5.29"
+chopin-auth   = "0.5.29"
+```
+
+```rust
+use chopin_auth::{Role, StandardClaims};
+use chopin_macros::{get, post, require_role, require_scope};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+enum AppRole { Admin, User }
+impl Role for AppRole {}
+
+type Claims = StandardClaims<AppRole>;
+
+// Only Admin users may access /admin/dashboard.
+// Returns 401 for missing/invalid token, 403 for wrong role.
+#[require_role(Claims, AppRole::Admin)]
+#[get("/admin/dashboard")]
+pub fn admin_dashboard(ctx: Context) -> Response {
+    ctx.json(&"welcome, admin")
+}
+
+// Requires the "reports:read" OAuth 2.0 scope.
+#[require_scope(Claims, "reports:read")]
+#[get("/reports")]
+pub fn list_reports(ctx: Context) -> Response {
+    ctx.json(&"report data")
+}
+```
+
+Both macros read the `Authorization: Bearer <token>` header directly from the raw request — no allocations, no middleware chain overhead.
+
+### `chopin generate auth` — full auth scaffold
+
+Run once inside a Chopin project to generate a production-ready auth module:
+
+```bash
+chopin generate auth
+```
+
+Generated layout:
+```
+src/apps/auth/
+  mod.rs        — public API re-exports
+  models.rs     — User, Role, RegisterRequest, LoginRequest, TokenResponse
+  handlers.rs   — POST /auth/register, /auth/login, /auth/logout, /auth/refresh
+  services.rs   — register(), login(), issue_tokens()
+  errors.rs     — AuthError domain type
+migrations/<ts>_create_users/
+  up.sql        — CREATE TABLE users (id, email, password_hash, role, created_at)
+  down.sql      — DROP TABLE users
+```
+
+The scaffold is wired to `StandardClaims<Role>` and `PasswordHasher` from the start. Fill in the database queries (marked with `TODO` comments) and call `init_jwt_manager` in `main.rs`.
+
 ---
 
 ## Multipart / File Uploads
