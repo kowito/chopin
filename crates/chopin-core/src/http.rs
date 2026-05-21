@@ -871,6 +871,7 @@ impl<'a> Context<'a> {
     ///     // ...
     /// }
     /// ```
+    #[allow(clippy::result_large_err)]
     pub fn param_parse<T: std::str::FromStr>(&self, key: &str) -> Result<T, Response> {
         let raw = self.param(key).ok_or_else(Response::bad_request)?;
         raw.parse::<T>().map_err(|_| Response::bad_request())

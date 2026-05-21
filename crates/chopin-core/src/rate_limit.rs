@@ -166,16 +166,16 @@ fn extract_ip_key(ctx: &Context) -> [u8; 16] {
 
     // 2. X-Forwarded-For with trusted-depth stripping (only when depth > 0).
     let depth = TRUSTED_DEPTH.load(Ordering::Relaxed) as usize;
-    if depth > 0 {
-        if let Some(xff) = ctx.header("x-forwarded-for") {
-            let ips: Vec<&str> = xff.split(',').map(str::trim).collect();
-            // Strip `depth` rightmost entries (added by our trusted proxies),
-            // then take the next entry as the originating client IP.
-            if ips.len() > depth {
-                let key = parse_ip_to_key(ips[ips.len() - 1 - depth]);
-                if key != [0u8; 16] {
-                    return key;
-                }
+    if depth > 0
+        && let Some(xff) = ctx.header("x-forwarded-for")
+    {
+        let ips: Vec<&str> = xff.split(',').map(str::trim).collect();
+        // Strip `depth` rightmost entries (added by our trusted proxies),
+        // then take the next entry as the originating client IP.
+        if ips.len() > depth {
+            let key = parse_ip_to_key(ips[ips.len() - 1 - depth]);
+            if key != [0u8; 16] {
+                return key;
             }
         }
     }

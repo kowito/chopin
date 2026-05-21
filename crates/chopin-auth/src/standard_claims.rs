@@ -111,7 +111,7 @@ impl<R> HasJti for StandardClaims<R> {
 impl<R: Role> RoleCheck<R> for StandardClaims<R> {
     #[inline]
     fn has_role(&self, role: &R) -> bool {
-        self.role.as_ref().map_or(false, |r| r == role)
+        self.role.as_ref().is_some_and(|r| r == role)
     }
 }
 
@@ -120,7 +120,7 @@ impl<R> ScopeCheck for StandardClaims<R> {
     fn has_scope(&self, scope: &str) -> bool {
         self.scope
             .as_deref()
-            .map_or(false, |s| s.split(' ').any(|t| t == scope))
+            .is_some_and(|s| s.split(' ').any(|t| t == scope))
     }
 }
 

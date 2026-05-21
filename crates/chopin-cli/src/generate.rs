@@ -924,9 +924,7 @@ pub fn refresh(ctx: Context) -> Response {
     // ─── Migration ────────────────────────────────────────────────────────
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
     let migration_name = format!("{}_create_users", timestamp);
-    let migrations_dir = project_dir
-        .join("migrations")
-        .join(&migration_name.to_string());
+    let migrations_dir = project_dir.join("migrations").join(&migration_name);
     std::fs::create_dir_all(&migrations_dir)?;
 
     let up_sql = r#"CREATE TABLE IF NOT EXISTS users (
