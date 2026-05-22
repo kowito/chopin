@@ -1,15 +1,26 @@
-// src/filter.rs — Phase 6.1: I/O Filter Architecture
-//
-// Provides a composable filter trait for processing bytes on the read and write
-// paths of a connection.  Filters can inspect, transform, log, or compress data
-// transparently without modifying the core event loop.
-//
-// Design mirrors ntex's `ntex-io` filter stack:
-// - `Filter` trait with `process_read` / `process_write`
-// - `FilterStack` holds up to INLINE_SIZE (3) filters on the stack via an
-//   `arrayvec::ArrayVec`, avoiding heap allocation for the common case
-// - `PassthroughFilter` — zero-cost identity filter
-// - `LoggingFilter` — logs byte-count summaries at TRACE level
+//! Composable I/O filter stack for the read and write paths of each connection.
+//!
+//! Filters can inspect, transform, log, or compress bytes transparently without
+//! modifying the event loop.  A [`FilterStack`] holds up to three filters inline
+//! (no heap allocation for the common case).
+//!
+//! Built-in filters:
+//! - [`PassthroughFilter`] — zero-cost identity (useful as a placeholder)
+//! - [`LoggingFilter`] — emits byte-count summaries at `TRACE` level
+//!
+//! # Implementing a custom filter
+//!
+//! ```rust,ignore
+//! use chopin_core::Filter;
+//!
+//! struct GzipFilter;
+//! impl Filter for GzipFilter {
+//!     fn process_read(&mut self, buf: &mut [u8], len: usize) -> usize { len }
+//!     fn process_write(&mut self, buf: &mut [u8], len: usize) -> usize { len }
+//!     fn name(&self) -> &'static str { "gzip" }
+//! }
+//! ```
+// src/filter.rs — I/O Filter Architecture
 
 // ── Trait ────────────────────────────────────────────────────────────────────
 

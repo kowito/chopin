@@ -1,3 +1,19 @@
+//! Radix-tree router with a static fast-table for zero-allocation hot-path matching.
+//!
+//! Routes are typically registered via the `#[get]`/`#[post]`/… attribute macros and
+//! collected at link time.  For programmatic registration, use [`Router`] directly:
+//!
+//! ```rust,no_run
+//! use chopin_core::{Router, Context, Response, Server};
+//!
+//! fn ping(_ctx: Context) -> Response { Response::text("pong") }
+//!
+//! fn main() {
+//!     let mut router = Router::new();
+//!     router.get("/ping", ping);
+//!     Server::bind("0.0.0.0:8080").serve(router).unwrap();
+//! }
+//! ```
 // src/router.rs
 use crate::http::{Context, MAX_PARAMS, Method, Response};
 use std::collections::HashMap;

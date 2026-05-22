@@ -1,3 +1,11 @@
+//! Per-worker request/connection/bytes metrics with cache-line isolation.
+//!
+//! Each [`WorkerMetrics`] struct is `repr(C, align(64))` to prevent false sharing
+//! between worker threads.  Access the global registry via [`registry()`] to
+//! aggregate counters across all workers.
+//!
+//! The built-in `/metrics` and `/health` handlers (added by [`Chopin::mount_all_routes`])
+//! use this module to produce a lightweight JSON snapshot.
 // src/metrics.rs
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};

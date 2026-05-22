@@ -1,3 +1,32 @@
+//! Core HTTP types: [`Request`], [`Response`], [`Context`], [`Method`], and [`Body`].
+//!
+//! Every handler receives a [`Context`] (which wraps the parsed [`Request`]) and
+//! returns a [`Response`].  The most common response builders are:
+//!
+//! ```rust,no_run
+//! use chopin_core::{Context, Response};
+//!
+//! fn handler(ctx: Context) -> Response {
+//!     // Plain text
+//!     Response::text("hello")
+//! }
+//!
+//! fn json_handler(ctx: Context) -> Response {
+//!     // Typed JSON — any type that implements serde::Serialize
+//!     #[derive(serde::Serialize)]
+//!     struct Payload { ok: bool }
+//!     Response::json(&Payload { ok: true })
+//! }
+//!
+//! fn typed_param(ctx: Context) -> Response {
+//!     // Parse a path parameter; returns 400 Bad Request on failure
+//!     let id: i32 = match ctx.param_parse("id") {
+//!         Ok(v)  => v,
+//!         Err(r) => return r,
+//!     };
+//!     Response::text(&id.to_string())
+//! }
+//! ```
 // src/http.rs
 use crate::headers::{Headers, IntoHeaderValue};
 use crate::syscalls;

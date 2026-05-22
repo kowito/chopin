@@ -1,3 +1,23 @@
+//! Per-IP token-bucket rate limiter implemented as a standard Chopin middleware.
+//!
+//! Each worker thread maintains its own bucket map — zero mutexes, zero atomics
+//! in the hot path.  IP resolution priority: `X-Real-IP` → `X-Forwarded-For`
+//! (with configurable trusted-proxy depth stripping) → socket peer address.
+//!
+//! # Usage
+//!
+//! ```rust,no_run
+//! use chopin_core::{Router, rate_limit};
+//!
+//! // 100 requests per 60 s per IP (burst up to 100)
+//! rate_limit::configure(100, 60);
+//!
+//! // Trust one reverse proxy (e.g. nginx) in front of the server
+//! rate_limit::set_trusted_depth(1);
+//!
+//! let mut router = Router::new();
+//! router.layer(rate_limit::per_ip);
+//! ```
 // src/rate_limit.rs
 //
 // Per-IP token-bucket rate limiter implemented as a standard Chopin middleware.
