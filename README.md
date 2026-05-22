@@ -190,42 +190,19 @@ chopin openapi                            # generate OpenAPI spec
 
 ## 📊 Performance Benchmark
 
-### macOS Apple Silicon (M-series, Single-Core)
+### Latest Local Run
 
-| Framework | Endpoint | Relative Throughput | Latency (Avg) |
-| :--- | :--- | :--- | :--- |
-| **Chopin** | `/json` | **100%** | **686 μs** |
-| **Chopin** | `/plain` | **100%** | **700 μs** |
-| Actix Web | `/json` | 91% | 812 μs |
-| Axum | `/json` | 84% | 945 μs |
-| Hyper | `/json` | 73% | 1,810 μs |
-| Hyper | `/plain` | 73% | 1,820 μs |
+Measured with `./benchmarks/compare.sh` on macOS using `BENCH_PORT=18080`:
 
-### Linux with io_uring (C16 Plaintext)
+| Variant | Endpoint | Requests/sec |
+| :--- | :--- | :--- |
+| Chopin | `/plaintext` | 222,785.92 |
 
-| Framework | Avg Latency | Throughput | Notes |
-| :--- | :--- | :--- | :--- |
-| **Chopin (io-uring)** | **1.3–1.7 ms** | **17M+ req/s** | 35–45% faster than epoll baseline |
-| Chopin (epoll) | 2.48 ms | 11.2M req/s | Standard event loop |
-| Axum (Tokio) | 1.39 ms | 48.6M req/s | Heavy async overhead |
+Benchmark numbers change with hardware, kernel, and compiler settings, so this section now shows the latest local result instead of a fixed cross-framework table. For the latest methodology, commands, and results, see [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-### 📊 Performance Visualization
-
-```text
-Throughput Comparison (Single-Core)
--------------------------------------------------------
-Chopin     [██████████████████████████████] 100% (Baseline)
-Actix Web  [███████████████████████████   ]  91%
-Axum       [█████████████████████████     ]  84%
-Hyper      [██████████████████████        ]  73%
--------------------------------------------------------
-```
-
-*Chopin is **10-15% faster** than Actix/Axum and **~40% faster** than Hyper with significantly lower latency.*
-
-**🔧 Optimization Tip**: On Linux, enable the `io-uring` feature for 35–50% latency reduction:
+**🔧 Optimization Tip**: On Linux, enable the `io-uring` feature for lower latency on supported kernels:
 ```toml
-chopin-core = { version = "0.5.27", features = ["io-uring"] }
+chopin-core = { version = "0.5.30", features = ["io-uring"] }
 ```
 
 For detailed benchmark methodology, optimization layers, and how to maximize performance, see [docs/BENCHMARKS.md](docs/BENCHMARKS.md).

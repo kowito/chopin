@@ -65,9 +65,9 @@ run_variant() {
 
     echo "Starting ${variant} server on ${HOST}:${PORT}..."
     if [ "${variant}" = "iouring" ]; then
-        CHOPIN_IO_URING=1 ./target/release/examples/bench_chopin &
+        PORT="${PORT}" WORKERS="${THREADS}" CHOPIN_IO_URING=1 ./target/release/examples/bench_chopin &
     else
-        ./target/release/examples/bench_chopin &
+        PORT="${PORT}" WORKERS="${THREADS}" ./target/release/examples/bench_chopin &
     fi
     local SERVER_PID=$!
 
@@ -113,7 +113,7 @@ echo "  Summary"
 echo "================================================================"
 for f in "${RESULTS_DIR}"/bench_*_"${TIMESTAMP}".txt; do
     variant=$(basename "$f" | sed "s/bench_//;s/_${TIMESTAMP}.txt//")
-    rps=$(grep -oE '[0-9]+\.[0-9]+k? Requests/sec' "$f" | head -1 || echo "n/a")
+    rps=$(awk -F': ' '/Requests\/sec:/ {print $2; exit}' "$f" || echo "n/a")
     echo "  ${variant}: ${rps}"
 done
 echo ""

@@ -18,13 +18,16 @@ Analyze, write, and fix Rust code iteratively until it compiles and passes tests
 ## Procedure
 
 ### 1. Understand the Task
+- If the task lacks a specific file, error message, or function, ask one clarifying question before proceeding.
 - Read the relevant source files before making changes
 - Identify the exact error, goal, or refactor target
 - Note ownership, lifetime, and async constraints in context
+- Handle errors gracefully: if the task is too vague (e.g., 'fix my Rust code' with no file or error specified), ask for clarification.
 
 ### 2. Implement Changes
 - Prefer idiomatic Rust: use `?` for error propagation, `impl Trait` for flexibility, iterators over manual loops
 - Follow ownership rules: minimize clones, prefer borrows, use `Arc`/`Mutex` only when shared mutability is necessary
+- Do not add new crate dependencies without asking. Prefer solutions using the standard library and existing dependencies.
 - For async code: use `.await` correctly, avoid blocking in async contexts, prefer `tokio` patterns already in the codebase
 - Match the existing code style and module conventions
 
@@ -33,6 +36,7 @@ Run `cargo check` to catch compile errors quickly:
 ```
 cargo check
 ```
+- If Cargo commands cannot be executed in the environment, perform manual static analysis based on the code and clearly state that automated verification was not possible.
 - If errors remain, read the compiler output carefully — Rust errors are precise
 - Fix each error and re-run until clean
 - For workspace crates, use `cargo check -p <crate-name>` to target a specific crate
@@ -56,7 +60,7 @@ cargo test
 ### 6. Iterate Until Green
 Repeat steps 3–5 until:
 - `cargo check` exits with no errors
-- `cargo clippy` shows no new warnings
+- `cargo clippy` shows no warnings or errors in the targeted crate(s) or touched files
 - `cargo test` passes all relevant tests
 
 ### 7. Explain Changes
