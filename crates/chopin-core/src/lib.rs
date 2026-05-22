@@ -63,10 +63,10 @@
 //! ### Typed path parameters and JSON responses
 //!
 //! ```rust,no_run
-//! use chopin_core::{get, post, Context, Response, Json};
-//! use serde::{Deserialize, Serialize};
+//! use chopin_core::{get, post, Context, Json, KJson, Response};
+//! use serde::Deserialize;
 //!
-//! #[derive(Serialize)]
+//! #[derive(KJson)]
 //! struct Post { id: i32, title: String }
 //!
 //! #[derive(Deserialize)]
@@ -90,7 +90,7 @@
 //!         Ok(v)  => v,
 //!         Err(r) => return r,   // auto 400 Bad Request
 //!     };
-//!     Response::text(&format!("created: {}", body.title))
+//!     Response::text(format!("created: {}", body.title))
 //! }
 //! ```
 //!

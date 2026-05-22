@@ -11,7 +11,7 @@
 //!
 //! fn handler(_ctx: Context) -> Response {
 //!     let mut res = Response::text("hello");
-//!     res.set_header("X-Request-Id", "abc123");
+//!     res = res.with_header("X-Request-Id", "abc123");
 //!     res
 //! }
 //! ```

@@ -4,7 +4,7 @@
 //! returns a [`Response`].  The most common response builders are:
 //!
 //! ```rust,no_run
-//! use chopin_core::{Context, Response};
+//! use chopin_core::{Context, KJson, Response};
 //!
 //! fn handler(ctx: Context) -> Response {
 //!     // Plain text
@@ -12,8 +12,8 @@
 //! }
 //!
 //! fn json_handler(ctx: Context) -> Response {
-//!     // Typed JSON — any type that implements serde::Serialize
-//!     #[derive(serde::Serialize)]
+//!     // Typed JSON — any type that derives chopin_core::KJson
+//!     #[derive(KJson)]
 //!     struct Payload { ok: bool }
 //!     Response::json(&Payload { ok: true })
 //! }
@@ -24,7 +24,7 @@
 //!         Ok(v)  => v,
 //!         Err(r) => return r,
 //!     };
-//!     Response::text(&id.to_string())
+//!     Response::text(id.to_string())
 //! }
 //! ```
 // src/http.rs
