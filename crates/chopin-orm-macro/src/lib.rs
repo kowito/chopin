@@ -1,3 +1,38 @@
+//! `#[derive(Model)]` procedural macro for chopin-orm.
+//!
+//! Generates the full suite of CRUD methods and a [`QueryBuilder`] constructor
+//! for a plain Rust struct backed by a PostgreSQL table.
+//!
+//! ## Attributes
+//!
+//! | Attribute | Location | Description |
+//! |---|---|---|
+//! | `#[model(table_name = "…")]` | struct | Override the default table name (defaults to lowercase plural) |
+//! | `#[model(primary_key)]` | field | Mark the primary key column |
+//! | `#[model(generated)]` | field | Skip this column on INSERT (server-generated, e.g. `SERIAL`) |
+//! | `#[model(has_many(Target, fk = "col"))]` | struct | Generate a `load_targets()` association method |
+//!
+//! ## Generated methods
+//!
+//! ```rust,ignore
+//! #[derive(Model)]
+//! #[model(table_name = "posts")]
+//! struct Post {
+//!     #[model(primary_key, generated)] id: i32,
+//!     title: String,
+//!     body: String,
+//! }
+//!
+//! // Generated:
+//! Post::find(&mut pool, 1)?;             // SELECT by PK
+//! Post::find_by(&mut pool, cond)?;       // SELECT with WHERE
+//! Post::insert(&mut pool, &post)?;       // INSERT
+//! Post::update(&mut pool, &post)?;       // UPDATE by PK
+//! Post::delete(&mut pool, id)?;          // DELETE by PK
+//! Post::query()                          // Return QueryBuilder
+//!     .filter(Expr::new("title = {}", vec!["hello".to_param()]))
+//!     .fetch_all(&mut pool)?;
+//! ```
 extern crate proc_macro;
 
 use proc_macro::TokenStream;

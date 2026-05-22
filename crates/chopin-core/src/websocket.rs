@@ -1,7 +1,23 @@
+//! RFC 6455 WebSocket upgrade handshake and frame codec.
+//!
+//! After a successful upgrade, handlers read and write frames using
+//! [`WsConn`] over the raw file descriptor:
+//!
+//! ```rust,ignore
+//! use chopin_core::websocket::{is_websocket_upgrade, upgrade_response, WsConn};
+//! use chopin_core::{get, Context, Response};
+//!
+//! #[get("/ws")]
+//! fn ws_handler(ctx: Context) -> Response {
+//!     if !is_websocket_upgrade(&ctx.request) {
+//!         return Response::status(400);
+//!     }
+//!     let (response, conn) = upgrade_response(&ctx.request, ctx.fd);
+//!     // `conn` lets you send/receive frames; run in a loop until the client disconnects.
+//!     response
+//! }
+//! ```
 // src/websocket.rs — RFC 6455 WebSocket support
-//
-// Provides upgrade handshake validation, Sec-WebSocket-Accept key derivation,
-// and a frame-level codec for reading/writing WebSocket frames over raw fds.
 
 use crate::http::{Context, Request, Response};
 

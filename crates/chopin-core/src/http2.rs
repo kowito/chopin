@@ -1,7 +1,9 @@
+//! HTTP/2 frame codec and connection preface helpers (RFC 9113).
+//!
+//! Provides protocol detection (`is_h2_preface`, `is_h2c_upgrade`),
+//! frame-level encode/decode, SETTINGS exchange, and h2c upgrade detection.
+//! Full stream multiplexing is built on top of this module in the worker.
 // src/http2.rs — HTTP/2 frame codec and connection preface support (RFC 9113)
-//
-// Provides protocol detection, frame-level encode/decode, SETTINGS exchange,
-// and h2c upgrade detection. Full stream multiplexing is layered above this.
 
 // ── Connection Preface ───────────────────────────────────────────────────────
 

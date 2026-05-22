@@ -1,6 +1,9 @@
+//! [`OrmError`] and [`OrmResult`] — error types for the chopin-orm layer.
+//!
+//! [`OrmError`] wraps database errors from `chopin-pg` alongside ORM-level
+//! concerns (record not found, validation failures, type extraction errors).
+//! All variants are `Send + Sync` for use across worker threads.
 use chopin_pg::error::PgError;
-
-/// Error type for the Chopin ORM.
 ///
 /// All variants are `Send + Sync`, making this safe to use across thread boundaries.
 #[derive(Debug)]

@@ -1,3 +1,20 @@
+//! Zero-allocation HTTP response headers with inline storage.
+//!
+//! Up to [`MAX_INLINE_HEADERS`] (8) headers are stored in a stack-allocated
+//! `ArrayVec`; additional headers spill to the heap.  Header values ≤
+//! [`MAX_INLINE_VALUE`] (64) bytes are stored inline without a heap allocation.
+//!
+//! Most users interact with headers through [`Response`](crate::http::Response):
+//!
+//! ```rust,no_run
+//! use chopin_core::{Context, Response};
+//!
+//! fn handler(_ctx: Context) -> Response {
+//!     let mut res = Response::text("hello");
+//!     res.set_header("X-Request-Id", "abc123");
+//!     res
+//! }
+//! ```
 // src/headers.rs
 //
 // Zero-allocation response headers using fixed-size inline storage.

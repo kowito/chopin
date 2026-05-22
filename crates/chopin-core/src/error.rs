@@ -1,3 +1,7 @@
+//! Central error type for the Chopin core engine.
+//!
+//! [`ChopinError`] covers I/O failures, HTTP parse errors, slab exhaustion,
+//! and worker panics.  The [`ChopinResult<T>`] type alias is `Result<T, ChopinError>`.
 use crate::parser::ParseError;
 use std::io;
 

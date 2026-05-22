@@ -1,3 +1,23 @@
+//! Multipart/form-data body parser (RFC 2046).
+//!
+//! Parses a raw request body into a sequence of [`Part`] slices with zero
+//! copying.  Extract the boundary string from the `Content-Type` header and
+//! pass it together with the body to [`Multipart::new`]:
+//!
+//! ```rust,ignore
+//! use chopin_core::multipart::Multipart;
+//! use chopin_core::{post, Context, Response};
+//!
+//! #[post("/upload")]
+//! fn upload(ctx: Context) -> Response {
+//!     let boundary = ctx.request.content_type_boundary().unwrap_or("");
+//!     let mp = Multipart::new(ctx.request.body(), boundary);
+//!     for part in mp.parts() {
+//!         // part.name, part.filename, part.body
+//!     }
+//!     Response::status(200)
+//! }
+//! ```
 use crate::parser::ParseError;
 use memchr::memchr;
 

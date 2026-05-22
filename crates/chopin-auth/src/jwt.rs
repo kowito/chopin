@@ -1,3 +1,28 @@
+//! JWT encoding, decoding, and lifecycle management.
+//!
+//! Central types:
+//! - [`JwtManager`] — sign and verify tokens, configure algorithms and validation.
+//! - [`AuthError`] — typed errors for invalid, expired, and revoked tokens.
+//! - [`HasJti`] — opt-in trait for revocation support via JWT IDs.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use chopin_auth::jwt::{JwtManager, HasJti};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Debug, Serialize, Deserialize)]
+//! struct Claims { sub: String, jti: String, exp: u64 }
+//!
+//! impl HasJti for Claims {
+//!     fn jti(&self) -> Option<&str> { Some(&self.jti) }
+//! }
+//!
+//! let mgr = JwtManager::new(b"my-secret");
+//! let claims = Claims { sub: "user42".into(), jti: "abc".into(), exp: 9999999999 };
+//! let token  = mgr.sign(&claims).unwrap();
+//! let back: Claims = mgr.verify(&token).unwrap();
+//! ```
 // src/jwt.rs
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};

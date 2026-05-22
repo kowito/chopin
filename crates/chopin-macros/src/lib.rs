@@ -1,3 +1,44 @@
+//! Derive macros and attribute macros for the Chopin framework.
+//!
+//! | Macro | Kind | Purpose |
+//! |---|---|---|
+//! | `#[get("/path")]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]` | attribute | Register a handler function as a route at link time via `inventory` |
+//! | `#[derive(IntoResponse)]` | derive | Generate `From<MyError> for Response` for an error enum |
+//!
+//! ## Route registration
+//!
+//! Route attribute macros register handlers globally.  Call
+//! `Chopin::new().mount_all_routes()` to load all registered routes at startup:
+//!
+//! ```rust,ignore
+//! use chopin_macros::{get, post, delete};
+//! use chopin_core::{Context, Response, Chopin};
+//!
+//! #[get("/users/:id")]
+//! fn show_user(ctx: Context) -> Response { Response::text("hello") }
+//!
+//! #[post("/users")]
+//! fn create_user(ctx: Context) -> Response { Response::text("created") }
+//!
+//! fn main() {
+//!     Chopin::new().mount_all_routes().serve("0.0.0.0:8080").unwrap();
+//! }
+//! ```
+//!
+//! ## `#[derive(IntoResponse)]`
+//!
+//! Generates `From<YourError> for Response` so handlers can use `?`:
+//!
+//! ```rust,ignore
+//! use chopin_macros::IntoResponse;
+//!
+//! #[derive(IntoResponse)]
+//! enum ApiError {
+//!     #[status(404)] NotFound,
+//!     #[status(422)] Validation(String),
+//!     #[status(500)] Internal,
+//! }
+//! ```
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, ItemFn, parse_macro_input};

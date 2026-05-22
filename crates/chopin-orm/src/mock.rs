@@ -1,3 +1,18 @@
+//! In-memory [`MockExecutor`] for unit-testing ORM code without a live database.
+//!
+//! Pre-queue result sets with [`MockExecutor::push_result`]; they are consumed
+//! in FIFO order as queries run.  Inspect all executed SQL with
+//! [`MockExecutor::executed_queries`].
+//!
+//! ```rust,ignore
+//! use chopin_orm::MockExecutor;
+//!
+//! let mut mock = MockExecutor::new();
+//! mock.push_result(vec![/* Row::mock(...) */]);
+//!
+//! let users = User::query().fetch_all(&mut mock)?;
+//! assert_eq!(mock.executed_queries[0].0, "SELECT ...");
+//! ```
 use crate::{Executor, OrmResult};
 use chopin_pg::Row;
 use std::collections::VecDeque;

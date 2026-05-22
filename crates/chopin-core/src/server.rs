@@ -1,3 +1,33 @@
+//! High-level application builder ([`Chopin`]) and low-level server ([`Server`]).
+//!
+//! Most applications use the builder pattern via [`Chopin`]:
+//!
+//! ```rust,no_run
+//! use chopin_core::{get, Context, Response, Chopin};
+//!
+//! #[get("/")]
+//! fn index(_ctx: Context) -> Response { Response::text("ok") }
+//!
+//! fn main() {
+//!     Chopin::new()
+//!         .mount_all_routes()      // collect routes registered via #[get]/etc.
+//!         .with_worker_init(|| {}) // optional: run once per worker thread
+//!         .serve("0.0.0.0:8080")
+//!         .unwrap();
+//! }
+//! ```
+//!
+//! For programmatic route registration use [`Server`] + [`Router`] directly:
+//!
+//! ```rust,no_run
+//! use chopin_core::{Router, Context, Response, Server};
+//!
+//! fn main() {
+//!     let mut router = Router::new();
+//!     router.get("/ping", |_ctx: Context| Response::text("pong"));
+//!     Server::bind("0.0.0.0:8080").serve(router).unwrap();
+//! }
+//! ```
 // src/server.rs
 use crate::error::ChopinError;
 use crate::router::Router;

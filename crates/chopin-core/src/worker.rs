@@ -1,3 +1,14 @@
+//! Per-thread event loop: epoll (Linux), kqueue (macOS/BSD), or io_uring (Linux, feature `io-uring`).
+//!
+//! One [`Worker`] runs per OS thread.  Each worker:
+//! 1. Accepts connections on its own `SO_REUSEPORT` socket.
+//! 2. Drives an epoll/kqueue or io_uring loop for I/O readiness.
+//! 3. Parses HTTP/1.1 (and h2c) requests from the read buffer.
+//! 4. Routes requests through the cloned [`Router`](crate::router::Router).
+//! 5. Writes responses to the connection's write buffer.
+//!
+//! This is an internal module; application code starts workers via
+//! [`Chopin`](crate::server::Chopin) or [`Server`](crate::server::Server).
 // src/worker.rs — unified worker: epoll/kqueue (default) + io_uring (Linux, feature = "io-uring")
 
 #[cfg(all(target_os = "linux", feature = "io-uring"))]

@@ -1,6 +1,29 @@
+//! Database schema migration runner.
+//!
+//! Implement the [`Migration`] trait for each schema change, then register
+//! all migrations with [`MigrationManager`] to run or roll them back:
+//!
+//! ```rust,ignore
+//! use chopin_orm::migrations::{Migration, MigrationManager, MigrationStatus};
+//!
+//! struct CreateUsers;
+//! impl Migration for CreateUsers {
+//!     fn name(&self) -> &'static str { "001_create_users" }
+//!     fn up(&self, exec: &mut dyn Executor) -> OrmResult<()> {
+//!         exec.execute("CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT NOT NULL)", &[])?;
+//!         Ok(())
+//!     }
+//!     fn down(&self, exec: &mut dyn Executor) -> OrmResult<()> {
+//!         exec.execute("DROP TABLE users", &[])?;
+//!         Ok(())
+//!     }
+//! }
+//!
+//! MigrationManager::run_migrations(&mut pool, &[&CreateUsers])?;
+//! ```
+//!
+//! Applied migrations are tracked in a `__chopin_migrations` ledger table.
 use crate::{Executor, OrmResult};
-
-/// Defines a single database migration with forward and reverse operations.
 pub trait Migration {
     /// A unique name identifying this migration (e.g., "001_create_users").
     fn name(&self) -> &'static str;

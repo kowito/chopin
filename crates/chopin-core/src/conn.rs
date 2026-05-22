@@ -1,6 +1,15 @@
+//! Per-connection state, buffer constants, and [`Conn`] struct.
+//!
+//! Each accepted TCP connection gets a [`Conn`] slot in the worker's
+//! [`ConnectionSlab`](crate::slab::ConnectionSlab).  Adaptive read buffers
+//! grow from [`DEFAULT_READ_BUF_SIZE`] up to [`MAX_READ_BUF_SIZE`] based on
+//! observed request sizes.
+//!
+//! This is an internal module; application code interacts with connections
+//! through [`Context`](crate::http::Context) and [`Response`](crate::http::Response).
 // src/conn.rs
 
-pub const DEFAULT_READ_BUF_SIZE: usize = 32768; // Phase 1: 32 KiB read buffer (was 8 KiB)
+pub const DEFAULT_READ_BUF_SIZE: usize = 32768; // 32 KiB read buffer
 pub const DEFAULT_WRITE_BUF_SIZE: usize = 32768;
 
 /// Maximum size the adaptive read buffer growth will reach.

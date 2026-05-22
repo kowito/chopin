@@ -1,3 +1,15 @@
+//! Auto-generated OpenAPI 3.0 specification from registered routes.
+//!
+//! [`generate_spec()`] iterates all [`RouteDef`](crate::router::RouteDef) entries
+//! registered via `inventory` and produces an OpenAPI 3.0.0 JSON value.
+//! [`Chopin::mount_all_routes`](crate::server::Chopin::mount_all_routes) automatically
+//! serves this at `GET /openapi.json`.
+//!
+//! ```rust,ignore
+//! // Fetch the generated spec manually:
+//! let spec = chopin_core::openapi::generate_spec();
+//! println!("{}", serde_json::to_string_pretty(&spec).unwrap());
+//! ```
 use crate::http::{Context, Method, Response};
 use crate::router::RouteDef;
 use serde_json::{Value, json};

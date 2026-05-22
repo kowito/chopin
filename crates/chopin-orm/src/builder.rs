@@ -1,3 +1,20 @@
+//! Chainable SQL `SELECT` query builder.
+//!
+//! [`QueryBuilder`] produces parameterised `SELECT` statements at runtime.
+//! It is typically accessed via a `Model`-derived `query()` class method:
+//!
+//! ```rust,ignore
+//! use chopin_orm::{Condition, QueryBuilder};
+//!
+//! let rows = User::query()
+//!     .filter(Condition::new("age > {}", vec![18i32.to_param()]))
+//!     .order_by("name", true)  // true = ASC
+//!     .limit(10)
+//!     .fetch_all(&mut pool)?;
+//! ```
+//!
+//! [`Condition`] (aliased as [`Expr`]) can be composed with `.and()` / `.or()`
+//! for complex WHERE clauses without raw SQL string interpolation.
 use crate::{Model, OrmError, OrmResult, PgValue};
 use std::marker::PhantomData;
 

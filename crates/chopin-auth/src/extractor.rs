@@ -1,3 +1,26 @@
+//! [`Auth<C>`] request extractor and global [`JwtManager`] initialisation.
+//!
+//! Call [`init_jwt_manager`] once at server startup to install the global manager,
+//! then use `Auth<C>` as a parameter in any route handler:
+//!
+//! ```rust,ignore
+//! use chopin_auth::{Auth, init_jwt_manager, JwtManager, StandardClaims};
+//! use chopin_core::{get, Context, Response};
+//!
+//! // Once at startup:
+//! init_jwt_manager(JwtManager::new(b"secret"));
+//!
+//! #[get("/me")]
+//! fn me(ctx: Context) -> Response {
+//!     let auth = match ctx.extract::<Auth<StandardClaims>>() {
+//!         Ok(a)  => a,
+//!         Err(r) => return r,   // 401 Unauthorized
+//!     };
+//!     Response::text(&auth.claims.sub)
+//! }
+//! ```
+//!
+//! To customise error responses, register a [`ErrorHandler`] with [`set_error_handler`].
 // src/extractor.rs
 use std::sync::OnceLock;
 

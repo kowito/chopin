@@ -1,3 +1,14 @@
+//! Argon2id password hashing and verification.
+//!
+//! Provides three presets for common security levels — see [`PasswordHasher`] for details.
+//!
+//! ```rust,ignore
+//! use chopin_auth::PasswordHasher;
+//!
+//! let hasher = PasswordHasher::interactive();
+//! let hash   = hasher.hash(b"hunter2").unwrap();
+//! assert!(hasher.verify(b"hunter2", &hash).unwrap());
+//! ```
 // src/crypto.rs
 use argon2::{
     Argon2, Params,

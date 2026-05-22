@@ -1,6 +1,18 @@
+//! Change-tracking model wrapper for targeted `INSERT` and `UPDATE` queries.
+//!
+//! An [`ActiveModel<M>`] wraps a [`Model`]-derived struct and tracks which
+//! fields have been explicitly set.  Only `Set` columns are included in the
+//! generated SQL — unset columns are omitted entirely.
+//!
+//! ```rust,ignore
+//! use chopin_orm::ActiveModel;
+//!
+//! // Partial update — only the `email` column is written:
+//! let mut am = ActiveModel::from(user);
+//! am.set_email("new@example.com".to_string());
+//! am.save(&mut pool)?;
+//! ```
 use crate::{Executor, Model, OrmError, OrmResult, PgValue};
-
-/// State wrapper for a model field, tracking whether it has been modified.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ActiveValue<V> {
     /// The value has been explicitly set and should be persisted.

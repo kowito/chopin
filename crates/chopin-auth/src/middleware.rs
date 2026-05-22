@@ -1,3 +1,22 @@
+//! RBAC middleware traits and the `require_role_middleware!` macro.
+//!
+//! ## Quick setup
+//!
+//! 1. Define a role enum and implement [`Role`] on it.
+//! 2. Implement [`RoleCheck<YourRole>`] on your claims type.
+//! 3. Use `require_role_middleware!(YourRole::Admin, MyClaims, has_role)` to generate
+//!    a Chopin middleware function that enforces the role.
+//!
+//! ```rust,ignore
+//! use chopin_auth::middleware::{Role, RoleCheck, require_role_middleware};
+//!
+//! #[derive(PartialEq)]
+//! enum MyRole { Admin, User }
+//! impl Role for MyRole {}
+//!
+//! // Attach to a router:
+//! router.layer(require_role_middleware!(MyRole::Admin, MyClaims, has_role));
+//! ```
 // src/middleware.rs
 
 /// Marker trait for role types used with [`require_role_middleware`].

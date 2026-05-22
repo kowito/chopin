@@ -1,3 +1,11 @@
+//! Fixed-capacity connection slab allocator for O(1) slot lookup.
+//!
+//! The [`ConnectionSlab`] pre-allocates all [`Conn`](crate::conn::Conn) structs
+//! once at worker startup.  Slots are identified by their index (used as the
+//! epoll/kqueue event token), eliminating any per-connection heap allocation
+//! after startup.
+//!
+//! This is an internal module.
 // src/slab.rs
 use crate::conn::{Conn, ConnState};
 

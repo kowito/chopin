@@ -1,12 +1,14 @@
+//! Lightweight hashed timer wheel for O(1)-amortised connection timeout pruning.
+//!
+//! Instead of scanning the entire connection slab every second, connections are
+//! bucketed by `last_active % WHEEL_SLOTS`.  Only the slot(s) whose connections
+//! have passed the idle timeout threshold are visited each tick, keeping CPU
+//! usage flat regardless of connection count.
+//!
+//! This is an internal module.
 // src/timer.rs
 //
 // Lightweight hashed timer wheel for O(1)-amortized connection pruning.
-//
-// Instead of scanning 0..high_water (up to 10k entries) every second,
-// we bucket connections by `last_active % WHEEL_SLOTS` and only drain
-// the slot(s) whose connections have just passed the timeout threshold.
-//
-// Each connection lives in exactly ONE slot at any given time.
 
 const WHEEL_SLOTS: usize = 64;
 const WHEEL_MASK: usize = WHEEL_SLOTS - 1; // Fast modulo for power-of-2

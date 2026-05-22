@@ -1,3 +1,11 @@
+//! Zero-copy HTTP/1.1 request parser.
+//!
+//! Parses raw byte slices into [`Request`](crate::http::Request) structs with
+//! no heap allocation.  Returns [`ParseError::Incomplete`] for partial data
+//! (the event loop will accumulate more bytes and retry), or
+//! [`ParseError::TooLarge`] when the request exceeds [`MAX_REQUEST_SIZE`].
+//!
+//! This is an internal module; application code does not call the parser directly.
 // src/parser.rs
 use crate::http::{MAX_HEADERS, Method, Request};
 use memchr::memchr;

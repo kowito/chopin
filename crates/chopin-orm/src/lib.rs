@@ -1,7 +1,46 @@
 //! # chopin-orm
 //!
-//! An easy-to-use Object-Relational Mapper (ORM) for `chopin2`, backed by the high-performance
+//! A type-safe ORM for the Chopin framework, backed by the high-performance
 //! `chopin-pg` synchronous PostgreSQL driver.
+//!
+//! ## Quick Start
+//!
+//! ```rust,ignore
+//! use chopin_orm::{Model, QueryBuilder, OrmResult};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Debug, Serialize, Deserialize, Model)]
+//! #[model(table_name = "users")]
+//! struct User {
+//!     #[model(primary_key)]
+//!     id: i32,
+//!     name: String,
+//!     email: String,
+//! }
+//!
+//! fn get_user(pool: &mut chopin_orm::PgPool, id: i32) -> OrmResult<User> {
+//!     User::find(pool, id)
+//! }
+//!
+//! fn list_active(pool: &mut chopin_orm::PgPool) -> OrmResult<Vec<User>> {
+//!     User::query()
+//!         .filter(chopin_orm::Condition::new("active = {}", vec![true.to_param()]))
+//!         .order_by("name", true)
+//!         .limit(20)
+//!         .fetch_all(pool)
+//! }
+//! ```
+//!
+//! ## Key types
+//!
+//! | Type | Purpose |
+//! |---|---|
+//! | [`Model`] derive macro | Code-generate `find`, `insert`, `update`, `delete`, `query()` |
+//! | [`QueryBuilder`] | Chainable `SELECT` builder with `.filter()`, `.order_by()`, `.limit()` |
+//! | [`Condition`] / [`Expr`] | Type-safe `WHERE` clause fragments |
+//! | [`ActiveModel`] | Change-tracking wrapper — only persists modified columns |
+//! | [`MigrationManager`] | Run and rollback schema migrations |
+//! | [`MockExecutor`] | In-memory stub for unit tests (no database required) |
 
 pub use chopin_orm_macro::Model;
 pub use chopin_pg::{

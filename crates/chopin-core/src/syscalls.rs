@@ -1,3 +1,11 @@
+//! Raw syscall wrappers: socket creation, `SO_REUSEPORT`, `epoll`/`kqueue`, and io_uring.
+//!
+//! Each worker calls [`create_listen_socket`] to create its own `SO_REUSEPORT`
+//! listening socket — the OS load-balances incoming connections across workers
+//! without any userspace coordination.
+//!
+//! This is an internal module; application code should use [`Chopin`](crate::server::Chopin)
+//! or [`Server`](crate::server::Server) instead.
 // src/syscalls.rs
 use crate::error::ChopinResult;
 use libc::{c_int, c_void, socklen_t};

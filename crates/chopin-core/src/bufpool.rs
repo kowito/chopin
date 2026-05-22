@@ -1,23 +1,15 @@
+//! Thread-local `Vec<u8>` buffer pool to eliminate repeated allocator round-trips.
+//!
+//! Each worker thread keeps its own free-list of cleared `Vec<u8>` buffers.
+//! Obtain a buffer with [`get()`]; it is returned to the pool when the
+//! [`BufGuard`] drops.  Oversized buffers (≥ `MAX_BUF_CAPACITY`) are freed
+//! normally instead of being pooled.
+//!
+//! This is an internal module — application code should use
+//! [`Response`](crate::http::Response) builders rather than touching the pool directly.
 // src/bufpool.rs
 //
-// Phase 1.2: Thread-local buffer pool.
-//
-// Eliminates repeated `malloc`/`free` cycles for short-lived `Vec<u8>` buffers
-// used during JSON serialization, response body construction, and chunked
-// encoding. Each worker thread keeps its own free-list — zero synchronization.
-//
-// Design
-// ------
-// - Pool holds up to `MAX_POOLED` buffers, each up to `MAX_BUF_CAPACITY` bytes.
-// - Buffers are returned to the pool (via `BufGuard::drop`) only if they fit
-//   the size limit; oversized buffers are deallocated normally.
-// - `BufGuard` implements `Deref<Target = Vec<u8>>` so callers can use it
-//   like a regular `Vec<u8>`.
-//
-// Usage
-// -----
-// ```rust
-// let mut buf = bufpool::get();   // checkout a cleared Vec
+// Thread-local buffer pool.
 // buf.extend_from_slice(b"hello");
 // // buf returned to pool automatically when dropped
 // ```

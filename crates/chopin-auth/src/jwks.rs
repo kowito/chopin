@@ -1,8 +1,22 @@
+//! JSON Web Key Set (JWKS) support for external identity providers (RFC 7517).
+//!
+//! Parses a JWKS document into a [`JwkSet`] of decoding keys indexed by `kid`.
+//! Works with RSA (`RS256`/`RS384`/`RS512`) and EC (`ES256`/`ES384`) keys as
+//! served by Auth0, Keycloak, Cognito, and similar providers.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use chopin_auth::jwks::JwkSet;
+//!
+//! // Fetch the JWKS JSON from your IdP's discovery endpoint and parse it:
+//! let jwks_json = r#"{ "keys": [...] }"#;
+//! let key_set = JwkSet::from_json(jwks_json).unwrap();
+//!
+//! // Build a JwtManager that validates tokens using the JWKS:
+//! let mgr = key_set.into_jwt_manager();
+//! ```
 // src/jwks.rs — JSON Web Key Set (JWKS) support (RFC 7517)
-//
-// Parses JWKS JSON into a set of indexed decoding keys, enabling key lookup
-// by `kid` (Key ID). Works with RSA (RS256/RS384/RS512) and EC (ES256/ES384)
-// key types commonly served by identity providers.
 
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::Deserialize;

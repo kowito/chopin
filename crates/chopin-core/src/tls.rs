@@ -1,8 +1,21 @@
+//! TLS 1.2/1.3 termination via rustls (requires feature `tls`).
+//!
+//! The raw socket fd is kept for epoll/kqueue readiness; all plaintext I/O
+//! goes through [`rustls::ServerConnection`].  Configure the server certificate
+//! and key with [`TlsConfig`] and pass it to [`Server::bind_tls`](crate::server::Server).
+//!
+//! ```rust,no_run
+//! # #[cfg(feature = "tls")]
+//! # {
+//! use chopin_core::tls::TlsConfig;
+//! use chopin_core::{Router, Server};
+//!
+//! let tls = TlsConfig::from_pem_files("cert.pem", "key.pem").unwrap();
+//! let mut router = Router::new();
+//! Server::bind_tls("0.0.0.0:443", tls).serve(router).unwrap();
+//! # }
+//! ```
 // src/tls.rs — TLS server support for chopin-core (feature = "tls")
-//
-// Uses rustls for TLS 1.2/1.3 termination directly in the event-loop worker.
-// The raw socket fd is kept for epoll/kqueue readiness notifications; all
-// plaintext I/O goes through `rustls::ServerConnection`.
 
 use rustls::pki_types::CertificateDer;
 use rustls::{ServerConfig, ServerConnection};
