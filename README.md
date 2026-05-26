@@ -190,15 +190,32 @@ chopin openapi                            # generate OpenAPI spec
 
 ## 📊 Performance Benchmark
 
-### Latest Local Run
+### TechEmpower Framework Benchmark Report
 
-Measured with `./benchmarks/compare.sh` on macOS using `BENCH_PORT=18080`:
+Run 20260526114540 compared Chopin v0.5.31 against axum, elysia, and hono on Linux 6.12.72-linuxkit (Docker / Apple Silicon). The shared test surface was intentionally limited to `/json` and `/plaintext`.
 
-| Variant | Endpoint | Requests/sec |
-| :--- | :--- | :--- |
-| Chopin | `/plaintext` | 222,785.92 |
+```text
+JSON sweep winners:     axum (16-128), chopin (256-512)
+Plaintext sweep winners: chopin (256-16384)
 
-Benchmark numbers change with hardware, kernel, and compiler settings, so this section now shows the latest local result instead of a fixed cross-framework table. For the latest methodology, commands, and results, see [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Peak throughput snapshot
+
+JSON @ 512 concurrency
+Chopin | ################################################## 652,465
+Axum   | #############################################     580,429
+Elysia | #######################################            515,637
+Hono   | ###################                               238,367
+
+Plaintext @ 16,384 pipeline depth
+Chopin | ################################################## 2,694,197
+Axum   | ########################################            2,162,232
+Elysia | #########################                           1,337,024
+Hono   | ####                                                322,058
+```
+
+Chopin only takes the JSON lead at the two highest concurrency levels. Axum is fastest through 128 concurrency, while Chopin leads plaintext at every pipeline depth.
+
+Benchmark numbers change with hardware, kernel, and compiler settings, so this section captures one TechEmpower run instead of a fixed cross-framework table. For the latest methodology, commands, and results, see [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 **🔧 Optimization Tip**: On Linux, enable the `io-uring` feature for lower latency on supported kernels:
 ```toml

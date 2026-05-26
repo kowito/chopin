@@ -8,10 +8,12 @@ Performance benchmarks for the Chopin HTTP framework.
 benchmarks/
 ├── run.sh          — Single-variant wrk benchmark
 ├── compare.sh      — Side-by-side epoll vs io_uring comparison
+├── compare_hyper.sh — Chopin vs Hyper HTTP comparison + chart report
 ├── profile.sh      — CPU profiling (macOS sample / Linux perf)
 ├── http_bench.py   — Dependency-free Python load generator
 ├── docs/
 │   ├── chopin-pg-benchmarks.md    — PostgreSQL driver benchmark methodology
+│   ├── chopin-vs-hyper.md         — Generated Chopin vs Hyper chart/report
 │   └── running-pg-benchmarks.md   — Step-by-step guide to run pg benchmarks
 └── results/        — Timestamped output files (git-ignored)
 ```
@@ -81,6 +83,14 @@ All scripts respect these overrides:
 ```
 
 This script builds both variants, starts each in turn, benchmarks them, and prints a side-by-side summary.
+
+## Comparing Chopin vs Hyper
+
+```bash
+./benchmarks/compare_hyper.sh
+```
+
+This script benchmarks the Chopin plaintext server against the Hyper plaintext server, then writes a markdown report with a throughput table and chart to [`docs/chopin-vs-hyper.md`](./docs/chopin-vs-hyper.md). It defaults to port `18080` to avoid colliding with local services on `8080`; override with `BENCH_PORT` if needed.
 
 ## CPU profiling
 
