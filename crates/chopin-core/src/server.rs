@@ -100,6 +100,65 @@ impl Chopin {
         self
     }
 
+    /// Apply a global middleware function pointer to all routes.
+    ///
+    /// For closures that capture environment, use [`layer_fn`](Self::layer_fn) instead.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn log_mw(ctx: Context, next: BoxedHandler) -> Response {
+    ///     println!("→ {}", ctx.req.path);
+    ///     next(ctx)
+    /// }
+    ///
+    /// Chopin::new().mount_all_routes().layer(log_mw).serve("0.0.0.0:8080").unwrap();
+    /// ```
+    pub fn layer(mut self, mw: crate::router::MiddlewareFn) -> Self {
+        self.router.layer(mw);
+        self
+    }
+
+    /// Apply a global closure middleware to all routes.
+    ///
+    /// Unlike [`layer`](Self::layer), this accepts closures that capture environment
+    /// (e.g. `Arc<T>` state, config values). Call `next(ctx)` to continue processing,
+    /// or return a [`Response`] directly to short-circuit.
+    ///
+    /// The closure is registered before `mount_all_routes()` builds the fast-table,
+    /// so call `.layer_fn()` **before** `.mount_all_routes()` — or add it to the
+    /// `Router` directly after `.mount_all_routes()` and call `.router.finalize()` again.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use chopin_core::{Context, Response, Chopin};
+    ///
+    /// let api_key = Arc::new("secret123".to_string());
+    ///
+    /// Chopin::new()
+    ///     .layer_fn(move |ctx, next| {
+    ///         if ctx.header("x-api-key") != Some(api_key.as_str()) {
+    ///             return Response::unauthorized();
+    ///         }
+    ///         next(ctx)
+    ///     })
+    ///     .mount_all_routes()
+    ///     .serve("0.0.0.0:8080")
+    ///     .unwrap();
+    /// ```
+    pub fn layer_fn<F>(mut self, f: F) -> Self
+    where
+        F: Fn(crate::http::Context, crate::router::BoxedHandler) -> crate::http::Response
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.router.layer_fn(f);
+        self
+    }
+
     /// Discover and register all routes annotated with `#[get]`, `#[post]`, etc.
     pub fn mount_all_routes(mut self) -> Self {
         for route in inventory::iter::<crate::router::RouteDef> {

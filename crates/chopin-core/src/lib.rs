@@ -173,7 +173,7 @@ pub use filter::{Filter, FilterStack, LoggingFilter, PassthroughFilter};
 pub use headers::{Header, HeaderValue, Headers, IntoHeaderValue};
 pub use http::{Body, Context, IntoResponse, Method, OwnedFd, Request, Response};
 pub use json::KJson;
-pub use router::{RouteDef, Router};
+pub use router::{BoxedHandler, BoxedMiddleware, RouteDef, Router};
 pub use server::{Chopin, Server};
 pub use state::{get_state, set_state, with_state};
 

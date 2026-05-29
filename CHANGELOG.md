@@ -15,6 +15,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`ctx.query_params::<T>()`** — one-liner query string extraction on `Context`. Parses `?key=val&…` into any `serde::Deserialize` type; returns `Err(400 Bad Request)` on failure. Same `?`-compatible ergonomics as `body_json`.
 - **`ctx.state::<T>()`** — typed per-thread state retrieval on `Context`. Returns `Option<T>` (clone of the stored value). The idiomatic way to access resources initialised in `with_worker_init` (e.g. `Arc<DbPool>`).
 - **Thread-local state system** (`chopin_core::state`) — `set_state<T>(val)`, `get_state::<T>()`, and `with_state::<T, F, R>(f)` provide a type-safe, zero-synchronisation per-thread key-value store. Replaces the `lazy_static!` + global pattern for per-worker resources. Re-exported at crate root: `chopin_core::{set_state, get_state, with_state}`.
+- **Closure middleware** (`BoxedMiddleware`, `Router::layer_fn`, `Router::layer_path_fn`) — new `BoxedMiddleware = Arc<dyn Fn(Context, BoxedHandler) -> Response + Send + Sync>` type enables middleware closures that capture environment (e.g. `Arc<State>`, config values). `router.layer_fn(|ctx, next| { … })` for global closure middleware; `router.layer_path_fn(path, |ctx, next| { … })` for path-scoped closure middleware. Fully compose with existing fn-pointer middlewares. `BoxedHandler` and `BoxedMiddleware` re-exported at crate root.
+- **`Chopin::layer(mw)`** — builder method to attach a global fn-pointer middleware when using the high-level `Chopin` builder.
+- **`Chopin::layer_fn(f)`** — builder method to attach a global closure middleware to the `Chopin` builder. Accepts any `Fn(Context, BoxedHandler) -> Response + Send + Sync + 'static`.
 - **`IntoResponse` re-exported** at crate root so user crates no longer need to import from `chopin_core::http`.
 
 #### chopin-macros

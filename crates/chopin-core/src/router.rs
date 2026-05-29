@@ -25,8 +25,26 @@ pub type Handler = fn(Context) -> Response;
 /// A boxed handler used internally for middleware composition.
 pub type BoxedHandler = Arc<dyn Fn(Context) -> Response + Send + Sync>;
 
-/// A middleware function. Receives the request context and the next handler in the chain.
+/// A middleware function pointer. Receives the request context and the next handler in the chain.
+///
+/// For closures that capture environment, use [`BoxedMiddleware`] via [`Router::layer_fn`].
 pub type MiddlewareFn = fn(Context, BoxedHandler) -> Response;
+
+/// A heap-allocated middleware that can capture environment (closures, `Arc` state, etc.).
+///
+/// Created from any `Fn(Context, BoxedHandler) -> Response + Send + Sync + 'static` via
+/// [`Router::layer_fn`] or [`Chopin::layer_fn`].
+///
+/// # Example
+/// ```rust,ignore
+/// router.layer_fn(|ctx, next| {
+///     println!("→ {}", ctx.req.path);
+///     let res = next(ctx);
+///     println!("← {}", res.status);
+///     res
+/// });
+/// ```
+pub type BoxedMiddleware = Arc<dyn Fn(Context, BoxedHandler) -> Response + Send + Sync>;
 
 pub const MAX_MIDDLEWARE: usize = 8;
 pub const MAX_SEGMENTS: usize = 16;
@@ -63,6 +81,7 @@ pub(crate) struct RouteNode {
     pub(crate) param_name: Option<String>,
     pub(crate) is_wildcard: bool,
     pub(crate) middleware: Vec<MiddlewareFn>,
+    pub(crate) boxed_middleware: Vec<BoxedMiddleware>,
     pub(crate) composed_handlers: [Option<BoxedHandler>; METHOD_COUNT],
 }
 
@@ -76,6 +95,7 @@ impl RouteNode {
             param_name: None,
             is_wildcard: false,
             middleware: Vec::new(),
+            boxed_middleware: Vec::new(),
             composed_handlers: std::array::from_fn(|_| None),
         }
     }
@@ -108,6 +128,7 @@ fn method_index(m: Method) -> usize {
 pub struct Router {
     pub(crate) root: RouteNode,
     pub(crate) global_middleware: Vec<MiddlewareFn>,
+    pub(crate) global_boxed_middleware: Vec<BoxedMiddleware>,
     /// O(1) fast path for exact, static (no param/wildcard) routes.
     /// Keyed by `(method_index, path)` — built once at `finalize()` time.
     /// Avoids trie traversal for the common TFB benchmark paths like `/plaintext`, `/json`.
@@ -120,6 +141,7 @@ impl Router {
         Self {
             root: RouteNode::new(String::new()),
             global_middleware: Vec::new(),
+            global_boxed_middleware: Vec::new(),
             fast_table: HashMap::new(),
         }
     }
@@ -325,12 +347,40 @@ impl Router {
 
     // ── Middleware registration ───────────────────────────────────────────────
 
-    /// Apply a middleware function to every route in this router (global layer).
+    /// Apply a middleware function pointer to every route in this router (global layer).
     pub fn layer(&mut self, mw: MiddlewareFn) {
         self.global_middleware.push(mw);
     }
 
-    /// Apply a middleware function to all routes under the given path prefix.
+    /// Apply a closure middleware to every route in this router (global layer).
+    ///
+    /// Unlike [`layer`](Self::layer), this accepts closures that capture environment
+    /// (e.g. `Arc<T>` state, config values).
+    ///
+    /// The closure receives the [`Context`] and the next handler in the chain.
+    /// Call `next(ctx)` to continue processing, or return a [`Response`] directly
+    /// to short-circuit (e.g. for authentication).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::{AtomicU64, Ordering};
+    ///
+    /// let counter = Arc::new(AtomicU64::new(0));
+    /// router.layer_fn(move |ctx, next| {
+    ///     counter.fetch_add(1, Ordering::Relaxed);
+    ///     next(ctx)
+    /// });
+    /// ```
+    pub fn layer_fn<F>(&mut self, f: F)
+    where
+        F: Fn(Context, BoxedHandler) -> Response + Send + Sync + 'static,
+    {
+        self.global_boxed_middleware.push(Arc::new(f));
+    }
+
+    /// Apply a middleware function pointer to all routes under the given path prefix.
     pub fn layer_path(&mut self, path: &str, mw: MiddlewareFn) {
         let mut seg_buf = [""; MAX_SEGMENTS];
         let mut seg_count = 0;
@@ -385,12 +435,83 @@ impl Router {
         current.middleware.push(mw);
     }
 
-    // ── Modular Routing ───────────────────────────────────────────────────────
+    /// Apply a closure middleware to all routes under the given path prefix.
+    ///
+    /// Like [`layer_path`](Self::layer_path) but accepts closures that capture environment.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// router.layer_path_fn("/api", |ctx, next| {
+    ///     // Only runs for routes under /api
+    ///     let res = next(ctx);
+    ///     res.with_header("X-Api-Version", "2")
+    /// });
+    /// ```
+    pub fn layer_path_fn<F>(&mut self, path: &str, f: F)
+    where
+        F: Fn(Context, BoxedHandler) -> Response + Send + Sync + 'static,
+    {
+        let mut seg_buf = [""; MAX_SEGMENTS];
+        let mut seg_count = 0;
+        for s in path.split('/').filter(|s| !s.is_empty()) {
+            if seg_count >= MAX_SEGMENTS {
+                break;
+            }
+            seg_buf[seg_count] = s;
+            seg_count += 1;
+        }
+        let mut current = &mut self.root;
+
+        for &segment in &seg_buf[..seg_count] {
+            let is_param = segment.starts_with(':');
+            let is_wildcard = segment.starts_with('*');
+
+            let param_name = if is_param || is_wildcard {
+                Some(segment[1..].to_string())
+            } else {
+                None
+            };
+
+            let segment_str = if is_param || is_wildcard {
+                String::new()
+            } else {
+                segment.to_string()
+            };
+
+            let mut found_idx = None;
+            for (i, child) in current.children.iter().enumerate() {
+                if child.is_param == is_param
+                    && child.is_wildcard == is_wildcard
+                    && (is_param || is_wildcard || child.path == segment_str)
+                {
+                    found_idx = Some(i);
+                    break;
+                }
+            }
+
+            if let Some(idx) = found_idx {
+                current = &mut current.children[idx];
+            } else {
+                let mut new_node = RouteNode::new(segment_str);
+                new_node.is_param = is_param;
+                new_node.param_name = param_name;
+                new_node.is_wildcard = is_wildcard;
+                current.children.push(new_node);
+                current = current.children.last_mut().unwrap();
+            }
+        }
+
+        current.boxed_middleware.push(Arc::new(f));
+    }
+
+    // ── Modular Routing ────────────────────────────────────────────────────
     /// Merge all routes from `other` into this router.
     #[must_use]
     pub fn merge(mut self, other: Router) -> Self {
         Self::merge_nodes(&mut self.root, other.root);
         self.global_middleware.extend(other.global_middleware);
+        self.global_boxed_middleware.extend(other.global_boxed_middleware);
         self
     }
 
@@ -449,6 +570,7 @@ impl Router {
 
         Self::merge_nodes(current, other.root);
         current.middleware.extend(other.global_middleware);
+        current.boxed_middleware.extend(other.global_boxed_middleware);
         self
     }
 
@@ -461,6 +583,7 @@ impl Router {
         }
 
         target.middleware.append(&mut source.middleware);
+        target.boxed_middleware.extend(source.boxed_middleware);
 
         // Merge children
         for source_child in source.children {
@@ -492,7 +615,8 @@ impl Router {
     pub fn finalize(&mut self) {
         Self::sort_children_recursive(&mut self.root);
         let global_mw: Vec<MiddlewareFn> = self.global_middleware.clone();
-        Self::compose_tree(&mut self.root, &global_mw, &[]);
+        let global_boxed: Vec<BoxedMiddleware> = self.global_boxed_middleware.clone();
+        Self::compose_tree(&mut self.root, &global_mw, &global_boxed, &[], &[]);
 
         // Build the O(1) fast-path table for all static (no param/wildcard) leaf routes.
         // This is done once at startup — zero cost on the hot path.
@@ -546,35 +670,51 @@ impl Router {
         }
     }
 
-    /// Pre-compose middleware chains at `finalize()` time so the hot request
-    /// path pays zero `Arc::new` cost — just a single `Arc` clone (~3 ns).
-    /// `ancestor_mw` carries route-level middleware accumulated while descending
-    /// from the root, mirroring the original `match_recursive` accumulation.
     #[allow(clippy::collapsible_if)]
     fn compose_tree(
         node: &mut RouteNode,
         global_mw: &[MiddlewareFn],
+        global_boxed: &[BoxedMiddleware],
         ancestor_mw: &[MiddlewareFn],
+        ancestor_boxed: &[BoxedMiddleware],
     ) {
         // Effective route middleware for handlers at this node =
         // ancestor_mw (outer) ++ node.middleware (inner)
         let mut node_route_mw: Vec<MiddlewareFn> = ancestor_mw.to_vec();
         node_route_mw.extend_from_slice(&node.middleware);
+        let mut node_boxed_mw: Vec<BoxedMiddleware> = ancestor_boxed.to_vec();
+        node_boxed_mw.extend_from_slice(&node.boxed_middleware);
 
         for method_idx in 0..METHOD_COUNT {
             if let Some(handler) = node.handlers[method_idx] {
-                if !node_route_mw.is_empty() || !global_mw.is_empty() {
+                let has_any = !node_route_mw.is_empty()
+                    || !global_mw.is_empty()
+                    || !node_boxed_mw.is_empty()
+                    || !global_boxed.is_empty();
+                if has_any {
                     let mut composed: BoxedHandler = Arc::new(handler);
-                    // Route-level middleware (innermost → outermost, matching original)
+                    // Route-level fn-ptr middleware (innermost → outermost)
                     for mw in node_route_mw.iter().rev() {
                         let next = composed.clone();
                         let mw = *mw;
                         composed = Arc::new(move |ctx| mw(ctx, next.clone()));
                     }
-                    // Global middleware (outermost layer)
+                    // Route-level closure middleware (innermost → outermost)
+                    for mw in node_boxed_mw.iter().rev() {
+                        let next = composed.clone();
+                        let mw = mw.clone();
+                        composed = Arc::new(move |ctx| mw(ctx, next.clone()));
+                    }
+                    // Global fn-ptr middleware (outermost layer)
                     for mw in global_mw.iter().rev() {
                         let next = composed.clone();
                         let mw = *mw;
+                        composed = Arc::new(move |ctx| mw(ctx, next.clone()));
+                    }
+                    // Global closure middleware (outermost layer)
+                    for mw in global_boxed.iter().rev() {
+                        let next = composed.clone();
+                        let mw = mw.clone();
                         composed = Arc::new(move |ctx| mw(ctx, next.clone()));
                     }
                     node.composed_handlers[method_idx] = Some(composed);
@@ -582,7 +722,7 @@ impl Router {
             }
         }
         for child in &mut node.children {
-            Self::compose_tree(child, global_mw, &node_route_mw);
+            Self::compose_tree(child, global_mw, global_boxed, &node_route_mw, &node_boxed_mw);
         }
     }
 
