@@ -375,6 +375,12 @@ fn generate_route(method: &str, attr: TokenStream, item: TokenStream) -> TokenSt
     let fn_name = &input_fn.sig.ident;
     let method_ident = syn::Ident::new(method, proc_macro2::Span::call_site());
 
+    // Generate a trampoline name that is unlikely to clash with user symbols.
+    let trampoline_name = syn::Ident::new(
+        &format!("__chopin_{}_h", fn_name),
+        proc_macro2::Span::call_site(),
+    );
+
     // Extract doc comments
     let mut docs = Vec::new();
     for attr in &input_fn.attrs {
@@ -396,14 +402,23 @@ fn generate_route(method: &str, attr: TokenStream, item: TokenStream) -> TokenSt
         String::new()
     };
 
+    // The trampoline converts any `impl IntoResponse` return type (including
+    // `Response`, `Result<Response, E>`, etc.) into a plain `Response`.
+    // This allows handlers to use `?` for early error returns.
     let expanded = quote! {
         #input_fn
+
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        fn #trampoline_name(__ctx: ::chopin_core::Context) -> ::chopin_core::Response {
+            ::chopin_core::http::IntoResponse::into_response(#fn_name(__ctx))
+        }
 
         ::chopin_core::inventory::submit! {
             ::chopin_core::RouteDef {
                 method: ::chopin_core::http::Method::#method_ident,
                 path: #path,
-                handler: #fn_name,
+                handler: #trampoline_name,
                 summary: #summary,
                 description: #description,
             }

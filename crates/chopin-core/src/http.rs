@@ -887,6 +887,78 @@ impl<'a> Context<'a> {
         Response::json(val)
     }
 
+    /// Deserialize the request body as JSON into `T`.
+    ///
+    /// Returns `Err(400 Bad Request)` when the body is not valid JSON or doesn't
+    /// match the expected schema.  Enables `?` in handlers that return
+    /// `Result<Response, Response>` or any `E: From<Response>`.
+    ///
+    /// Shorthand for `ctx.extract::<Json<T>>().map(|Json(v)| v)`.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// #[post("/users")]
+    /// fn create_user(ctx: Context) -> Result<Response, Response> {
+    ///     let body: CreateUser = ctx.body_json()?;
+    ///     Ok(Response::json(&body))
+    /// }
+    /// ```
+    #[allow(clippy::result_large_err)]
+    pub fn body_json<'b, T>(&'b self) -> Result<T, Response>
+    where
+        T: serde::Deserialize<'b>,
+    {
+        serde_json::from_slice(self.req.body).map_err(|_| Response::bad_request())
+    }
+
+    /// Deserialize the URL query string into `T`.
+    ///
+    /// Returns `Err(400 Bad Request)` when the query string cannot be deserialized.
+    /// Enables `?` in handlers that return `Result<Response, Response>`.
+    ///
+    /// Shorthand for `ctx.extract::<Query<T>>().map(|Query(v)| v)`.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// #[derive(serde::Deserialize)]
+    /// struct Pagination { page: u32, limit: u32 }
+    ///
+    /// #[get("/posts")]
+    /// fn list_posts(ctx: Context) -> Result<Response, Response> {
+    ///     let Pagination { page, limit } = ctx.query_params()?;
+    ///     Ok(Response::text(format!("page={page} limit={limit}")))
+    /// }
+    /// ```
+    #[allow(clippy::result_large_err)]
+    pub fn query_params<T>(&self) -> Result<T, Response>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let qs = self.req.query.unwrap_or("");
+        serde_urlencoded::from_str::<T>(qs).map_err(|_| Response::bad_request())
+    }
+
+    /// Retrieve a clone of the per-thread state value of type `T`.
+    ///
+    /// Returns `None` if no value of that type was stored via [`chopin_core::set_state`].
+    /// The idiomatic pattern is to call `set_state` inside `Chopin::with_worker_init`.
+    ///
+    /// For `Arc<T>` values this is an O(1) ref-count increment. For large structs,
+    /// prefer wrapping in `Arc` to keep the clone cheap.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// #[get("/users")]
+    /// fn list_users(ctx: Context) -> Result<Response, Response> {
+    ///     let pool = ctx.state::<Arc<MyPool>>().ok_or_else(Response::server_error)?;
+    ///     // use pool ...
+    ///     Ok(Response::text("ok"))
+    /// }
+    /// ```
+    pub fn state<T: Clone + 'static>(&self) -> Option<T> {
+        crate::state::get_state::<T>()
+    }
+
     /// Extract and parse a URL path parameter by name.
     ///
     /// Returns `Err(400 Bad Request)` if the parameter is absent or fails to

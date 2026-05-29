@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+#### chopin-core
+- **`ctx.body_json::<T>()`** — one-liner JSON body extraction on `Context`. Deserializes the request body into `T` via `serde_json`; returns `Err(400 Bad Request)` on failure. Eliminates the verbose `ctx.extract::<Json<T>>()` match pattern and enables `?` in handlers returning `Result<Response, Response>`.
+- **`ctx.query_params::<T>()`** — one-liner query string extraction on `Context`. Parses `?key=val&…` into any `serde::Deserialize` type; returns `Err(400 Bad Request)` on failure. Same `?`-compatible ergonomics as `body_json`.
+- **`ctx.state::<T>()`** — typed per-thread state retrieval on `Context`. Returns `Option<T>` (clone of the stored value). The idiomatic way to access resources initialised in `with_worker_init` (e.g. `Arc<DbPool>`).
+- **Thread-local state system** (`chopin_core::state`) — `set_state<T>(val)`, `get_state::<T>()`, and `with_state::<T, F, R>(f)` provide a type-safe, zero-synchronisation per-thread key-value store. Replaces the `lazy_static!` + global pattern for per-worker resources. Re-exported at crate root: `chopin_core::{set_state, get_state, with_state}`.
+- **`IntoResponse` re-exported** at crate root so user crates no longer need to import from `chopin_core::http`.
+
+#### chopin-macros
+- **`Result`-returning handlers** — `#[get]`, `#[post]`, and all route macros now generate an internal trampoline that calls `IntoResponse::into_response()` on the handler's return value. Handlers may now return `Response`, `Result<Response, E>`, or any type that implements `IntoResponse`. This makes `?` propagation work natively without any wrapper macro.
+
+### Changed
+- **Default `MAX_REQUEST_SIZE` raised from 1 MiB to 4 MiB** — better default for modern JSON REST APIs. Override via `CHOPIN_MAX_REQUEST_SIZE` env var or `.with_max_request_size(bytes)`.
+
+---
+
 ## [0.5.31] — 2026-05-21
 
 ### Added
