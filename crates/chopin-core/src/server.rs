@@ -172,7 +172,7 @@ impl Chopin {
     /// Override the maximum allowed request size (headers + body) in bytes.
     ///
     /// Requests exceeding this are rejected with `413 Content Too Large`.
-    /// Defaults to 1 MiB (overridable via `CHOPIN_MAX_REQUEST_SIZE` env var).
+    /// Defaults to 4 MiB (overridable via `CHOPIN_MAX_REQUEST_SIZE` env var).
     ///
     /// # Example
     ///
@@ -320,7 +320,7 @@ impl Server {
     /// Override the maximum allowed request size (headers + body combined) in bytes.
     ///
     /// Requests that exceed this limit are rejected with `413 Content Too Large`.
-    /// Defaults to 1 MiB (overridable via the `CHOPIN_MAX_REQUEST_SIZE` env var).
+    /// Defaults to 4 MiB (overridable via the `CHOPIN_MAX_REQUEST_SIZE` env var).
     ///
     /// # Example
     ///

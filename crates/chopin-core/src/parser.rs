@@ -13,7 +13,7 @@ use memchr::memchr;
 /// Hard limit on total request size (headers + body).  Requests exceeding this
 /// are rejected with `ParseError::TooLarge` to prevent OOM from huge bodies.
 /// This is the *default* used when no per-server override is configured.
-pub const MAX_REQUEST_SIZE: usize = 1_048_576; // 1 MiB
+pub const MAX_REQUEST_SIZE: usize = 4_194_304; // 4 MiB
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -26,7 +26,7 @@ pub enum ParseError {
 /// Returns the parsed Request and the total number of bytes consumed (length of headers + body).
 ///
 /// `max_size` caps the total allowed request size (headers + body).  Pass
-/// [`MAX_REQUEST_SIZE`] for the 1 MiB default or a custom value configured via
+/// [`MAX_REQUEST_SIZE`] for the 4 MiB default or a custom value configured via
 /// [`Server::with_max_request_size`].
 #[inline(always)]
 pub fn parse_request(
