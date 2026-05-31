@@ -278,6 +278,30 @@ impl Chopin {
         }
         server.serve(self.router)
     }
+
+    /// Start the server with **mutual TLS (mTLS)**, binding to `host_port`.
+    ///
+    /// Requires the `tls` feature flag. Clients must present a certificate
+    /// signed by a CA in `client_ca_path` or the TLS handshake fails before
+    /// any HTTP request is processed.
+    #[cfg(feature = "tls")]
+    pub fn serve_mtls(
+        self,
+        host_port: &str,
+        cert_path: &str,
+        key_path: &str,
+        client_ca_path: &str,
+    ) -> crate::error::ChopinResult<()> {
+        let mut server =
+            Server::bind(host_port).with_mtls(cert_path, key_path, client_ca_path)?;
+        if let Some(size) = self.max_request_size {
+            server = server.with_max_request_size(size);
+        }
+        if let Some(init) = self.worker_init {
+            server = server.with_worker_init_arc(init);
+        }
+        server.serve(self.router)
+    }
 }
 
 /// Low-level multi-threaded server.
@@ -411,6 +435,28 @@ impl Server {
     pub fn with_tls(mut self, cert_path: &str, key_path: &str) -> crate::error::ChopinResult<Self> {
         let cfg = crate::tls::TlsServerConfig::from_pem_files(cert_path, key_path)
             .map_err(|e| crate::error::ChopinError::Other(e))?;
+        self.tls_config = Some(cfg);
+        Ok(self)
+    }
+
+    /// Enable **mutual TLS (mTLS)**: present `cert_path` as the server certificate
+    /// and reject any client whose certificate is not signed by a CA in
+    /// `client_ca_path`.
+    ///
+    /// Requires the `tls` feature flag.
+    #[cfg(feature = "tls")]
+    pub fn with_mtls(
+        mut self,
+        cert_path: &str,
+        key_path: &str,
+        client_ca_path: &str,
+    ) -> crate::error::ChopinResult<Self> {
+        let cfg = crate::tls::TlsServerConfig::from_pem_files_with_client_auth(
+            cert_path,
+            key_path,
+            client_ca_path,
+        )
+        .map_err(crate::error::ChopinError::Other)?;
         self.tls_config = Some(cfg);
         Ok(self)
     }

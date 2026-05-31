@@ -170,6 +170,8 @@ impl Worker {
             epoll_timeout_ms,
             max_pipeline_depth,
             max_request_size,
+            #[cfg(feature = "tls")]
+            tls_config: None,
             date_cache: {
                 let s = httpdate::fmt_http_date(std::time::SystemTime::now());
                 let mut buf = [0u8; 29];

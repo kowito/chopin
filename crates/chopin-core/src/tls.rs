@@ -18,7 +18,8 @@
 // src/tls.rs — TLS server support for chopin-core (feature = "tls")
 
 use rustls::pki_types::CertificateDer;
-use rustls::{ServerConfig, ServerConnection};
+use rustls::server::WebPkiClientVerifier;
+use rustls::{RootCertStore, ServerConfig, ServerConnection};
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 
@@ -66,6 +67,77 @@ impl TlsServerConfig {
 
         let config = ServerConfig::builder()
             .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|e| format!("TLS config error: {}", e))?;
+
+        Ok(TlsServerConfig {
+            inner: Arc::new(config),
+        })
+    }
+
+    /// Load TLS configuration **with mutual TLS (mTLS)** — the server will
+    /// require, validate, and surface a client certificate signed by one of
+    /// the CAs in `client_ca_pem_path`.
+    ///
+    /// Connections that present no client certificate, an untrusted one, or
+    /// one that fails path validation are rejected at the TLS layer before
+    /// any HTTP request is parsed.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use chopin_core::tls::TlsServerConfig;
+    /// let cfg = TlsServerConfig::from_pem_files_with_client_auth(
+    ///     "server.crt",
+    ///     "server.key",
+    ///     "client-ca.crt",
+    /// ).unwrap();
+    /// ```
+    pub fn from_pem_files_with_client_auth(
+        cert_path: &str,
+        key_path: &str,
+        client_ca_pem_path: &str,
+    ) -> Result<Self, String> {
+        let cert_pem = std::fs::read(cert_path)
+            .map_err(|e| format!("Cannot read cert '{}': {}", cert_path, e))?;
+        let key_pem = std::fs::read(key_path)
+            .map_err(|e| format!("Cannot read key '{}': {}", key_path, e))?;
+        let ca_pem = std::fs::read(client_ca_pem_path)
+            .map_err(|e| format!("Cannot read client CA '{}': {}", client_ca_pem_path, e))?;
+
+        let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_pem.as_slice())
+            .filter_map(|c| c.ok())
+            .collect();
+        if certs.is_empty() {
+            return Err(format!("No certificates found in '{}'", cert_path));
+        }
+
+        let key = rustls_pemfile::private_key(&mut key_pem.as_slice())
+            .map_err(|e| format!("Cannot parse key '{}': {}", key_path, e))?
+            .ok_or_else(|| format!("No private key found in '{}'", key_path))?;
+
+        // Build root store from the supplied client-CA bundle.
+        let mut roots = RootCertStore::empty();
+        let mut added = 0usize;
+        for cert in rustls_pemfile::certs(&mut ca_pem.as_slice()).flatten() {
+            roots
+                .add(cert)
+                .map_err(|e| format!("Invalid CA cert in '{}': {}", client_ca_pem_path, e))?;
+            added += 1;
+        }
+        if added == 0 {
+            return Err(format!(
+                "No CA certificates found in '{}'",
+                client_ca_pem_path
+            ));
+        }
+
+        let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
+            .build()
+            .map_err(|e| format!("Failed to build client verifier: {}", e))?;
+
+        let config = ServerConfig::builder()
+            .with_client_cert_verifier(verifier)
             .with_single_cert(certs, key)
             .map_err(|e| format!("TLS config error: {}", e))?;
 
