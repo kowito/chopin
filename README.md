@@ -246,4 +246,78 @@ CHOPIN_SLAB_CAPACITY=25000 CHOPIN_READ_BUF_SIZE=16384 CHOPIN_WRITE_BUF_SIZE=6553
 > **Memory tip**: each connection slot uses `CHOPIN_READ_BUF_SIZE + CHOPIN_WRITE_BUF_SIZE` bytes of heap. With the defaults (8 KiB + 32 KiB = 40 KiB) and 16 000 slots, that is ~625 MiB per worker. Tune `CHOPIN_SLAB_CAPACITY` down if memory is tight.
 
 ---
+
+## 🗺️ Roadmap
+
+Living roadmap of planned improvements, distilled from an audit of every workspace crate. Items are grouped by theme and priority rather than calendar dates. The deeper ntex-parity engineering roadmap lives in [docs/roadmap.md](docs/roadmap.md).
+
+### P0 — Production hardening (security & robustness)
+
+- **TLS client-cert verification** in [crates/chopin-core/src/tls.rs](crates/chopin-core/src/tls.rs) — currently server-auth only; add an opt-in `require_client_auth()` path backed by a rustls `ClientCertVerifier`.
+- **Graceful shutdown timeout & connection draining** in [crates/chopin-core/src/server.rs](crates/chopin-core/src/server.rs) — today shutdown sets a flag but never force-closes slow clients. Add `CHOPIN_SHUTDOWN_TIMEOUT_MS` and a drain phase.
+- **Read backpressure** in [crates/chopin-core/src/conn.rs](crates/chopin-core/src/conn.rs) — pause reads when `write_buf` utilization passes a high-watermark, instead of unbounded queueing.
+- **Eliminate `unwrap()` chains in the CLI** — [crates/chopin-cli/src/migrations.rs](crates/chopin-cli/src/migrations.rs) panics on non-UTF8 paths and malformed filenames; replace with typed errors and user-facing messages.
+- **Unit tests for `chopin-auth`** — the crate currently ships with no in-crate tests; add coverage for JWT verify/expiry, JWKS parsing, PKCE, and password hashing as a security baseline.
+
+### P1 — Quick wins (high value, low effort)
+
+- **JWKS caching with TTL & rotation** in [crates/chopin-auth/src/jwks.rs](crates/chopin-auth/src/jwks.rs) — cache key sets per issuer, refresh on `kid` miss, expose a swap-on-rotation hook.
+- **Richer `AuthError`** in [crates/chopin-auth/src/jwt.rs](crates/chopin-auth/src/jwt.rs) — distinguish expired / bad-signature / malformed instead of a single `InvalidToken`.
+- **Date header cache** (`[u8; 29]` per worker, refreshed once per second) in [crates/chopin-core/src/worker.rs](crates/chopin-core/src/worker.rs) — saves ~20 ns per response on the hot path.
+- **LUT-based integer encoding** for Content-Length and status lines (see [docs/roadmap.md](docs/roadmap.md) Phase 2).
+- **Configurable PG pool env vars** in [crates/chopin-pg/src/pool.rs](crates/chopin-pg/src/pool.rs) — `CHOPIN_PG_MIN_SIZE`, `CHOPIN_PG_CHECKOUT_TIMEOUT_MS`, custom health-check query (today hardcoded to `SELECT 1`).
+- **Request-logger middleware** wired into `chopin dev` so the dev server prints method/path/status/latency by default.
+
+### P2 — Observability
+
+- **Latency histograms & error counters** in [crates/chopin-core/src/metrics.rs](crates/chopin-core/src/metrics.rs) (currently only `req_count`, `active_conns`, `bytes_sent`).
+- **`tracing` integration** with feature flag; per-request span carrying a request ID propagated to handlers and downstream `chopin-pg` queries.
+- **Prometheus exposition format** for `/metrics` (text format with HELP/TYPE), plus an OpenMetrics feature flag.
+
+### P3 — Feature completion
+
+- **HTTP/2 request path** — the frame codec in [crates/chopin-core/src/http2.rs](crates/chopin-core/src/http2.rs) exists but is not wired to the router; complete `h2c` upgrade → stream multiplexing → HPACK so gRPC and modern clients work end-to-end.
+- **Compression middleware** (gzip / brotli / zstd) as a built-in I/O filter on top of the existing [filter.rs](crates/chopin-core/src/filter.rs) stack.
+- **CORS middleware** out of the box (today only `rate_limit.rs` ships).
+- **Prepared-statement cache API** and **query pipelining** in [crates/chopin-pg/src/connection.rs](crates/chopin-pg/src/connection.rs) — today every `query()` re-parses; batch independent queries into one round trip.
+- **COPY OUT streaming reader** in [crates/chopin-pg/src/connection.rs](crates/chopin-pg/src/connection.rs) — only `CopyWriter` (COPY IN) is implemented.
+- **LISTEN/NOTIFY callback API** — internal buffering exists but no user-facing async handler registration.
+- **ORM relationships** in [crates/chopin-orm/src/builder.rs](crates/chopin-orm/src/builder.rs) — promote raw `join()` into declarative `#[has_many] / #[belongs_to] / #[has_one]` on `#[derive(Model)]` with eager-load helpers.
+- **Soft deletes & timestamps as derive options** in [crates/chopin-orm-macro](crates/chopin-orm-macro) instead of opt-in trait wiring.
+- **OAuth `/token` and `/refresh` handlers** built on top of [crates/chopin-auth/src/oauth.rs](crates/chopin-auth/src/oauth.rs); ship reference providers (GitHub, Google) behind feature flags.
+
+### P4 — Developer experience
+
+- **Scaffold cleanup** — remove every `TODO` / `todo!()` from `chopin generate` output ([crates/chopin-cli/src/generate.rs](crates/chopin-cli/src/generate.rs)); generated services must compile and run unedited.
+- **`chopin migrate rollback` / `migrate redo`** with version-aware tracking in [crates/chopin-cli/src/migrations.rs](crates/chopin-cli/src/migrations.rs).
+- **`chopin introspect`** — generate `#[derive(Model)]` structs from an existing database schema.
+- **Embedded file watcher** for `chopin dev` instead of shelling out to `cargo-watch`; reload on `.env` changes too.
+- **Rich errors via `miette`** for CLI parse/config/migration failures.
+- **OpenAPI generator polish** — auto-discover path parameters, response schemas from `#[derive(IntoResponse)]`, and request bodies from `Json<T>` extractors.
+
+### P5 — Performance (see [docs/roadmap.md](docs/roadmap.md) for full plan)
+
+- Thread-local `BytesMut` pool for dynamic response buffers.
+- Adaptive read/write buffer watermarks per connection.
+- Concurrent in-flight request dispatch on a single keep-alive connection.
+- Finish the io_uring backend: registered fixed buffers, `IORING_OP_SPLICE` sendfile, optional `SQPOLL`.
+
+### Documentation
+
+- HTTP/2 usage guide (h2c upgrade example) once the request path lands.
+- `chopin-pg` COPY example under [crates/chopin-pg/examples](crates/chopin-pg/examples).
+- Unified error-handling guide across `core`, `pg`, `orm`, `auth`.
+- Document every `CHOPIN_*` runtime variable (including the planned `CHOPIN_SHUTDOWN_TIMEOUT_MS` and pool tunables) in one table.
+
+### Testing
+
+- Raise per-crate source-to-test ratios. Current baseline: `chopin-auth` 7 src / 0 tests, `chopin-pg` 12 / 1, `chopin-orm` 8 / 1, `chopin-core` 16 / 2.
+- Add fuzz targets for the HTTP/1.1 parser and the PG wire-protocol decoder.
+- Add a TLS integration test exercising both server-auth and the planned mTLS path.
+
+---
+
+Contributions welcome — pick any roadmap item, open a tracking issue first, and reference the file paths above so reviewers can scope quickly.
+
+---
 "Simple as a melody, fast as a nocturne." - *nocturne-op9-no2*
