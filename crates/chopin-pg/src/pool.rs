@@ -129,6 +129,67 @@ impl PgPoolConfig {
         self.idle_timeout = None;
         self
     }
+
+    /// Build a config from `CHOPIN_PG_*` environment variables, falling back
+    /// to `PgPoolConfig::default()` for any unset value.
+    ///
+    /// Recognised variables:
+    /// - `CHOPIN_PG_MAX_SIZE`            — max pool size (usize)
+    /// - `CHOPIN_PG_MIN_SIZE`            — min pool size (usize)
+    /// - `CHOPIN_PG_MAX_LIFETIME_MS`     — max connection lifetime in ms (0 = disabled)
+    /// - `CHOPIN_PG_IDLE_TIMEOUT_MS`     — idle timeout in ms (0 = disabled)
+    /// - `CHOPIN_PG_CHECKOUT_TIMEOUT_MS` — `get()` wait timeout in ms
+    /// - `CHOPIN_PG_CONNECT_TIMEOUT_MS`  — connection establishment timeout in ms
+    /// - `CHOPIN_PG_TEST_ON_CHECKOUT`   — `1`/`true` enables validation query on checkout
+    /// - `CHOPIN_PG_VALIDATION_QUERY`   — SQL run when test_on_checkout is enabled
+    /// - `CHOPIN_PG_AUTO_RECONNECT`    — `0`/`false` disables auto-reconnect (default on)
+    ///
+    /// Unparseable values are silently ignored and the default is kept.
+    pub fn from_env() -> Self {
+        let mut cfg = Self::default();
+        if let Ok(v) = std::env::var("CHOPIN_PG_MAX_SIZE") {
+            if let Ok(n) = v.parse() {
+                cfg.max_size = n;
+            }
+        }
+        if let Ok(v) = std::env::var("CHOPIN_PG_MIN_SIZE") {
+            if let Ok(n) = v.parse() {
+                cfg.min_size = n;
+            }
+        }
+        if let Ok(v) = std::env::var("CHOPIN_PG_MAX_LIFETIME_MS") {
+            if let Ok(n) = v.parse::<u64>() {
+                cfg.max_lifetime = if n == 0 { None } else { Some(Duration::from_millis(n)) };
+            }
+        }
+        if let Ok(v) = std::env::var("CHOPIN_PG_IDLE_TIMEOUT_MS") {
+            if let Ok(n) = v.parse::<u64>() {
+                cfg.idle_timeout = if n == 0 { None } else { Some(Duration::from_millis(n)) };
+            }
+        }
+        if let Ok(v) = std::env::var("CHOPIN_PG_CHECKOUT_TIMEOUT_MS") {
+            if let Ok(n) = v.parse::<u64>() {
+                cfg.checkout_timeout = Some(Duration::from_millis(n));
+            }
+        }
+        if let Ok(v) = std::env::var("CHOPIN_PG_CONNECT_TIMEOUT_MS") {
+            if let Ok(n) = v.parse::<u64>() {
+                cfg.connection_timeout = Some(Duration::from_millis(n));
+            }
+        }
+        if let Ok(v) = std::env::var("CHOPIN_PG_TEST_ON_CHECKOUT") {
+            cfg.test_on_checkout = matches!(v.as_str(), "1" | "true" | "TRUE" | "yes");
+        }
+        if let Ok(v) = std::env::var("CHOPIN_PG_VALIDATION_QUERY") {
+            if !v.is_empty() {
+                cfg.validation_query = v;
+            }
+        }
+        if let Ok(v) = std::env::var("CHOPIN_PG_AUTO_RECONNECT") {
+            cfg.auto_reconnect = !matches!(v.as_str(), "0" | "false" | "FALSE" | "no");
+        }
+        cfg
+    }
 }
 
 // ─── PooledConn ───────────────────────────────────────────────
