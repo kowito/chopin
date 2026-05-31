@@ -131,6 +131,10 @@ pub struct Worker {
     /// Requests exceeding this are rejected with 413 Content Too Large.
     /// Defaults to `MAX_REQUEST_SIZE` (1 MiB).
     max_request_size: usize,
+    /// Hard deadline (in seconds) for draining in-flight connections after a
+    /// shutdown signal is observed. Workers exit even if connections remain
+    /// once this elapses. Configurable via `CHOPIN_SHUTDOWN_TIMEOUT_MS`.
+    shutdown_drain_secs: u32,
     #[cfg(feature = "tls")]
     tls_config: Option<crate::tls::TlsServerConfig>,
     // Phase 4: Per-worker Date header cache. Refreshed at most once per second.
@@ -161,6 +165,13 @@ impl Worker {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(crate::parser::MAX_REQUEST_SIZE);
 
+        // Convert ms env var to whole seconds (rounded up, minimum 1s).
+        let shutdown_drain_secs = std::env::var("CHOPIN_SHUTDOWN_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|ms| ((ms + 999) / 1_000).max(1) as u32)
+            .unwrap_or(30);
+
         Self {
             id,
             router,
@@ -170,6 +181,7 @@ impl Worker {
             epoll_timeout_ms,
             max_pipeline_depth,
             max_request_size,
+            shutdown_drain_secs,
             #[cfg(feature = "tls")]
             tls_config: None,
             date_cache: {
@@ -254,8 +266,11 @@ impl Worker {
             if is_shutting_down && slab.is_empty() {
                 break;
             }
-            // D.3: Hard drain deadline — exit after 30s even if connections remain
-            if is_shutting_down && drain_started > 0 && now.wrapping_sub(drain_started) > 30 {
+            // D.3: Hard drain deadline — exit after configured timeout even if connections remain
+            if is_shutting_down
+                && drain_started > 0
+                && now.wrapping_sub(drain_started) > self.shutdown_drain_secs
+            {
                 break;
             }
             iter_count = iter_count.wrapping_add(1);
@@ -2299,6 +2314,7 @@ impl Worker {
         let mut last_prune = now;
         let mut timer_wheel = TimerWheel::new(now);
         let mut iter_count: u32 = 0;
+        let mut drain_started: u32 = 0;
 
         self.submit_accept(&mut ring);
         ring.submit()?;
@@ -2307,6 +2323,14 @@ impl Worker {
             let is_shutting_down = shutdown.load(Ordering::Acquire);
             if is_shutting_down && slab.is_empty() {
                 break;
+            }
+            if is_shutting_down {
+                if drain_started == 0 {
+                    drain_started = now;
+                }
+                if now.wrapping_sub(drain_started) > self.shutdown_drain_secs {
+                    break;
+                }
             }
             iter_count = iter_count.wrapping_add(1);
 
