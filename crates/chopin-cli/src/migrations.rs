@@ -1,9 +1,44 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use chopin_pg::{PgConfig, PgPool};
 use chrono::Local;
 use colored::*;
+use std::ffi::OsStr;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Collect `*.up.sql` migration files in `dir`, sorted lexicographically.
+///
+/// Skips entries whose names are not valid UTF-8 instead of panicking.
+fn collect_up_migrations(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for entry in fs::read_dir(dir)
+        .with_context(|| format!("reading migrations dir {}", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension() != Some(OsStr::new("sql")) {
+            continue;
+        }
+        let Some(fname) = path.file_name().and_then(|s| s.to_str()) else {
+            // Skip non-UTF8 names rather than crashing.
+            continue;
+        };
+        if fname.contains(".up") {
+            out.push(path);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Extract the migration name (stem with ".up" stripped) from a path.
+fn migration_name(path: &Path) -> Result<String> {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow::anyhow!("migration filename is not valid UTF-8: {}", path.display()))?;
+    Ok(stem.replace(".up", ""))
+}
 
 pub fn run_migration_command(project_dir: &Path, command: crate::MigrateCommands) -> Result<()> {
     let cfg = crate::config::ChopinConfig::load(project_dir)?;
@@ -60,23 +95,10 @@ fn show_status(project_dir: &Path, pool: &mut PgPool) -> Result<()> {
     }
 
     println!("{} Migration Status:", "📊".bold());
-    let mut files: Vec<_> = fs::read_dir(migrations_dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension().is_some_and(|ext| ext == "sql")
-                && p.file_name().unwrap().to_str().unwrap().contains(".up")
-        })
-        .collect();
-    files.sort();
+    let files = collect_up_migrations(&migrations_dir)?;
 
     for file in files {
-        let full_name = file
-            .file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .replace(".up", "");
+        let full_name = migration_name(&file)?;
         let status = if applied.contains(&full_name) {
             "Applied".green()
         } else {
@@ -97,24 +119,11 @@ fn run_up(project_dir: &Path, pool: &mut PgPool) -> Result<()> {
         return Err(anyhow::anyhow!("Migrations directory not found."));
     }
 
-    let mut files: Vec<_> = fs::read_dir(migrations_dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension().is_some_and(|ext| ext == "sql")
-                && p.file_name().unwrap().to_str().unwrap().contains(".up")
-        })
-        .collect();
-    files.sort();
+    let files = collect_up_migrations(&migrations_dir)?;
 
     let mut count = 0;
     for file in files {
-        let full_name = file
-            .file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .replace(".up", "");
+        let full_name = migration_name(&file)?;
         if !applied.contains(&full_name) {
             println!("{} Applying migration: {}", "↑".green(), full_name);
             let sql = fs::read_to_string(&file)?;
