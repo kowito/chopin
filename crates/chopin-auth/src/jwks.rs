@@ -22,6 +22,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use crate::jwt::{AuthError, JwtConfig, JwtManager};
 
@@ -177,6 +178,8 @@ struct JwksInner {
     keys: HashMap<String, (DecodingKey, Algorithm)>,
     /// Fallback key when token has no `kid` (first sig key in the set).
     default_key: Option<(DecodingKey, Algorithm)>,
+    /// Wall-clock instant of the last successful (re)build of this key set.
+    last_refresh: Instant,
 }
 
 impl JwksProvider {
@@ -271,6 +274,43 @@ impl JwksProvider {
         guard.keys.len() + if guard.default_key.is_some() { 1 } else { 0 }
     }
 
+    /// Time elapsed since the last successful `from_json` / `refresh`.
+    pub fn age(&self) -> std::time::Duration {
+        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        guard.last_refresh.elapsed()
+    }
+
+    /// Returns `true` if the cached key set is older than `ttl`.
+    pub fn is_stale(&self, ttl: std::time::Duration) -> bool {
+        self.age() >= ttl
+    }
+
+    /// Refresh the cached key set only if it is older than `ttl`.
+    ///
+    /// The `fetch` closure is invoked lazily — it runs only when a refresh is
+    /// actually required, avoiding network round-trips on every request. Pair
+    /// this with your HTTP client of choice (the auth crate intentionally does
+    /// not pull in a transport dependency).
+    ///
+    /// ```rust,ignore
+    /// use std::time::Duration;
+    /// provider.refresh_if_stale(Duration::from_secs(3600), || {
+    ///     let body = ureq::get(jwks_url).call()?.into_string()?;
+    ///     Ok(body)
+    /// })?;
+    /// ```
+    pub fn refresh_if_stale<F>(&self, ttl: std::time::Duration, fetch: F) -> Result<bool, AuthError>
+    where
+        F: FnOnce() -> Result<String, AuthError>,
+    {
+        if !self.is_stale(ttl) {
+            return Ok(false);
+        }
+        let json = fetch()?;
+        self.refresh(&json)?;
+        Ok(true)
+    }
+
     fn build_inner(jwk_set: &JwkSet) -> Result<JwksInner, AuthError> {
         let mut keys = HashMap::new();
         let mut default_key = None;
@@ -296,7 +336,7 @@ impl JwksProvider {
             }
         }
 
-        Ok(JwksInner { keys, default_key })
+        Ok(JwksInner { keys, default_key, last_refresh: Instant::now() })
     }
 }
 
