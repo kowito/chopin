@@ -25,6 +25,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 #### chopin-cli
 - **`chopin migrate` no longer panics on non-UTF8 paths** — `migrations.rs` introduces `collect_up_migrations(dir)` and `migration_name(path)` helpers that filter unrecognized filenames instead of unwrapping `.to_str()`.
 - **`chopin migrate redo [N]`** — new subcommand that rolls back the last `N` migrations (default 1) and immediately re-applies pending migrations. Useful for iterating on a single migration during development.
+- **`chopin migrate rollback [N]`** — friendly alias for `migrate down [N]` (default 1). Mirrors Rails/Django naming for users coming from those ecosystems.
+- **Colored error chains** — the CLI binary now prints `error:` headers in bold red, walks the full `anyhow` cause chain with numbered `↳` markers, and ends with a `hint:` suggesting `RUST_BACKTRACE=1`. No new dependencies (reuses the existing `colored` crate).
 
 #### chopin-core (middleware)
 - **`cors::Cors`** — builder-style CORS middleware honoring the Fetch CORS protocol. Supports `allow_origin` (exact-match list), `allow_any_origin`, `allow_methods`, `allow_headers`, `expose_headers`, `allow_credentials`, and `max_age`. Includes a `Cors::permissive()` preset and a `Cors::into_middleware()` closure adapter for `Router::layer_fn`. Preflight `OPTIONS` requests are short-circuited with `204 No Content` and the appropriate `Access-Control-*` headers; simple requests pass through and have CORS response headers appended. Adds `Vary: Origin` whenever the response origin is concrete or credentials are allowed.

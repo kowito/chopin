@@ -257,6 +257,8 @@ Living roadmap of planned improvements, distilled from an audit of every workspa
 - **Configurable graceful shutdown** — `CHOPIN_SHUTDOWN_TIMEOUT_MS` honored by both the epoll and io_uring worker loops in [crates/chopin-core/src/worker.rs](crates/chopin-core/src/worker.rs).
 - **CLI migrations no longer panic on non-UTF8 paths** — [crates/chopin-cli/src/migrations.rs](crates/chopin-cli/src/migrations.rs) skips unrecognized entries via typed helpers instead of `.unwrap().to_str().unwrap()`.
 - **`chopin migrate redo`** subcommand for fast iteration during development in [crates/chopin-cli/src/main.rs](crates/chopin-cli/src/main.rs) (rollback + reapply in one command).
+- **`chopin migrate rollback`** friendly alias for `migrate down` in [crates/chopin-cli/src/main.rs](crates/chopin-cli/src/main.rs).
+- **Colored CLI error chains** — bold-red `error:` header, numbered cause-chain walk, and `RUST_BACKTRACE=1` hint in [crates/chopin-cli/src/main.rs](crates/chopin-cli/src/main.rs).
 - **Richer `AuthError`** — `Malformed`, `InvalidSignature`, `InvalidAlgorithm`, `MissingKid`, `NotYetValid` plus `AuthError::http_status()` (401 vs 500) in [crates/chopin-auth/src/jwt.rs](crates/chopin-auth/src/jwt.rs).
 - **JWKS TTL & lazy refresh** — `age()`, `is_stale(ttl)`, `refresh_if_stale(ttl, fetch)` in [crates/chopin-auth/src/jwks.rs](crates/chopin-auth/src/jwks.rs); unknown `kid` now returns `MissingKid`.
 - **PgPoolConfig::from_env()** — 9 `CHOPIN_PG_*` env vars (min/max size, lifetime, idle/checkout/connect timeouts, validation query, auto-reconnect, test-on-checkout) in [crates/chopin-pg/src/pool.rs](crates/chopin-pg/src/pool.rs).

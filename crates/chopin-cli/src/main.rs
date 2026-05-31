@@ -125,6 +125,11 @@ enum MigrateCommands {
         #[arg(default_value_t = 1)]
         steps: u32,
     },
+    /// Rollback the last N migrations (alias of `down`, defaults to 1).
+    Rollback {
+        #[arg(default_value_t = 1)]
+        steps: u32,
+    },
     /// Re-run the last N migrations (down then up). Useful during development.
     Redo {
         #[arg(default_value_t = 1)]
@@ -134,7 +139,31 @@ enum MigrateCommands {
     Generate { name: String },
 }
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(err) = run().await {
+        eprintln!("\n{} {}", "error:".red().bold(), err);
+        let mut source = err.source();
+        let mut depth = 1;
+        while let Some(cause) = source {
+            eprintln!(
+                "  {} {} {}",
+                "↳".dimmed(),
+                format!("[{}]", depth).dimmed(),
+                cause
+            );
+            source = cause.source();
+            depth += 1;
+        }
+        eprintln!(
+            "\n{} run with {} for a full backtrace.",
+            "hint:".cyan().bold(),
+            "RUST_BACKTRACE=1".green()
+        );
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
