@@ -221,6 +221,13 @@ impl Headers {
     pub fn len(&self) -> usize {
         self.slab.len() + self.spill.as_ref().map_or(0, |v| v.len())
     }
+
+    /// Look up the first header value matching `name` (case-insensitive).
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.iter()
+            .find(|h| h.name.eq_ignore_ascii_case(name))
+            .map(|h| h.value.as_str())
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

@@ -140,7 +140,10 @@ use mimalloc::MiMalloc;
 static GLOBAL: MiMalloc = MiMalloc;
 
 pub mod bufpool;
+#[cfg(feature = "compression")]
+pub mod compression;
 pub mod conn;
+pub mod cors;
 pub mod error;
 pub mod extract;
 pub mod filter;
@@ -149,6 +152,7 @@ pub mod http;
 pub mod http2;
 pub mod http_date;
 pub mod json;
+pub mod logger;
 pub mod metrics;
 pub mod multipart;
 pub mod openapi;
