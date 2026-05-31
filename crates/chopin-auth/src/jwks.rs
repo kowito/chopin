@@ -247,11 +247,12 @@ impl JwksProvider {
             guard
                 .keys
                 .get(kid.as_str())
-                .ok_or_else(|| AuthError::InvalidToken(format!("unknown kid: {kid}")))?
+                .ok_or_else(|| AuthError::MissingKid(format!("unknown kid: {kid}")))?
         } else {
-            guard.default_key.as_ref().ok_or(AuthError::InvalidToken(
-                "no kid in token and no default key".into(),
-            ))?
+            guard
+                .default_key
+                .as_ref()
+                .ok_or_else(|| AuthError::MissingKid("token has no kid and no default key is configured".into()))?
         };
 
         let mut validation = Validation::new(*alg);
@@ -259,10 +260,7 @@ impl JwksProvider {
         validation.leeway = 60;
 
         let token_data =
-            jsonwebtoken::decode::<T>(token, dk, &validation).map_err(|e| match e.kind() {
-                jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::Expired,
-                _ => AuthError::InvalidToken(e.to_string()),
-            })?;
+            jsonwebtoken::decode::<T>(token, dk, &validation).map_err(AuthError::from_jwt)?;
 
         Ok(token_data.claims)
     }

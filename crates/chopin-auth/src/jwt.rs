@@ -36,11 +36,22 @@ use crate::revocation::TokenBlacklist;
 /// Errors that can occur during JWT encode / decode operations.
 #[derive(Debug)]
 pub enum AuthError {
-    /// The token is syntactically invalid, has a bad signature, or fails
-    /// validation (e.g. wrong algorithm, audience, issuer).
+    /// The token is syntactically invalid or fails generic validation (e.g.
+    /// wrong audience / issuer). Prefer the more specific variants below when
+    /// the cause is known.
     InvalidToken(String),
+    /// The token's base64/JSON structure is malformed and could not be parsed.
+    Malformed(String),
+    /// The signature did not verify against the configured key.
+    InvalidSignature,
+    /// The token's algorithm header is not allowed by the validation policy.
+    InvalidAlgorithm,
+    /// The token has no `kid` header or references an unknown `kid`.
+    MissingKid(String),
     /// The token's `exp` claim has passed.
     Expired,
+    /// The token's `nbf` claim is in the future (not yet valid).
+    NotYetValid,
     /// The token's JTI is on the revocation blacklist.
     Revoked,
     /// The manager has no encoding key; cannot sign tokens.
@@ -55,7 +66,12 @@ impl fmt::Display for AuthError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidToken(e) => write!(f, "invalid token: {e}"),
+            Self::Malformed(e) => write!(f, "malformed token: {e}"),
+            Self::InvalidSignature => f.write_str("invalid signature"),
+            Self::InvalidAlgorithm => f.write_str("invalid algorithm"),
+            Self::MissingKid(e) => write!(f, "missing or unknown kid: {e}"),
             Self::Expired => f.write_str("token expired"),
+            Self::NotYetValid => f.write_str("token not yet valid"),
             Self::Revoked => f.write_str("token revoked"),
             Self::EncodingKeyMissing => f.write_str("no encoding key configured"),
             Self::Encode(e) => write!(f, "encoding failed: {e}"),
@@ -65,6 +81,32 @@ impl fmt::Display for AuthError {
 }
 
 impl std::error::Error for AuthError {}
+
+impl AuthError {
+    /// Map a `jsonwebtoken::errors::Error` to the most specific [`AuthError`] variant.
+    pub(crate) fn from_jwt(e: jsonwebtoken::errors::Error) -> Self {
+        use jsonwebtoken::errors::ErrorKind as K;
+        match e.kind() {
+            K::ExpiredSignature => Self::Expired,
+            K::ImmatureSignature => Self::NotYetValid,
+            K::InvalidSignature => Self::InvalidSignature,
+            K::InvalidAlgorithm | K::InvalidAlgorithmName => Self::InvalidAlgorithm,
+            K::Base64(_) | K::Json(_) | K::Utf8(_) => Self::Malformed(e.to_string()),
+            _ => Self::InvalidToken(e.to_string()),
+        }
+    }
+
+    /// HTTP status code conventionally associated with this error.
+    ///
+    /// Returns `401` for authentication failures and `500` for server-side
+    /// configuration problems (`EncodingKeyMissing`, `Encode`, `Internal`).
+    pub fn http_status(&self) -> u16 {
+        match self {
+            Self::EncodingKeyMissing | Self::Encode(_) | Self::Internal(_) => 500,
+            _ => 401,
+        }
+    }
+}
 
 // ─── HasJti trait ─────────────────────────────────────────────────────────────
 
@@ -263,10 +305,7 @@ impl JwtManager {
         T: for<'de> Deserialize<'de> + HasJti,
     {
         let token_data = decode::<T>(token, &self.config.decoding_key, &self.config.validation)
-            .map_err(|e| match e.kind() {
-                jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::Expired,
-                _ => AuthError::InvalidToken(e.to_string()),
-            })?;
+            .map_err(AuthError::from_jwt)?;
 
         if let Some(bl) = &self.blacklist
             && let Some(jti) = token_data.claims.jti()

@@ -63,12 +63,7 @@ pub trait ErrorHandler: Send + Sync {
 struct DefaultErrorHandler;
 impl ErrorHandler for DefaultErrorHandler {
     fn handle(&self, err: AuthError) -> Response {
-        match err {
-            AuthError::Expired | AuthError::Revoked | AuthError::InvalidToken(_) => {
-                Response::new(401)
-            }
-            _ => Response::server_error(),
-        }
+        Response::new(err.http_status())
     }
 }
 
