@@ -511,7 +511,8 @@ impl Router {
     pub fn merge(mut self, other: Router) -> Self {
         Self::merge_nodes(&mut self.root, other.root);
         self.global_middleware.extend(other.global_middleware);
-        self.global_boxed_middleware.extend(other.global_boxed_middleware);
+        self.global_boxed_middleware
+            .extend(other.global_boxed_middleware);
         self
     }
 
@@ -570,7 +571,9 @@ impl Router {
 
         Self::merge_nodes(current, other.root);
         current.middleware.extend(other.global_middleware);
-        current.boxed_middleware.extend(other.global_boxed_middleware);
+        current
+            .boxed_middleware
+            .extend(other.global_boxed_middleware);
         self
     }
 
@@ -722,7 +725,13 @@ impl Router {
             }
         }
         for child in &mut node.children {
-            Self::compose_tree(child, global_mw, global_boxed, &node_route_mw, &node_boxed_mw);
+            Self::compose_tree(
+                child,
+                global_mw,
+                global_boxed,
+                &node_route_mw,
+                &node_boxed_mw,
+            );
         }
     }
 

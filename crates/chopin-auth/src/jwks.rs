@@ -252,10 +252,9 @@ impl JwksProvider {
                 .get(kid.as_str())
                 .ok_or_else(|| AuthError::MissingKid(format!("unknown kid: {kid}")))?
         } else {
-            guard
-                .default_key
-                .as_ref()
-                .ok_or_else(|| AuthError::MissingKid("token has no kid and no default key is configured".into()))?
+            guard.default_key.as_ref().ok_or_else(|| {
+                AuthError::MissingKid("token has no kid and no default key is configured".into())
+            })?
         };
 
         let mut validation = Validation::new(*alg);
@@ -336,7 +335,11 @@ impl JwksProvider {
             }
         }
 
-        Ok(JwksInner { keys, default_key, last_refresh: Instant::now() })
+        Ok(JwksInner {
+            keys,
+            default_key,
+            last_refresh: Instant::now(),
+        })
     }
 }
 

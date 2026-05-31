@@ -169,7 +169,7 @@ impl Worker {
         let shutdown_drain_secs = std::env::var("CHOPIN_SHUTDOWN_TIMEOUT_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .map(|ms| ((ms + 999) / 1_000).max(1) as u32)
+            .map(|ms| ms.div_ceil(1_000).max(1) as u32)
             .unwrap_or(30);
 
         Self {

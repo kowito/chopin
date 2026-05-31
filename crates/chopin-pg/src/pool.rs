@@ -159,12 +159,20 @@ impl PgPoolConfig {
         }
         if let Ok(v) = std::env::var("CHOPIN_PG_MAX_LIFETIME_MS") {
             if let Ok(n) = v.parse::<u64>() {
-                cfg.max_lifetime = if n == 0 { None } else { Some(Duration::from_millis(n)) };
+                cfg.max_lifetime = if n == 0 {
+                    None
+                } else {
+                    Some(Duration::from_millis(n))
+                };
             }
         }
         if let Ok(v) = std::env::var("CHOPIN_PG_IDLE_TIMEOUT_MS") {
             if let Ok(n) = v.parse::<u64>() {
-                cfg.idle_timeout = if n == 0 { None } else { Some(Duration::from_millis(n)) };
+                cfg.idle_timeout = if n == 0 {
+                    None
+                } else {
+                    Some(Duration::from_millis(n))
+                };
             }
         }
         if let Ok(v) = std::env::var("CHOPIN_PG_CHECKOUT_TIMEOUT_MS") {

@@ -292,8 +292,7 @@ impl Chopin {
         key_path: &str,
         client_ca_path: &str,
     ) -> crate::error::ChopinResult<()> {
-        let mut server =
-            Server::bind(host_port).with_mtls(cert_path, key_path, client_ca_path)?;
+        let mut server = Server::bind(host_port).with_mtls(cert_path, key_path, client_ca_path)?;
         if let Some(size) = self.max_request_size {
             server = server.with_max_request_size(size);
         }

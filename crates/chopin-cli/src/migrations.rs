@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 /// Skips entries whose names are not valid UTF-8 instead of panicking.
 fn collect_up_migrations(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut out: Vec<PathBuf> = Vec::new();
-    for entry in fs::read_dir(dir)
-        .with_context(|| format!("reading migrations dir {}", dir.display()))?
+    for entry in
+        fs::read_dir(dir).with_context(|| format!("reading migrations dir {}", dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
@@ -33,10 +33,9 @@ fn collect_up_migrations(dir: &Path) -> Result<Vec<PathBuf>> {
 
 /// Extract the migration name (stem with ".up" stripped) from a path.
 fn migration_name(path: &Path) -> Result<String> {
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| anyhow::anyhow!("migration filename is not valid UTF-8: {}", path.display()))?;
+    let stem = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
+        anyhow::anyhow!("migration filename is not valid UTF-8: {}", path.display())
+    })?;
     Ok(stem.replace(".up", ""))
 }
 

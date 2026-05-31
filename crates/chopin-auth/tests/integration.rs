@@ -204,7 +204,10 @@ fn revocation_indefinite_persists() {
     bl.revoke("forever".into(), None);
     assert!(bl.is_revoked("forever"));
     bl.cleanup();
-    assert!(bl.is_revoked("forever"), "indefinite revocation survived cleanup");
+    assert!(
+        bl.is_revoked("forever"),
+        "indefinite revocation survived cleanup"
+    );
 }
 
 #[test]
@@ -249,7 +252,10 @@ fn jwks_refresh_resets_age() {
 
     provider.refresh(SAMPLE_JWKS).unwrap();
     let after = provider.age();
-    assert!(after < before, "refresh should reset age (before={before:?}, after={after:?})");
+    assert!(
+        after < before,
+        "refresh should reset age (before={before:?}, after={after:?})"
+    );
 }
 
 #[test]
@@ -299,8 +305,7 @@ fn jwks_unknown_kid_returns_missing_kid_variant() {
 }
 
 fn base64url_no_pad(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity((bytes.len() * 4).div_ceil(3));
     let mut i = 0;
     while i + 2 < bytes.len() {
