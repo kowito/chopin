@@ -11,6 +11,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 #### chopin-core
+- **Mutual TLS** — `Server::with_mtls(cert, key, client_ca_pem)` and `Chopin::serve_mtls(addr, cert, key, client_ca_pem)` build a rustls `ServerConfig` with `WebPkiClientVerifier` so the server requires and validates client certificates against the supplied CA bundle. Server-auth-only `with_tls` / `serve_tls` are unchanged. Behind the existing `tls` feature.
+- **Configurable graceful shutdown drain** — workers now read `CHOPIN_SHUTDOWN_TIMEOUT_MS` (default 30000, minimum 1000) once at startup and use it as a hard deadline for draining in-flight connections after a shutdown signal. Previously the `epoll` loop hardcoded 30 s and the `io_uring` loop had no drain deadline at all.
+
+#### chopin-auth
+- **Richer `AuthError` variants** — added `Malformed(String)`, `InvalidSignature`, `InvalidAlgorithm`, `MissingKid(String)`, `NotYetValid` and a new `AuthError::http_status() -> u16` helper (401 for authentication failures, 500 for configuration/internal errors). `JwtManager::decode` and `JwksProvider::decode` now classify upstream `jsonwebtoken` errors into the appropriate variant via `AuthError::from_jwt`.
+- **JWKS staleness API** — `JwksProvider::age()`, `is_stale(ttl)`, and `refresh_if_stale(ttl, fetch)` enable TTL-based key-set refresh without forcing an HTTP transport dependency on the crate (the caller supplies the fetch closure). `JwksProvider::decode` now returns `AuthError::MissingKid` for unknown `kid` values instead of the generic `InvalidToken`.
+- **Cross-module integration test suite** — `crates/chopin-auth/tests/integration.rs` adds 23 tests covering PKCE verifier/challenge, password hashing roundtrip + salting, JWT expired/revoked/bad-signature/malformed classification, `TokenBlacklist` lifecycle, and JWKS parse/refresh/staleness semantics.
+
+#### chopin-pg
+- **`PgPoolConfig::from_env()`** — reads nine `CHOPIN_PG_*` environment variables: `MAX_SIZE`, `MIN_SIZE`, `MAX_LIFETIME_MS`, `IDLE_TIMEOUT_MS`, `CHECKOUT_TIMEOUT_MS`, `CONNECT_TIMEOUT_MS`, `TEST_ON_CHECKOUT`, `VALIDATION_QUERY`, `AUTO_RECONNECT`. Lifetime/idle values of `0` disable the corresponding timeout; booleans accept `1/true/yes` and `0/false/no` case-insensitively.
+
+#### chopin-cli
+- **`chopin migrate` no longer panics on non-UTF8 paths** — `migrations.rs` introduces `collect_up_migrations(dir)` and `migration_name(path)` helpers that filter unrecognized filenames instead of unwrapping `.to_str()`.
+
+#### chopin-core (extractor & state ergonomics)
 - **`ctx.body_json::<T>()`** — one-liner JSON body extraction on `Context`. Deserializes the request body into `T` via `serde_json`; returns `Err(400 Bad Request)` on failure. Eliminates the verbose `ctx.extract::<Json<T>>()` match pattern and enables `?` in handlers returning `Result<Response, Response>`.
 - **`ctx.query_params::<T>()`** — one-liner query string extraction on `Context`. Parses `?key=val&…` into any `serde::Deserialize` type; returns `Err(400 Bad Request)` on failure. Same `?`-compatible ergonomics as `body_json`.
 - **`ctx.state::<T>()`** — typed per-thread state retrieval on `Context`. Returns `Option<T>` (clone of the stored value). The idiomatic way to access resources initialised in `with_worker_init` (e.g. `Arc<DbPool>`).

@@ -251,21 +251,24 @@ CHOPIN_SLAB_CAPACITY=25000 CHOPIN_READ_BUF_SIZE=16384 CHOPIN_WRITE_BUF_SIZE=6553
 
 Living roadmap of planned improvements, distilled from an audit of every workspace crate. Items are grouped by theme and priority rather than calendar dates. The deeper ntex-parity engineering roadmap lives in [docs/roadmap.md](docs/roadmap.md).
 
+### ✅ Recently shipped (on branch `roadmap/p0-hardening`)
+
+- **Mutual TLS** — `Server::with_mtls(cert, key, client_ca)` and `Chopin::serve_mtls(...)` in [crates/chopin-core/src/tls.rs](crates/chopin-core/src/tls.rs) and [crates/chopin-core/src/server.rs](crates/chopin-core/src/server.rs), backed by `rustls::server::WebPkiClientVerifier`.
+- **Configurable graceful shutdown** — `CHOPIN_SHUTDOWN_TIMEOUT_MS` honored by both the epoll and io_uring worker loops in [crates/chopin-core/src/worker.rs](crates/chopin-core/src/worker.rs).
+- **CLI migrations no longer panic on non-UTF8 paths** — [crates/chopin-cli/src/migrations.rs](crates/chopin-cli/src/migrations.rs) skips unrecognized entries via typed helpers instead of `.unwrap().to_str().unwrap()`.
+- **Richer `AuthError`** — `Malformed`, `InvalidSignature`, `InvalidAlgorithm`, `MissingKid`, `NotYetValid` plus `AuthError::http_status()` (401 vs 500) in [crates/chopin-auth/src/jwt.rs](crates/chopin-auth/src/jwt.rs).
+- **JWKS TTL & lazy refresh** — `age()`, `is_stale(ttl)`, `refresh_if_stale(ttl, fetch)` in [crates/chopin-auth/src/jwks.rs](crates/chopin-auth/src/jwks.rs); unknown `kid` now returns `MissingKid`.
+- **PgPoolConfig::from_env()** — 9 `CHOPIN_PG_*` env vars (min/max size, lifetime, idle/checkout/connect timeouts, validation query, auto-reconnect, test-on-checkout) in [crates/chopin-pg/src/pool.rs](crates/chopin-pg/src/pool.rs).
+- **`chopin-auth` integration test suite** — 23 cross-module tests covering PKCE, password hashing, revocation lifecycle, JWT error classification, and JWKS refresh semantics in [crates/chopin-auth/tests/integration.rs](crates/chopin-auth/tests/integration.rs).
+
 ### P0 — Production hardening (security & robustness)
 
-- **TLS client-cert verification** in [crates/chopin-core/src/tls.rs](crates/chopin-core/src/tls.rs) — currently server-auth only; add an opt-in `require_client_auth()` path backed by a rustls `ClientCertVerifier`.
-- **Graceful shutdown timeout & connection draining** in [crates/chopin-core/src/server.rs](crates/chopin-core/src/server.rs) — today shutdown sets a flag but never force-closes slow clients. Add `CHOPIN_SHUTDOWN_TIMEOUT_MS` and a drain phase.
 - **Read backpressure** in [crates/chopin-core/src/conn.rs](crates/chopin-core/src/conn.rs) — pause reads when `write_buf` utilization passes a high-watermark, instead of unbounded queueing.
-- **Eliminate `unwrap()` chains in the CLI** — [crates/chopin-cli/src/migrations.rs](crates/chopin-cli/src/migrations.rs) panics on non-UTF8 paths and malformed filenames; replace with typed errors and user-facing messages.
-- **Unit tests for `chopin-auth`** — the crate currently ships with no in-crate tests; add coverage for JWT verify/expiry, JWKS parsing, PKCE, and password hashing as a security baseline.
 
 ### P1 — Quick wins (high value, low effort)
 
-- **JWKS caching with TTL & rotation** in [crates/chopin-auth/src/jwks.rs](crates/chopin-auth/src/jwks.rs) — cache key sets per issuer, refresh on `kid` miss, expose a swap-on-rotation hook.
-- **Richer `AuthError`** in [crates/chopin-auth/src/jwt.rs](crates/chopin-auth/src/jwt.rs) — distinguish expired / bad-signature / malformed instead of a single `InvalidToken`.
 - **Date header cache** (`[u8; 29]` per worker, refreshed once per second) in [crates/chopin-core/src/worker.rs](crates/chopin-core/src/worker.rs) — saves ~20 ns per response on the hot path.
 - **LUT-based integer encoding** for Content-Length and status lines (see [docs/roadmap.md](docs/roadmap.md) Phase 2).
-- **Configurable PG pool env vars** in [crates/chopin-pg/src/pool.rs](crates/chopin-pg/src/pool.rs) — `CHOPIN_PG_MIN_SIZE`, `CHOPIN_PG_CHECKOUT_TIMEOUT_MS`, custom health-check query (today hardcoded to `SELECT 1`).
 - **Request-logger middleware** wired into `chopin dev` so the dev server prints method/path/status/latency by default.
 
 ### P2 — Observability
@@ -311,7 +314,7 @@ Living roadmap of planned improvements, distilled from an audit of every workspa
 
 ### Testing
 
-- Raise per-crate source-to-test ratios. Current baseline: `chopin-auth` 7 src / 0 tests, `chopin-pg` 12 / 1, `chopin-orm` 8 / 1, `chopin-core` 16 / 2.
+- Raise per-crate source-to-test ratios. Current baseline: `chopin-auth` 9 src / 1 integration suite (23 tests) + per-module tests, `chopin-pg` 12 / 1, `chopin-orm` 8 / 1, `chopin-core` 16 / 2.
 - Add fuzz targets for the HTTP/1.1 parser and the PG wire-protocol decoder.
 - Add a TLS integration test exercising both server-auth and the planned mTLS path.
 
