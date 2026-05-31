@@ -48,6 +48,10 @@ pub fn run_migration_command(project_dir: &Path, command: crate::MigrateCommands
         crate::MigrateCommands::Status => show_status(project_dir, &mut pool),
         crate::MigrateCommands::Up => run_up(project_dir, &mut pool),
         crate::MigrateCommands::Down { steps } => run_down(project_dir, &mut pool, steps),
+        crate::MigrateCommands::Redo { steps } => {
+            run_down(project_dir, &mut pool, steps)?;
+            run_up(project_dir, &mut pool)
+        }
         crate::MigrateCommands::Generate { name } => generate_migration(project_dir, &name),
     }
 }

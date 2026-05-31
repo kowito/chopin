@@ -256,20 +256,25 @@ Living roadmap of planned improvements, distilled from an audit of every workspa
 - **Mutual TLS** — `Server::with_mtls(cert, key, client_ca)` and `Chopin::serve_mtls(...)` in [crates/chopin-core/src/tls.rs](crates/chopin-core/src/tls.rs) and [crates/chopin-core/src/server.rs](crates/chopin-core/src/server.rs), backed by `rustls::server::WebPkiClientVerifier`.
 - **Configurable graceful shutdown** — `CHOPIN_SHUTDOWN_TIMEOUT_MS` honored by both the epoll and io_uring worker loops in [crates/chopin-core/src/worker.rs](crates/chopin-core/src/worker.rs).
 - **CLI migrations no longer panic on non-UTF8 paths** — [crates/chopin-cli/src/migrations.rs](crates/chopin-cli/src/migrations.rs) skips unrecognized entries via typed helpers instead of `.unwrap().to_str().unwrap()`.
+- **`chopin migrate redo`** subcommand for fast iteration during development in [crates/chopin-cli/src/main.rs](crates/chopin-cli/src/main.rs) (rollback + reapply in one command).
 - **Richer `AuthError`** — `Malformed`, `InvalidSignature`, `InvalidAlgorithm`, `MissingKid`, `NotYetValid` plus `AuthError::http_status()` (401 vs 500) in [crates/chopin-auth/src/jwt.rs](crates/chopin-auth/src/jwt.rs).
 - **JWKS TTL & lazy refresh** — `age()`, `is_stale(ttl)`, `refresh_if_stale(ttl, fetch)` in [crates/chopin-auth/src/jwks.rs](crates/chopin-auth/src/jwks.rs); unknown `kid` now returns `MissingKid`.
 - **PgPoolConfig::from_env()** — 9 `CHOPIN_PG_*` env vars (min/max size, lifetime, idle/checkout/connect timeouts, validation query, auto-reconnect, test-on-checkout) in [crates/chopin-pg/src/pool.rs](crates/chopin-pg/src/pool.rs).
 - **`chopin-auth` integration test suite** — 23 cross-module tests covering PKCE, password hashing, revocation lifecycle, JWT error classification, and JWKS refresh semantics in [crates/chopin-auth/tests/integration.rs](crates/chopin-auth/tests/integration.rs).
+- **CORS middleware** — `Cors` builder + preflight handling in [crates/chopin-core/src/cors.rs](crates/chopin-core/src/cors.rs).
+- **Gzip compression middleware** — content-type-aware, double-encode-safe, `CHOPIN_GZIP_MIN_SIZE` threshold in [crates/chopin-core/src/compression.rs](crates/chopin-core/src/compression.rs) (behind `compression` feature).
+- **Request logger middleware** — `tracing::info!` line per request with method/path/status/latency in [crates/chopin-core/src/logger.rs](crates/chopin-core/src/logger.rs).
+- **Date header cache** — per-worker `[u8; 29]` Date string refreshed at most once per second in [crates/chopin-core/src/worker.rs](crates/chopin-core/src/worker.rs).
+- **Read backpressure** — reads are paused when the per-connection write buffer is > 75% full, preventing unbounded memory growth (already implemented in [crates/chopin-core/src/worker.rs](crates/chopin-core/src/worker.rs)).
+- **`Headers::get(name)`** — case-insensitive lookup helper added to [crates/chopin-core/src/headers.rs](crates/chopin-core/src/headers.rs).
 
 ### P0 — Production hardening (security & robustness)
 
-- **Read backpressure** in [crates/chopin-core/src/conn.rs](crates/chopin-core/src/conn.rs) — pause reads when `write_buf` utilization passes a high-watermark, instead of unbounded queueing.
+_All P0 items shipped — see the section above._
 
 ### P1 — Quick wins (high value, low effort)
 
-- **Date header cache** (`[u8; 29]` per worker, refreshed once per second) in [crates/chopin-core/src/worker.rs](crates/chopin-core/src/worker.rs) — saves ~20 ns per response on the hot path.
 - **LUT-based integer encoding** for Content-Length and status lines (see [docs/roadmap.md](docs/roadmap.md) Phase 2).
-- **Request-logger middleware** wired into `chopin dev` so the dev server prints method/path/status/latency by default.
 
 ### P2 — Observability
 
@@ -280,8 +285,7 @@ Living roadmap of planned improvements, distilled from an audit of every workspa
 ### P3 — Feature completion
 
 - **HTTP/2 request path** — the frame codec in [crates/chopin-core/src/http2.rs](crates/chopin-core/src/http2.rs) exists but is not wired to the router; complete `h2c` upgrade → stream multiplexing → HPACK so gRPC and modern clients work end-to-end.
-- **Compression middleware** (gzip / brotli / zstd) as a built-in I/O filter on top of the existing [filter.rs](crates/chopin-core/src/filter.rs) stack.
-- **CORS middleware** out of the box (today only `rate_limit.rs` ships).
+- **Brotli / zstd compression** as additional response encodings (gzip ships today via `compression::gzip`).
 - **Prepared-statement cache API** and **query pipelining** in [crates/chopin-pg/src/connection.rs](crates/chopin-pg/src/connection.rs) — today every `query()` re-parses; batch independent queries into one round trip.
 - **COPY OUT streaming reader** in [crates/chopin-pg/src/connection.rs](crates/chopin-pg/src/connection.rs) — only `CopyWriter` (COPY IN) is implemented.
 - **LISTEN/NOTIFY callback API** — internal buffering exists but no user-facing async handler registration.
@@ -292,7 +296,6 @@ Living roadmap of planned improvements, distilled from an audit of every workspa
 ### P4 — Developer experience
 
 - **Scaffold cleanup** — remove every `TODO` / `todo!()` from `chopin generate` output ([crates/chopin-cli/src/generate.rs](crates/chopin-cli/src/generate.rs)); generated services must compile and run unedited.
-- **`chopin migrate rollback` / `migrate redo`** with version-aware tracking in [crates/chopin-cli/src/migrations.rs](crates/chopin-cli/src/migrations.rs).
 - **`chopin introspect`** — generate `#[derive(Model)]` structs from an existing database schema.
 - **Embedded file watcher** for `chopin dev` instead of shelling out to `cargo-watch`; reload on `.env` changes too.
 - **Rich errors via `miette`** for CLI parse/config/migration failures.

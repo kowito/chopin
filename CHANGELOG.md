@@ -24,6 +24,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 #### chopin-cli
 - **`chopin migrate` no longer panics on non-UTF8 paths** — `migrations.rs` introduces `collect_up_migrations(dir)` and `migration_name(path)` helpers that filter unrecognized filenames instead of unwrapping `.to_str()`.
+- **`chopin migrate redo [N]`** — new subcommand that rolls back the last `N` migrations (default 1) and immediately re-applies pending migrations. Useful for iterating on a single migration during development.
+
+#### chopin-core (middleware)
+- **`cors::Cors`** — builder-style CORS middleware honoring the Fetch CORS protocol. Supports `allow_origin` (exact-match list), `allow_any_origin`, `allow_methods`, `allow_headers`, `expose_headers`, `allow_credentials`, and `max_age`. Includes a `Cors::permissive()` preset and a `Cors::into_middleware()` closure adapter for `Router::layer_fn`. Preflight `OPTIONS` requests are short-circuited with `204 No Content` and the appropriate `Access-Control-*` headers; simple requests pass through and have CORS response headers appended. Adds `Vary: Origin` whenever the response origin is concrete or credentials are allowed.
+- **`logger::request_log`** — fn-pointer middleware that times every request and emits a single `tracing::info!` line with method, path, status, and `latency_us`.
+- **`compression::gzip`** (behind `compression` feature) — middleware that wraps the existing `Response::gzip()` with `Accept-Encoding` parsing (handles q-values and case), a compressible-content-type allow-list (`text/*`, `application/json`, `application/javascript`, `application/xml`, `image/svg+xml`, …), a double-encode guard (responses that already carry `Content-Encoding` are passed through), and a configurable minimum body size via `CHOPIN_GZIP_MIN_SIZE` (default 256 bytes).
+- **`Headers::get(name)`** — case-insensitive lookup helper for response headers (previously you had to call `.iter()` and filter).
 
 #### chopin-core (extractor & state ergonomics)
 - **`ctx.body_json::<T>()`** — one-liner JSON body extraction on `Context`. Deserializes the request body into `T` via `serde_json`; returns `Err(400 Bad Request)` on failure. Eliminates the verbose `ctx.extract::<Json<T>>()` match pattern and enables `?` in handlers returning `Result<Response, Response>`.

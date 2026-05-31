@@ -180,10 +180,7 @@ impl Cors {
             resp = resp.with_header("Access-Control-Allow-Credentials", "true");
         }
         if !self.expose_headers.is_empty() {
-            resp = resp.with_header(
-                "Access-Control-Expose-Headers",
-                self.expose_headers.clone(),
-            );
+            resp = resp.with_header("Access-Control-Expose-Headers", self.expose_headers.clone());
         }
         resp
     }
@@ -255,7 +252,9 @@ mod tests {
             "https://x.test"
         );
         assert_eq!(
-            resp.headers.get("Access-Control-Allow-Credentials").unwrap(),
+            resp.headers
+                .get("Access-Control-Allow-Credentials")
+                .unwrap(),
             "true"
         );
     }

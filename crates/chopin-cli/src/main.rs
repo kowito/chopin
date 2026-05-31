@@ -125,6 +125,11 @@ enum MigrateCommands {
         #[arg(default_value_t = 1)]
         steps: u32,
     },
+    /// Re-run the last N migrations (down then up). Useful during development.
+    Redo {
+        #[arg(default_value_t = 1)]
+        steps: u32,
+    },
     /// Generate a new migration
     Generate { name: String },
 }
