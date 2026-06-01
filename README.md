@@ -251,6 +251,12 @@ CHOPIN_SLAB_CAPACITY=25000 CHOPIN_READ_BUF_SIZE=16384 CHOPIN_WRITE_BUF_SIZE=6553
 
 Living roadmap of planned improvements, distilled from an audit of every workspace crate. Items are grouped by theme and priority rather than calendar dates. The deeper ntex-parity engineering roadmap lives in [docs/roadmap.md](docs/roadmap.md).
 
+### Snapshot (2026-06-01)
+
+- **Completed:** P0 (production hardening) is fully shipped.
+- **Remaining:** 28 roadmap items across P1-P5, Documentation, and Testing.
+- **By section:** P1 (1), P2 (3), P3 (8), P4 (5), P5 (4), Documentation (4), Testing (3).
+
 ### ✅ Recently shipped (on branch `roadmap/p0-hardening`)
 
 - **Mutual TLS** — `Server::with_mtls(cert, key, client_ca)` and `Chopin::serve_mtls(...)` in [crates/chopin-core/src/tls.rs](crates/chopin-core/src/tls.rs) and [crates/chopin-core/src/server.rs](crates/chopin-core/src/server.rs), backed by `rustls::server::WebPkiClientVerifier`.
