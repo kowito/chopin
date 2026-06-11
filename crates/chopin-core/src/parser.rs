@@ -151,19 +151,29 @@ pub fn parse_request(
     let remaining_ptr = unsafe { ptr.add(header_end) };
     let remaining_len = len - header_end;
 
-    let mut expected_len = 0;
+    let mut expected_len: Option<usize> = None;
     let mut is_chunked = false;
 
     for header in headers.iter().take(header_count as usize) {
         let (name, val) = *header;
         if name.eq_ignore_ascii_case("content-length") {
-            expected_len = val.parse::<usize>().unwrap_or(0);
+            // Reject duplicate Content-Length headers (RFC 7230 §3.3.2).
+            if expected_len.is_some() {
+                return Err(ParseError::InvalidFormat);
+            }
+            // Reject unparseable Content-Length values (negative, overflow, etc.).
+            expected_len = Some(
+                val.parse::<usize>()
+                    .map_err(|_| ParseError::InvalidFormat)?,
+            );
         } else if name.eq_ignore_ascii_case("transfer-encoding")
             && val.eq_ignore_ascii_case("chunked")
         {
             is_chunked = true;
         }
     }
+
+    let expected_len = expected_len.unwrap_or(0);
 
     // For Content-Length requests, we'll check size limits when the body is complete.
     // For chunked requests, size limits are enforced during chunk processing.
