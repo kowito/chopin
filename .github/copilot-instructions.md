@@ -21,7 +21,7 @@ Chopin is a **shared-nothing, zero-allocation HTTP/1.1 framework** written in Ru
 ## Toolchain & edition
 - **Edition 2024**, resolver 3 — requires Rust **nightly**
 - Release profile: `lto = "fat"`, `codegen-units = 1`, `opt-level = 3`, `panic = "abort"`, `strip = true`
-- Version `0.5.14` across all workspace crates
+- Version `0.6.0` across all workspace crates
 
 ## Workspace layout
 ```
@@ -139,3 +139,13 @@ router.middleware("/admin", auth_middleware);
 All HTTP responses: `Date`, `Server: chopin`, `Content-Type`, `Content-Length`, `Connection` headers required.
 **Each database query must be a separate round-trip** — no pipelining, no batching multiple SELECTs.
 **NEVER cache the Date header** — each response calls `SystemTime::now()` directly.
+
+## External I/O pool conventions
+- **`init_io_pool(n)`** — call once at startup (before `Chopin::serve()`). Spawns `n` dedicated I/O threads, each with its own single-threaded tokio runtime.
+- **`call_external(|| async { ... })`** — call from any sync handler to execute an async closure on an I/O thread. The hot worker parks (kernel-level, zero CPU) while waiting.
+- **`spawn_io(|| { ... })`** — synchronous offload for CPU-heavy work (bcrypt, image processing, etc.).
+- **Never use `call_external` for local PG queries** — `chopin_pg::pool()` is already optimised for that.
+- **Never use `call_external` on the TFB hot path** — it's only for real external API calls.
+- **IoPool threads are single-threaded** — each I/O thread uses `tokio::runtime::Builder::new_current_thread()`, so there is no work-stealing, no contention, no shared state.
+- **Channel backpressure** — each I/O thread has a bounded MPSC channel (capacity 256). If all channels are full, `call_external` blocks the calling worker until a slot frees. This prevents unbounded memory growth.
+- **`IoPoolHandle`** — a `Clone` + `'static` handle for use with `Context::state()` when typed access is preferred over the free function API.

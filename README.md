@@ -35,6 +35,11 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 - **Manual Buffer Management**: Uses a custom `ConnectionSlab` (Slab Allocator) for O(1) connection state management.
 - **Robust I/O**: Intelligent partial-write tracking (`write_pos`) to handle backpressure and socket saturation without data loss.
 
+### 4. External I/O Bridge
+- **Async I/O Pool**: Dedicated I/O threads running single-threaded tokio runtimes for calling external APIs (Stripe, S3, SendGrid, etc.).
+- **Zero Hot-Path Overhead**: The I/O pool is completely separate from the event-loop workers. If unused, it consumes zero CPU.
+- **Kernel-Level Parking**: Worker threads park in the kernel while waiting for external I/O — no busy-loop, no CPU waste.
+
 ## 🛠️ Features
 
 ### chopin-core — HTTP Engine
@@ -57,6 +62,7 @@ Chopin adheres strictly to a shared-nothing model to ensure linear scaling acros
 - **Buffer Pool**: Reusable `BufGuard` allocations to amortize per-request heap cost.
 - **mimalloc**: Global allocator for all binaries linking `chopin-core` — per-thread free-lists, low fragmentation, cache-aware design.
 - **io-uring** (`feature = "io-uring"`): 35–50% latency reduction on Linux (see benchmarks).
+- **External I/O Pool**: Call async APIs (Stripe, S3, etc.) from synchronous handlers via `call_external()` — built on dedicated tokio threads, zero hot-path overhead.
 - **Panic Resilience**: `catch_unwind` per handler — a panic never crashes the worker thread.
 - **Production-Ready**: HTTP/1.1 keep-alive, graceful shutdown, O(1) connection pruning.
 
@@ -172,6 +178,52 @@ fn main() {
         .unwrap();
 }
 ```
+
+### With external APIs (async via I/O pool)
+
+Handler functions remain synchronous, but Chopin provides a built-in I/O pool for
+calling external HTTP APIs without blocking the event-loop workers:
+
+```rust
+use chopin_core::{call_external, init_io_pool, Chopin, Context, Response};
+use chopin_macros::post;
+
+#[post("/checkout")]
+fn checkout(_ctx: Context) -> Response {
+    let stripe_response = call_external(|| async {
+        reqwest::Client::new()
+            .post("https://api.stripe.com/v1/checkout/sessions")
+            .header("Authorization", "Bearer sk_xxx")
+            .form(&[("mode", "payment")])
+            .send()
+            .await?
+            .text()
+            .await
+    });
+    Response::text(stripe_response.unwrap_or_default())
+}
+
+fn main() {
+    init_io_pool(4).expect("io pool");
+
+    Chopin::new()
+        .mount_all_routes()
+        .with_worker_init(|| {
+            chopin_pg::init_pool("postgres://localhost/myapp", 10)
+                .expect("DB pool init failed");
+        })
+        .serve("0.0.0.0:8080")
+        .unwrap();
+}
+```
+
+`call_external` sends the async closure to a dedicated I/O thread running a
+single-threaded tokio runtime.  The calling worker thread parks in the kernel
+(zero CPU waste) until the result arrives.  The hot path (`epoll`, slab, PG
+driver) is untouched — external calls have zero overhead when not used.
+
+See [`IoPool`](https://docs.rs/chopin-core/latest/chopin_core/io_pool/index.html)
+for details.
 
 ## 🎹 CLI at a Glance
 

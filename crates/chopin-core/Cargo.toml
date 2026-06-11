@@ -37,6 +37,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 rustls = { version = "0.23", features = ["ring"], optional = true }
 rustls-pemfile = { version = "2", optional = true }
 webpki-roots = { version = "0.26", optional = true }
+tokio = { version = "1.40.0", features = ["rt", "sync", "macros"] }
 
 [dev-dependencies]
 hyper = { version = "1.4.1", features = ["full"] }

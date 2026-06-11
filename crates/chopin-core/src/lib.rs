@@ -16,6 +16,31 @@
 //! If your workload is dominated by long-running async I/O (e.g. streaming proxies),
 //! an async runtime like Tokio/Axum may be a better fit.
 //!
+//! ## External I/O (calling APIs from handlers)
+//!
+//! Chopin handlers are synchronous, but you can call external HTTP APIs via the
+//! built-in I/O pool:
+//!
+//! ```rust,ignore
+//! use chopin_core::{call_external, init_io_pool};
+//!
+//! fn main() {
+//!     init_io_pool(4).expect("io pool");
+//!     // ... start server ...
+//! }
+//!
+//! #[post("/checkout")]
+//! fn checkout(_ctx: Context) -> Response {
+//!     let response = call_external(|| async {
+//!         reqwest::get("https://api.stripe.com/v1/checkout/sessions")
+//!             .await?.text().await
+//!     });
+//!     Response::text(response.unwrap_or_default())
+//! }
+//! ```
+//!
+//! See [`call_external`] and [`init_io_pool`] for details.
+//!
 //! ## Crate layout
 //!
 //! | Crate | Purpose |
@@ -148,6 +173,7 @@ pub mod headers;
 pub mod http;
 pub mod http2;
 pub mod http_date;
+pub mod io_pool;
 pub mod json;
 pub mod metrics;
 pub mod multipart;
@@ -172,6 +198,7 @@ pub use extract::{FromRequest, Json, Query};
 pub use filter::{Filter, FilterStack, LoggingFilter, PassthroughFilter};
 pub use headers::{Header, HeaderValue, Headers, IntoHeaderValue};
 pub use http::{Body, Context, IntoResponse, Method, OwnedFd, Request, Response};
+pub use io_pool::{IoPoolHandle, call_external, init_io_pool, spawn_io};
 pub use json::KJson;
 pub use router::{BoxedHandler, BoxedMiddleware, RouteDef, Router};
 pub use server::{Chopin, Server};
