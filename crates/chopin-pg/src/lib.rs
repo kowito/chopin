@@ -129,6 +129,18 @@ pub fn init_pool(url: &str, size: usize) -> PgResult<()> {
 /// # Safety
 /// The reference is valid for the lifetime of this thread. Thread-locals
 /// guarantee that only one thread can hold this reference at a time.
+///
+/// # ⚠️ Mutable aliasing constraint
+///
+/// This returns `&'static mut PgPool`.  While a [`ConnectionGuard`]
+/// (obtained via `pool().get()`) is still alive, do **not** call `pool()`
+/// again — the `ConnectionGuard` holds a raw pointer into the pool and
+/// a second `&mut` would create mutable aliasing.  Always let the guard
+/// drop before re-accessing the pool.
+///
+/// This constraint is naturally satisfied by the per-request handler model:
+/// `pool().get()` → use → guard drops → handler returns.  No handler
+/// should store a `ConnectionGuard` across `pool()` calls.
 pub fn pool() -> &'static mut PgPool {
     let ptr = POOL_PTR.with(|p| p.get());
     assert!(

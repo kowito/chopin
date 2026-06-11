@@ -1798,6 +1798,11 @@ impl Worker {
                         // is dropped at event-loop exit. We unbind the borrow from the exclusive
                         // `&mut Conn` reference so that a second `slab.get_mut()` can be taken
                         // for response-building. `req` is consumed before the next I/O cycle.
+                        //
+                        // ⚠️ CRITICAL INVARIANT: The handler MUST NOT store the `Context` or
+                        // any of its `&str` fields (path, headers, body) beyond the handler's
+                        // return. The backing buffer (`c.read_buf`) will be overwritten on the
+                        // next read cycle. Violating this causes use-after-free.
                         let req: crate::http::Request<'static> =
                             unsafe { std::mem::transmute(req) };
                         Some((req, consumed))

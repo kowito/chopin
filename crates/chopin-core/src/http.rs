@@ -839,6 +839,14 @@ impl<T: IntoResponse, E: IntoResponse> IntoResponse for Result<T, E> {
 ///     Response::text("ok")
 /// }
 /// ```
+///
+/// # ⚠️ Lifetime constraint
+///
+/// `Context` and its `&str` fields (path, headers, body) borrow from the
+/// connection's read buffer.  **Do not** store a `Context` or any of its
+/// references beyond the handler's return — they will be invalidated when
+/// the next request is read on the same connection.  For data that must
+/// outlive the request, copy it into an owned type (`String`, `Vec<u8>`, etc.).
 pub struct Context<'a> {
     pub req: Request<'a>,
     pub params: [(&'a str, &'a str); MAX_PARAMS],

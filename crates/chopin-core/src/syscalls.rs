@@ -1128,6 +1128,11 @@ pub mod uring {
 
     /// Raw io_uring ring managing mmap'd SQ and CQ ring buffers.
     /// All operations are zero-allocation and operate on shared memory with the kernel.
+    ///
+    /// This type is intentionally `!Send` to enforce the shared-nothing model:
+    /// each `UringRing` is owned by exactly one worker thread. The mmap'd memory
+    /// is shared with the kernel — allowing cross-thread access would cause data
+    /// races on the io_uring submission queue.
     pub struct UringRing {
         ring_fd: c_int,
 
@@ -1153,11 +1158,12 @@ pub mod uring {
         cq_mask: u32,
         cq_cqes: *const io_uring_cqe,
         cq_overflow: *const AtomicU32,
-    }
 
-    // SAFETY: UringRing is used single-threaded per worker (shared-nothing model).
-    // The mmap'd memory is only accessed by the owning thread and the kernel.
-    unsafe impl Send for UringRing {}
+        // Makes UringRing !Send and !Sync at the type level. PhantomData<*const ()>
+        // is not Send/Sync, so this enforces the single-threaded invariant statically
+        // rather than relying on an unsafe impl that would silently compile bugs.
+        _nosend: PhantomData<*const ()>,
+    }
 
     impl UringRing {
         /// Create a new io_uring instance with the specified number of entries and flags.
@@ -1286,6 +1292,7 @@ pub mod uring {
                 cq_mask: cq_mask_val,
                 cq_cqes,
                 cq_overflow,
+                _nosend: PhantomData,
             })
         }
 

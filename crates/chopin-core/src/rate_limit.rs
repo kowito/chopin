@@ -4,6 +4,23 @@
 //! in the hot path.  IP resolution priority: `X-Real-IP` → `X-Forwarded-For`
 //! (with configurable trusted-proxy depth stripping) → socket peer address.
 //!
+//! # ⚠️ Important: Rate limiting is per-worker-thread
+//!
+//! Because each worker thread has an independent bucket map, the **effective
+//! global rate limit is N × `capacity`**, where N is the number of worker
+//! threads.  For example, `configure(100, 60)` with 4 workers allows up to
+//! **400 requests/second per IP** across the entire server, not 100.
+//!
+//! To enforce a consistent global limit, divide your desired capacity by the
+//! number of workers:
+//!
+//! ```rust,no_run
+//! # use chopin_core::rate_limit;
+//! let desired_global_rps = 100;
+//! let num_workers = 4;
+//! rate_limit::configure(desired_global_rps / num_workers, 60); // 25 per worker = 100 global
+//! ```
+//!
 //! # Usage
 //!
 //! ```rust,no_run
@@ -74,11 +91,23 @@ static TRUSTED_DEPTH: AtomicU8 = AtomicU8::new(0);
 /// * `capacity`    – maximum requests allowed per `window_secs` (burst cap)
 /// * `window_secs` – refill window in seconds
 ///
-/// # Note on multi-threaded scaling
+/// # ⚠️ Per-worker multiplier
 ///
-/// Each worker thread has its own bucket map, so the effective limit per IP
-/// across all workers is `capacity × num_workers`.  Divide `capacity` by the
-/// number of workers if you need a strict global limit.
+/// These parameters are enforced **per worker thread**, not globally.  Each
+/// worker maintains an independent token-bucket map.  With N workers, the
+/// effective global rate limit is **N × `capacity`** requests per IP per
+/// window.
+///
+/// For a consistent global limit, divide your desired capacity by the number
+/// of workers:
+///
+/// ```rust,no_run
+/// # use chopin_core::rate_limit;
+/// // 4 workers, want 100 rps global → 25 per worker
+/// rate_limit::configure(25, 60);
+/// ```
+///
+/// This design avoids all mutex and atomic contention on the request hot path.
 pub fn configure(capacity: u64, window_secs: u64) {
     RATE_LIMIT_CAPACITY.store(capacity.max(1), Ordering::Relaxed);
     RATE_LIMIT_WINDOW_SECS.store(window_secs.max(1), Ordering::Relaxed);
@@ -227,6 +256,14 @@ fn parse_ip_to_key(s: &str) -> [u8; 16] {
 ///
 /// Returns `429 Too Many Requests` with `Retry-After`, `X-RateLimit-Limit`,
 /// and `X-RateLimit-Reset` headers when the token bucket is exhausted.
+///
+/// # ⚠️ Per-worker enforcement
+///
+/// This middleware runs independently on each worker thread using a
+/// `thread_local!` bucket map.  A client may hit **up to N × `capacity`**
+/// requests before being rate-limited, where N is the number of workers.
+/// See the [module-level documentation](self) for details on configuring
+/// a consistent global limit.
 pub fn per_ip(ctx: Context, next: BoxedHandler) -> Response {
     let capacity = RATE_LIMIT_CAPACITY.load(Ordering::Relaxed) as f64;
     let window_secs = RATE_LIMIT_WINDOW_SECS.load(Ordering::Relaxed) as f64;

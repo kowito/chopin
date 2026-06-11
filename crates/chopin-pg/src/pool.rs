@@ -382,7 +382,7 @@ impl PgPool {
             }
 
             let sleep_us = backoff_us[attempt.min(backoff_us.len() - 1)];
-            std::thread::sleep(Duration::from_micros(sleep_us));
+            std::thread::park_timeout(Duration::from_micros(sleep_us));
             attempt += 1;
 
             match self.try_checkout() {
