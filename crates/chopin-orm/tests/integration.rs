@@ -659,7 +659,7 @@ fn test_auto_migrate_and_partial_updates() {
     let updated = item_to_update.update_columns(&mut pool, &["age"]).unwrap();
 
     assert_eq!(updated.age, Some(42));
-    assert_eq!(updated.name, "V1 Item"); // Struct had "Updated Name", but we only pushed "age" literal to DB. 
+    assert_eq!(updated.name, "V1 Item"); // Struct had "Updated Name", but we only pushed "age" literal to DB.
     // Wait, our update_columns implementation takes values from the struct.
     // So if item_to_update.name was "Updated Name", but we only updated "age",
     // the DB still has "V1 Item". The returned struct from `update_columns` should reflect the DB state.

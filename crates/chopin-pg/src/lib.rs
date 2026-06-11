@@ -121,7 +121,7 @@ pub fn init_pool(url: &str, size: usize) -> PgResult<()> {
     Ok(())
 }
 
-/// Return a mutable reference to the calling thread's [`PgPool`].
+/// Return a shared reference to the calling thread's [`PgPool`].
 ///
 /// # Panics
 /// Panics with a clear message if [`init_pool`] has not been called on this thread.
@@ -130,18 +130,10 @@ pub fn init_pool(url: &str, size: usize) -> PgResult<()> {
 /// The reference is valid for the lifetime of this thread. Thread-locals
 /// guarantee that only one thread can hold this reference at a time.
 ///
-/// # ⚠️ Mutable aliasing constraint
-///
-/// This returns `&'static mut PgPool`.  While a [`ConnectionGuard`]
-/// (obtained via `pool().get()`) is still alive, do **not** call `pool()`
-/// again — the `ConnectionGuard` holds a raw pointer into the pool and
-/// a second `&mut` would create mutable aliasing.  Always let the guard
-/// drop before re-accessing the pool.
-///
-/// This constraint is naturally satisfied by the per-request handler model:
-/// `pool().get()` → use → guard drops → handler returns.  No handler
-/// should store a `ConnectionGuard` across `pool()` calls.
-pub fn pool() -> &'static mut PgPool {
+/// PgPool uses interior mutability (`Cell`/`RefCell`), so all methods take
+/// `&self`.  A [`ConnectionGuard`] can safely coexist with other `&PgPool`
+/// references — there is no mutable aliasing.
+pub fn pool() -> &'static PgPool {
     let ptr = POOL_PTR.with(|p| p.get());
     assert!(
         !ptr.is_null(),
@@ -150,5 +142,6 @@ pub fn pool() -> &'static mut PgPool {
     );
     // SAFETY: ptr is a valid Box<PgPool> allocated in init_pool(), it lives for
     // the duration of this thread, and thread-locals enforce single-threaded access.
-    unsafe { &mut *ptr }
+    // Interior mutability makes shared references safe.
+    unsafe { &*ptr }
 }

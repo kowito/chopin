@@ -1105,9 +1105,9 @@ mod tests {
         assert_eq!(items[1].id, 2);
 
         // Verify the SQL shape.
-        assert_eq!(mock.executed_queries.len(), 1);
+        assert_eq!(mock.executed_queries.borrow().len(), 1);
         assert_eq!(
-            mock.executed_queries[0].0,
+            mock.executed_queries.borrow()[0].0,
             "INSERT INTO items (name) VALUES ($1), ($2) RETURNING id"
         );
     }
@@ -1117,6 +1117,6 @@ mod tests {
         let mut mock = MockExecutor::new();
         let mut items: Vec<TestItem> = vec![];
         batch_insert(&mut items, &mut mock).unwrap();
-        assert!(mock.executed_queries.is_empty());
+        assert!(mock.executed_queries.borrow().is_empty());
     }
 }

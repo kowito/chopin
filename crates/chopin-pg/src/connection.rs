@@ -966,8 +966,72 @@ impl PgConnection {
 
     /// Execute a statement that returns no rows (INSERT, UPDATE, DELETE).
     /// Returns the number of affected rows as reported by the server.
+    ///
+    /// Uses a dedicated read path (`execute_extended`) that skips DataRow
+    /// collection entirely — no `Vec<Row>` allocation on the hot path.
     pub fn execute(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<u64> {
-        let _rows = self.query(sql, params)?;
+        let stmt = self.stmt_cache.get_or_create(sql);
+
+        // Conservative upper bound for write buffer
+        let estimated = 10 + sql.len() + (params.len() * 256);
+        self.ensure_write_capacity(estimated);
+
+        let mut pos = 0;
+
+        if stmt.is_new {
+            // Parse
+            let n = codec::encode_parse(&mut self.write_buf[pos..], &stmt.name, sql, &[]);
+            pos += n;
+
+            // Describe (to get column info for the cache)
+            let n = codec::encode_describe(
+                &mut self.write_buf[pos..],
+                DescribeTarget::Statement,
+                &stmt.name,
+            );
+            pos += n;
+        }
+
+        // Bind — encode parameters with per-parameter format codes
+        let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
+        let param_formats: Vec<i16> = pg_values
+            .iter()
+            .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
+            .collect();
+        let param_values: Vec<Option<Vec<u8>>> = pg_values
+            .iter()
+            .zip(param_formats.iter())
+            .map(|(v, &fmt)| {
+                if fmt == 1 {
+                    v.to_binary_bytes()
+                } else {
+                    v.to_text_bytes()
+                }
+            })
+            .collect();
+        let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
+        let n = codec::encode_bind(
+            &mut self.write_buf[pos..],
+            "", // unnamed portal
+            &stmt.name,
+            &param_formats,
+            &param_refs,
+            &[1], // request all results in binary format
+        );
+        pos += n;
+
+        // Execute
+        let n = codec::encode_execute(&mut self.write_buf[pos..], "", 0);
+        pos += n;
+
+        // Sync
+        let n = codec::encode_sync(&mut self.write_buf[pos..]);
+        pos += n;
+
+        self.flush_write_buf(pos)?;
+
+        // Read results — skip DataRow collection entirely
+        self.execute_extended(sql, &stmt.name, stmt.is_new)?;
         Ok(self.last_affected_rows)
     }
 
@@ -2042,6 +2106,7 @@ impl PgConnection {
         }
     }
 
+    /// Read extended query results collecting DataRow messages into a Vec.
     fn read_extended_results(
         &mut self,
         sql: &str,
@@ -2112,6 +2177,80 @@ impl PgConnection {
                         self.tx_status = TransactionStatus::from(body[0]);
                         self.consume_read(msg_len);
                         return Ok(rows);
+                    }
+                    BackendTag::ErrorResponse => {
+                        let err = self.parse_error_with_context(body, sql);
+                        self.consume_read(msg_len);
+                        self.drain_to_ready()?;
+                        return Err(err);
+                    }
+                    BackendTag::NotificationResponse => {
+                        let notification = Self::parse_notification(body);
+                        self.notifications.push_back(notification);
+                    }
+                    BackendTag::NoticeResponse => {
+                        self.dispatch_notice(body);
+                    }
+                    _ => {}
+                }
+                self.consume_read(msg_len);
+            }
+        }
+    }
+
+    /// Read extended query results **without** collecting DataRow messages.
+    ///
+    /// This is the zero-allocation counterpart of [`read_extended_results`], used by
+    /// [`execute`].  It skips `DataRow` parsing and `Vec<Row>` allocation entirely,
+    /// only extracting the affected row count from `CommandComplete`.
+    fn execute_extended(&mut self, sql: &str, stmt_name: &str, is_new: bool) -> PgResult<()> {
+        loop {
+            if codec::message_complete(&self.read_buf[..self.read_pos])?.is_none() {
+                self.fill_read_buf(None)?;
+            }
+
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
+                let header = codec::decode_header(&self.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
+                let body = &self.read_buf[5..msg_len];
+
+                match header.tag {
+                    BackendTag::ParseComplete => {}
+                    BackendTag::ParameterDescription => {}
+                    BackendTag::RowDescription => {
+                        let mut columns = codec::parse_row_description(body);
+                        for col in &mut columns {
+                            col.format_code = FormatCode::Binary;
+                        }
+                        if is_new
+                            && let Some(evicted) =
+                                self.stmt_cache
+                                    .insert(sql, stmt_name.to_string(), 0, Some(columns))
+                        {
+                            self.close_statement_on_server(&evicted.name);
+                        }
+                    }
+                    BackendTag::NoData if is_new => {
+                        if let Some(evicted) =
+                            self.stmt_cache.insert(sql, stmt_name.to_string(), 0, None)
+                        {
+                            self.close_statement_on_server(&evicted.name);
+                        }
+                    }
+                    BackendTag::NoData => {}
+                    BackendTag::BindComplete => {}
+                    BackendTag::DataRow => {
+                        // Skip — no row collection, just consume and continue
+                    }
+                    BackendTag::CommandComplete => {
+                        let (tag, rows_affected) = extract_command_complete(body);
+                        self.last_command_tag = tag;
+                        self.last_affected_rows = rows_affected;
+                    }
+                    BackendTag::ReadyForQuery => {
+                        self.tx_status = TransactionStatus::from(body[0]);
+                        self.consume_read(msg_len);
+                        return Ok(());
                     }
                     BackendTag::ErrorResponse => {
                         let err = self.parse_error_with_context(body, sql);

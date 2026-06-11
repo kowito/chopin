@@ -15,6 +15,7 @@
 //! ```
 use crate::{Executor, OrmResult};
 use chopin_pg::Row;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 
 /// An in-memory testing stub satisfying the `Executor` trait without PostgreSQL connections.
@@ -22,32 +23,32 @@ use std::collections::VecDeque;
 /// Queues mock results that are drained in FIFO order as queries are executed.
 pub struct MockExecutor {
     /// Records all executed queries as `(sql, param_count)` tuples.
-    pub executed_queries: Vec<(String, usize)>,
-    mocked_results: VecDeque<Vec<Row>>,
+    pub executed_queries: RefCell<Vec<(String, usize)>>,
+    mocked_results: RefCell<VecDeque<Vec<Row>>>,
 }
 
 impl MockExecutor {
     pub fn new() -> Self {
         Self {
-            executed_queries: Vec::new(),
-            mocked_results: VecDeque::new(),
+            executed_queries: RefCell::new(Vec::new()),
+            mocked_results: RefCell::new(VecDeque::new()),
         }
     }
 
     /// Enqueues a set of rows to be returned by the next `query()` call.
-    pub fn push_result(&mut self, rows: Vec<Row>) {
-        self.mocked_results.push_back(rows);
+    pub fn push_result(&self, rows: Vec<Row>) {
+        self.mocked_results.borrow_mut().push_back(rows);
     }
 
     /// Returns the number of remaining mocked result sets.
     pub fn remaining_results(&self) -> usize {
-        self.mocked_results.len()
+        self.mocked_results.borrow().len()
     }
 
     /// Clears all recorded queries and remaining mocked results.
-    pub fn reset(&mut self) {
-        self.executed_queries.clear();
-        self.mocked_results.clear();
+    pub fn reset(&self) {
+        self.executed_queries.borrow_mut().clear();
+        self.mocked_results.borrow_mut().clear();
     }
 }
 
@@ -60,6 +61,7 @@ impl Default for MockExecutor {
 impl Executor for MockExecutor {
     fn execute(&mut self, query: &str, params: &[&dyn chopin_pg::types::ToSql]) -> OrmResult<u64> {
         self.executed_queries
+            .borrow_mut()
             .push((query.to_string(), params.len()));
         Ok(1)
     }
@@ -70,8 +72,9 @@ impl Executor for MockExecutor {
         params: &[&dyn chopin_pg::types::ToSql],
     ) -> OrmResult<Vec<Row>> {
         self.executed_queries
+            .borrow_mut()
             .push((query.to_string(), params.len()));
-        if let Some(rows) = self.mocked_results.pop_front() {
+        if let Some(rows) = self.mocked_results.borrow_mut().pop_front() {
             Ok(rows)
         } else {
             Ok(vec![])
@@ -130,9 +133,9 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].name, "Alice");
         assert_eq!(results[1].name, "Bob");
-        assert_eq!(mock.executed_queries.len(), 1);
+        assert_eq!(mock.executed_queries.borrow().len(), 1);
         assert!(
-            mock.executed_queries[0]
+            mock.executed_queries.borrow()[0]
                 .0
                 .contains("SELECT id, name FROM tester WHERE id > $1")
         );

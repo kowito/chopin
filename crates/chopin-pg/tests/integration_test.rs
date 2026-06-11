@@ -315,7 +315,7 @@ fn test_pool_basic_checkout_and_return() {
     let Some(db) = TestDb::with_schema(ITEMS_DDL) else {
         return;
     };
-    let mut pool = make_pool(&db.name, 3);
+    let pool = make_pool(&db.name, 3);
 
     {
         let mut guard = pool.get().unwrap();
@@ -336,7 +336,7 @@ fn test_pool_stats_track_checkouts() {
     let Some(db) = TestDb::with_schema(ITEMS_DDL) else {
         return;
     };
-    let mut pool = make_pool(&db.name, 5);
+    let pool = make_pool(&db.name, 5);
 
     // SAFETY: single-threaded; guards dropped before pool.
     let _g1: chopin_pg::ConnectionGuard<'static> =
@@ -355,7 +355,7 @@ fn test_pool_stats_track_checkouts() {
 #[test]
 fn test_pool_try_get_exhausted_returns_error() {
     let Some(db) = TestDb::open() else { return };
-    let mut pool = make_pool(&db.name, 1);
+    let pool = make_pool(&db.name, 1);
 
     // Exhaust pool (unsafe transmute to allow calling try_get while guard alive)
     // SAFETY: single-threaded; `_guard1` dropped before `pool`.
@@ -378,7 +378,7 @@ fn test_pool_get_timeout_when_exhausted() {
     let pool_cfg = PgPoolConfig::new()
         .max_size(1)
         .checkout_timeout(Duration::from_millis(50));
-    let mut pool = PgPool::connect_with_config(cfg, pool_cfg).unwrap();
+    let pool = PgPool::connect_with_config(cfg, pool_cfg).unwrap();
 
     // SAFETY: single-threaded test; `pool` outlives `held`; raw-pointer return
     // in ConnectionGuard::drop remains valid because `held` drops before `pool`
@@ -406,7 +406,7 @@ fn test_pool_reap_removes_idle_connections() {
         .max_size(3)
         .min_size(0)
         .idle_timeout(Duration::from_millis(1)); // expire immediately
-    let mut pool = PgPool::connect_with_config(cfg, pool_cfg).unwrap();
+    let pool = PgPool::connect_with_config(cfg, pool_cfg).unwrap();
 
     {
         let _g = pool.get().unwrap(); // create 1 connection, return immediately
@@ -423,7 +423,7 @@ fn test_pool_multiple_sequential_queries() {
     let Some(db) = TestDb::with_schema(ITEMS_DDL) else {
         return;
     };
-    let mut pool = make_pool(&db.name, 2);
+    let pool = make_pool(&db.name, 2);
 
     for i in 0..5 {
         let mut g = pool.get().unwrap();

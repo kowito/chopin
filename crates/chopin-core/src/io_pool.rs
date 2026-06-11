@@ -105,10 +105,14 @@ impl IoPool {
             let handle = thread::Builder::new()
                 .name(format!("chopin-io-{}", i))
                 .spawn(move || {
-                    // Each I/O thread runs a simple synchronous loop.
-                    // When a task arrives, we create a single-threaded runtime
-                    // just for that one task, run the future, then tear down.
-                    // This avoids any "runtime within runtime" issues.
+                    // Build a single-threaded tokio runtime once per I/O thread.
+                    // `rt.enter()` sets the ambient runtime so that
+                    // `Handle::current().block_on(f())` works from within tasks.
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("tokio runtime for I/O thread");
+                    let _guard = rt.enter();
                     while let Ok((task, reply_tx)) = task_rx.recv() {
                         let result = task();
                         let _ = reply_tx.send(result);
@@ -167,8 +171,9 @@ impl IoPool {
 
     /// Execute an async future on an I/O thread and return its result.
     ///
-    /// This is the primary public API.  A fresh single-threaded tokio runtime
-    /// is created for each call — `reqwest`, `aws-sdk`, etc. all work naturally.
+    /// This is the primary public API.  Since the I/O thread already hosts
+    /// an ambient tokio runtime (built once at pool startup), `block_on()`
+    /// reuses the existing runtime with zero allocation overhead.
     pub(crate) fn block_on<F, Fut, T>(&self, f: F) -> T
     where
         F: FnOnce() -> Fut + Send + 'static,
@@ -178,13 +183,10 @@ impl IoPool {
         let (tx, rx) = sync_channel(1);
 
         let task = move || {
-            // Create a fresh single-threaded runtime for this one future.
-            // Since the I/O thread has no ambient runtime, there's no nesting issue.
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime for I/O task");
-            let result = rt.block_on(f());
+            // The I/O thread already has an ambient tokio runtime (set via rt.enter()
+            // at pool startup).  Use the existing handle instead of creating a new
+            // runtime for every call.
+            let result = tokio::runtime::Handle::current().block_on(f());
             let _ = tx.send(result);
             String::new() // dummy — real result goes through tx
         };

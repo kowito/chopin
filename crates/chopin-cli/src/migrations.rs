@@ -8,17 +8,17 @@ use std::path::Path;
 pub fn run_migration_command(project_dir: &Path, command: crate::MigrateCommands) -> Result<()> {
     let cfg = crate::config::ChopinConfig::load(project_dir)?;
     let db_url = &cfg.database.url;
-    let mut pool = PgPool::connect(PgConfig::from_url(db_url)?, 1)?;
+    let pool = PgPool::connect(PgConfig::from_url(db_url)?, 1)?;
 
     match command {
-        crate::MigrateCommands::Status => show_status(project_dir, &mut pool),
-        crate::MigrateCommands::Up => run_up(project_dir, &mut pool),
-        crate::MigrateCommands::Down { steps } => run_down(project_dir, &mut pool, steps),
+        crate::MigrateCommands::Status => show_status(project_dir, &pool),
+        crate::MigrateCommands::Up => run_up(project_dir, &pool),
+        crate::MigrateCommands::Down { steps } => run_down(project_dir, &pool, steps),
         crate::MigrateCommands::Generate { name } => generate_migration(project_dir, &name),
     }
 }
 
-fn ensure_migration_table(pool: &mut PgPool) -> Result<()> {
+fn ensure_migration_table(pool: &PgPool) -> Result<()> {
     let mut conn = pool.get()?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS chopin_orm_migrations (
@@ -31,7 +31,7 @@ fn ensure_migration_table(pool: &mut PgPool) -> Result<()> {
     Ok(())
 }
 
-fn get_applied_migrations(pool: &mut PgPool) -> Result<Vec<String>> {
+fn get_applied_migrations(pool: &PgPool) -> Result<Vec<String>> {
     let mut conn = pool.get()?;
     let rows = conn.query(
         "SELECT name FROM chopin_orm_migrations ORDER BY id ASC",
@@ -49,7 +49,7 @@ fn get_applied_migrations(pool: &mut PgPool) -> Result<Vec<String>> {
     Ok(names)
 }
 
-fn show_status(project_dir: &Path, pool: &mut PgPool) -> Result<()> {
+fn show_status(project_dir: &Path, pool: &PgPool) -> Result<()> {
     ensure_migration_table(pool)?;
     let applied = get_applied_migrations(pool)?;
     let migrations_dir = project_dir.join("migrations");
@@ -88,7 +88,7 @@ fn show_status(project_dir: &Path, pool: &mut PgPool) -> Result<()> {
     Ok(())
 }
 
-fn run_up(project_dir: &Path, pool: &mut PgPool) -> Result<()> {
+fn run_up(project_dir: &Path, pool: &PgPool) -> Result<()> {
     ensure_migration_table(pool)?;
     let applied = get_applied_migrations(pool)?;
     let migrations_dir = project_dir.join("migrations");
@@ -152,7 +152,7 @@ fn run_up(project_dir: &Path, pool: &mut PgPool) -> Result<()> {
     Ok(())
 }
 
-fn run_down(project_dir: &Path, pool: &mut PgPool, steps: u32) -> Result<()> {
+fn run_down(project_dir: &Path, pool: &PgPool, steps: u32) -> Result<()> {
     ensure_migration_table(pool)?;
     let applied = get_applied_migrations(pool)?;
     let migrations_dir = project_dir.join("migrations");

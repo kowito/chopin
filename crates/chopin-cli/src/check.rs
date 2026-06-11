@@ -106,7 +106,7 @@ fn check_database(project_dir: &Path) -> Result<String, String> {
     let config = chopin_pg::connection::PgConfig::from_url(&url)
         .map_err(|e| format!("invalid DATABASE_URL: {}", e))?;
     match chopin_pg::pool::PgPool::connect(config, 1) {
-        Ok(mut pool) => {
+        Ok(pool) => {
             // Try a simple query.
             match pool.get() {
                 Ok(mut conn) => match conn.execute("SELECT 1", &[]) {

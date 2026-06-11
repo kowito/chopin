@@ -1,8 +1,6 @@
 use chopin_core::{Context, Response, Router, Server};
 use chopin_orm::{Model, Validate};
-use chopin_pg::{PgConfig, PgPool};
 use kowito_json::KJson;
-use std::sync::Arc;
 
 // Define our Database Model
 #[derive(Model, KJson, Default)]
@@ -21,12 +19,10 @@ struct CreateTodo {
 }
 
 // Helper to get AppState from Context.
-// Since Chopin is shared-nothing, simple static globals or lazy_statics
-// are typically used. For this example, we'll use a thread-local or global lazy_static
-// since passing Arc around the raw Context requires extending Context.
-lazy_static::lazy_static! {
-    static ref DB_POOL: Arc<PgPool> = Arc::new(PgPool::new(PgConfig::new("localhost", 5432, "postgres", "postgres", "postgres"), 10));
-}
+// Since Chopin is shared-nothing, each worker has its own PgPool via
+// chopin_pg::init_pool / chopin_pg::pool().  PgPool uses interior mutability
+// (Cell/RefCell) so all methods take &self.
+// For this example, the handlers return hardcoded data and don't use the DB.
 
 // --- Handlers ---
 

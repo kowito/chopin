@@ -15,7 +15,7 @@ impl Validate for BenchUser {}
 
 fn setup_db(count: i32) -> PgPool {
     let config = PgConfig::from_url("postgres://chopin:chopin@127.0.0.1:5432/postgres").unwrap();
-    let mut pool = PgPool::connect(config, 1).unwrap();
+    let pool = PgPool::connect(config, 1).unwrap();
 
     {
         let mut conn = pool.get().unwrap();
@@ -50,7 +50,7 @@ fn setup_db(count: i32) -> PgPool {
 }
 
 fn bench_scale(c: &mut Criterion) {
-    let scales = [1_000, 100_000]; // 1M might be too slow for immediate feedback, but user asked. 
+    let scales = [1_000, 100_000]; // 1M might be too slow for immediate feedback, but user asked.
     // Let's see if we can include it.
 
     for &count in &scales {

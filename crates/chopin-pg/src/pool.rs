@@ -23,6 +23,7 @@
 //! - Automatic reconnection on stale connections
 //! - Graceful shutdown via `close_all()`
 
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -164,7 +165,7 @@ impl PooledConn {
 // ─── Pool Statistics ──────────────────────────────────────────
 
 /// Pool statistics.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct PoolStats {
     pub total_checkouts: u64,
     pub total_connections_created: u64,
@@ -205,14 +206,14 @@ impl PoolStats {
 /// pushed to the back of the queue.
 pub struct PgPool {
     config: PgConfig,
-    pool_config: PgPoolConfig,
+    pool_config: RefCell<PgPoolConfig>,
     /// Idle connections, ready to be checked out.
-    idle: VecDeque<PooledConn>,
+    idle: RefCell<VecDeque<PooledConn>>,
     /// Number of connections that have been checked out and are currently
     /// in use (tracked so we can enforce `max_size`).
-    active: usize,
+    active: Cell<usize>,
     /// Statistics.
-    stats: PoolStats,
+    stats: Cell<PoolStats>,
 }
 
 impl PgPool {
@@ -222,31 +223,34 @@ impl PgPool {
         let pool_config = PgPoolConfig::default().max_size(size);
         Self {
             config,
-            pool_config,
-            idle: VecDeque::with_capacity(size),
-            active: 0,
-            stats: PoolStats::default(),
+            pool_config: RefCell::new(pool_config),
+            idle: RefCell::new(VecDeque::with_capacity(size)),
+            active: Cell::new(0),
+            stats: Cell::new(PoolStats::default()),
         }
     }
 
     /// Create a new pool with full configuration.
     pub fn with_config(config: PgConfig, pool_config: PgPoolConfig) -> Self {
+        let capacity = pool_config.max_size;
         Self {
-            idle: VecDeque::with_capacity(pool_config.max_size),
+            idle: RefCell::new(VecDeque::with_capacity(capacity)),
             config,
-            pool_config,
-            active: 0,
-            stats: PoolStats::default(),
+            pool_config: RefCell::new(pool_config),
+            active: Cell::new(0),
+            stats: Cell::new(PoolStats::default()),
         }
     }
 
     /// Create a pool and eagerly initialize `size` connections.
     pub fn connect(config: PgConfig, size: usize) -> PgResult<Self> {
-        let mut pool = Self::new(config, size);
+        let pool = Self::new(config, size);
         for _ in 0..size {
             let conn = PgConnection::connect(&pool.config)?;
-            pool.idle.push_back(PooledConn::new(conn));
-            pool.stats.total_connections_created += 1;
+            pool.idle.borrow_mut().push_back(PooledConn::new(conn));
+            let mut s = pool.stats.get();
+            s.total_connections_created += 1;
+            pool.stats.set(s);
         }
         Ok(pool)
     }
@@ -254,11 +258,13 @@ impl PgPool {
     /// Create a pool with full config and eagerly initialize `min_size` connections.
     pub fn connect_with_config(config: PgConfig, pool_config: PgPoolConfig) -> PgResult<Self> {
         let min = pool_config.min_size.min(pool_config.max_size);
-        let mut pool = Self::with_config(config, pool_config);
+        let pool = Self::with_config(config, pool_config);
         for _ in 0..min {
             let conn = PgConnection::connect(&pool.config)?;
-            pool.idle.push_back(PooledConn::new(conn));
-            pool.stats.total_connections_created += 1;
+            pool.idle.borrow_mut().push_back(PooledConn::new(conn));
+            let mut s = pool.stats.get();
+            s.total_connections_created += 1;
+            pool.stats.set(s);
         }
         Ok(pool)
     }
@@ -268,37 +274,50 @@ impl PgPool {
     /// Internal: attempt to check out a `PooledConn` without wrapping in a
     /// guard.  Does **not** increment `active` – the caller is responsible
     /// for that.
-    fn try_checkout(&mut self) -> PgResult<PooledConn> {
-        self.stats.total_checkouts += 1;
+    fn try_checkout(&self) -> PgResult<PooledConn> {
+        let mut stats = self.stats.get();
+        stats.total_checkouts += 1;
+        self.stats.set(stats);
+
+        let pool_cfg = self.pool_config.borrow();
 
         // Try to pop an idle connection (FIFO – oldest first)
-        while let Some(mut pooled) = self.idle.pop_front() {
+        let mut idle = self.idle.borrow_mut();
+        while let Some(mut pooled) = idle.pop_front() {
             // Check lifetime / idle expiry
-            if pooled.is_lifetime_expired(self.pool_config.max_lifetime) {
-                self.stats.lifetime_expirations += 1;
-                self.stats.total_connections_closed += 1;
+            if pooled.is_lifetime_expired(pool_cfg.max_lifetime) {
+                let mut s = self.stats.get();
+                s.lifetime_expirations += 1;
+                s.total_connections_closed += 1;
+                self.stats.set(s);
                 continue; // drop it, try next
             }
-            if pooled.is_idle_expired(self.pool_config.idle_timeout) {
-                self.stats.idle_expirations += 1;
-                self.stats.total_connections_closed += 1;
+            if pooled.is_idle_expired(pool_cfg.idle_timeout) {
+                let mut s = self.stats.get();
+                s.idle_expirations += 1;
+                s.total_connections_closed += 1;
+                self.stats.set(s);
                 continue;
             }
 
             // Optionally validate
-            if self.pool_config.test_on_checkout
+            if pool_cfg.test_on_checkout
                 && pooled
                     .conn
-                    .query_simple(&self.pool_config.validation_query)
+                    .query_simple(&pool_cfg.validation_query)
                     .is_err()
             {
-                self.stats.validation_failures += 1;
-                self.stats.total_connections_closed += 1;
-                if self.pool_config.auto_reconnect {
+                let mut s = self.stats.get();
+                s.validation_failures += 1;
+                s.total_connections_closed += 1;
+                self.stats.set(s);
+                if pool_cfg.auto_reconnect {
                     // Replace with a fresh connection
                     let new_conn = PgConnection::connect(&self.config)?;
                     pooled = PooledConn::new(new_conn);
-                    self.stats.total_connections_created += 1;
+                    let mut s2 = self.stats.get();
+                    s2.total_connections_created += 1;
+                    self.stats.set(s2);
                 } else {
                     return Err(PgError::PoolValidationFailed);
                 }
@@ -307,12 +326,15 @@ impl PgPool {
             pooled.last_used = Instant::now();
             return Ok(pooled);
         }
+        drop(idle);
 
         // No idle connection — can we create a new one?
-        let total = self.active + self.idle.len();
-        if total < self.pool_config.max_size {
+        let total = self.active.get() + self.idle.borrow().len();
+        if total < pool_cfg.max_size {
             let conn = PgConnection::connect(&self.config)?;
-            self.stats.total_connections_created += 1;
+            let mut s = self.stats.get();
+            s.total_connections_created += 1;
+            self.stats.set(s);
             let pooled = PooledConn::new(conn);
             return Ok(pooled);
         }
@@ -328,11 +350,11 @@ impl PgPool {
     ///
     /// Returns `Err(PgError::PoolExhausted)` if no connection is available and
     /// the pool is at capacity.
-    pub fn try_get(&mut self) -> PgResult<ConnectionGuard<'_>> {
+    pub fn try_get(&self) -> PgResult<ConnectionGuard<'_>> {
         let pooled = self.try_checkout()?;
-        self.active += 1;
+        self.active.set(self.active.get() + 1);
         Ok(ConnectionGuard {
-            pool: self as *mut PgPool,
+            pool: self as *const PgPool as *mut PgPool,
             conn: Some(pooled),
             _marker: std::marker::PhantomData,
         })
@@ -343,9 +365,10 @@ impl PgPool {
     /// Internally calls `try_checkout` in a loop with a short sleep between
     /// attempts.  In a production event-loop the sleep would be replaced
     /// by yielding to the scheduler.
-    pub fn get(&mut self) -> PgResult<ConnectionGuard<'_>> {
+    pub fn get(&self) -> PgResult<ConnectionGuard<'_>> {
         let timeout = self
             .pool_config
+            .borrow()
             .checkout_timeout
             .unwrap_or(Duration::from_secs(5));
         let start = Instant::now();
@@ -353,17 +376,17 @@ impl PgPool {
         // First attempt — fast path.
         match self.try_checkout() {
             Ok(pooled) => {
-                self.active += 1;
+                self.active.set(self.active.get() + 1);
                 let elapsed_ns = start.elapsed().as_nanos() as u64;
-                self.stats.total_checkout_wait_nanos = self
-                    .stats
-                    .total_checkout_wait_nanos
-                    .saturating_add(elapsed_ns);
-                if elapsed_ns > self.stats.max_checkout_wait_nanos {
-                    self.stats.max_checkout_wait_nanos = elapsed_ns;
+                let mut s = self.stats.get();
+                s.total_checkout_wait_nanos =
+                    s.total_checkout_wait_nanos.saturating_add(elapsed_ns);
+                if elapsed_ns > s.max_checkout_wait_nanos {
+                    s.max_checkout_wait_nanos = elapsed_ns;
                 }
+                self.stats.set(s);
                 return Ok(ConnectionGuard {
-                    pool: self as *mut PgPool,
+                    pool: self as *const PgPool as *mut PgPool,
                     conn: Some(pooled),
                     _marker: std::marker::PhantomData,
                 });
@@ -377,7 +400,9 @@ impl PgPool {
         let mut attempt = 0usize;
         loop {
             if start.elapsed() >= timeout {
-                self.stats.checkout_timeouts += 1;
+                let mut s = self.stats.get();
+                s.checkout_timeouts += 1;
+                self.stats.set(s);
                 return Err(PgError::PoolTimeout);
             }
 
@@ -387,17 +412,17 @@ impl PgPool {
 
             match self.try_checkout() {
                 Ok(pooled) => {
-                    self.active += 1;
+                    self.active.set(self.active.get() + 1);
                     let elapsed_ns = start.elapsed().as_nanos() as u64;
-                    self.stats.total_checkout_wait_nanos = self
-                        .stats
-                        .total_checkout_wait_nanos
-                        .saturating_add(elapsed_ns);
-                    if elapsed_ns > self.stats.max_checkout_wait_nanos {
-                        self.stats.max_checkout_wait_nanos = elapsed_ns;
+                    let mut s = self.stats.get();
+                    s.total_checkout_wait_nanos =
+                        s.total_checkout_wait_nanos.saturating_add(elapsed_ns);
+                    if elapsed_ns > s.max_checkout_wait_nanos {
+                        s.max_checkout_wait_nanos = elapsed_ns;
                     }
+                    self.stats.set(s);
                     return Ok(ConnectionGuard {
-                        pool: self as *mut PgPool,
+                        pool: self as *const PgPool as *mut PgPool,
                         conn: Some(pooled),
                         _marker: std::marker::PhantomData,
                     });
@@ -409,22 +434,27 @@ impl PgPool {
     }
 
     /// Return a connection to the pool (called by `ConnectionGuard::drop`).
-    fn return_conn(&mut self, mut pooled: PooledConn) {
-        self.active = self.active.saturating_sub(1);
+    fn return_conn(&self, mut pooled: PooledConn) {
+        self.active.set(self.active.get().saturating_sub(1));
 
         // Discard broken connections — they cannot be reused.
         if pooled.conn.is_broken() {
-            self.stats.total_connections_closed += 1;
+            let mut s = self.stats.get();
+            s.total_connections_closed += 1;
+            self.stats.set(s);
             return; // pooled dropped here → PgConnection::drop sends Terminate
         }
 
         pooled.last_used = Instant::now();
 
         // Only return if pool is not over capacity
-        if self.idle.len() + self.active < self.pool_config.max_size {
-            self.idle.push_back(pooled);
+        let max_size = self.pool_config.borrow().max_size;
+        if self.idle.borrow().len() + self.active.get() < max_size {
+            self.idle.borrow_mut().push_back(pooled);
         } else {
-            self.stats.total_connections_closed += 1;
+            let mut s = self.stats.get();
+            s.total_connections_closed += 1;
+            self.stats.set(s);
             // pooled is dropped here, calling PgConnection::drop → Terminate
         }
     }
@@ -436,9 +466,10 @@ impl PgPool {
     ///
     /// Useful for ensuring a minimum number of connections are ready at
     /// startup, avoiding cold-start latency on first use.
-    pub fn warmup(&mut self, target: usize) -> PgResult<usize> {
-        let effective = target.min(self.pool_config.max_size);
-        let current = self.idle.len() + self.active;
+    pub fn warmup(&self, target: usize) -> PgResult<usize> {
+        let max_size = self.pool_config.borrow().max_size;
+        let effective = target.min(max_size);
+        let current = self.idle.borrow().len() + self.active.get();
         if current >= effective {
             return Ok(0);
         }
@@ -446,8 +477,10 @@ impl PgPool {
         let mut created = 0;
         for _ in 0..need {
             let conn = PgConnection::connect(&self.config)?;
-            self.idle.push_back(PooledConn::new(conn));
-            self.stats.total_connections_created += 1;
+            self.idle.borrow_mut().push_back(PooledConn::new(conn));
+            let mut s = self.stats.get();
+            s.total_connections_created += 1;
+            self.stats.set(s);
             created += 1;
         }
         Ok(created)
@@ -457,30 +490,37 @@ impl PgPool {
     ///
     /// Removes connections that have exceeded `max_lifetime` or `idle_timeout`,
     /// then ensures `min_size` idle connections exist.
-    pub fn reap(&mut self) {
+    pub fn reap(&self) {
+        let pool_cfg = self.pool_config.borrow();
+        let mut idle = self.idle.borrow_mut();
         let mut i = 0;
-        while i < self.idle.len() {
+        while i < idle.len() {
             let expired = {
-                let pooled = &self.idle[i];
-                pooled.is_lifetime_expired(self.pool_config.max_lifetime)
-                    || pooled.is_idle_expired(self.pool_config.idle_timeout)
+                let pooled = &idle[i];
+                pooled.is_lifetime_expired(pool_cfg.max_lifetime)
+                    || pooled.is_idle_expired(pool_cfg.idle_timeout)
             };
             if expired {
-                self.idle.remove(i);
-                self.stats.total_connections_closed += 1;
+                idle.remove(i);
+                let mut s = self.stats.get();
+                s.total_connections_closed += 1;
+                self.stats.set(s);
             } else {
                 i += 1;
             }
         }
+        drop(idle);
 
         // Ensure min_size connections
-        let total = self.active + self.idle.len();
-        if total < self.pool_config.min_size {
-            let need = self.pool_config.min_size - total;
+        let total = self.active.get() + self.idle.borrow().len();
+        if total < pool_cfg.min_size {
+            let need = pool_cfg.min_size - total;
             for _ in 0..need {
                 if let Ok(conn) = PgConnection::connect(&self.config) {
-                    self.idle.push_back(PooledConn::new(conn));
-                    self.stats.total_connections_created += 1;
+                    self.idle.borrow_mut().push_back(PooledConn::new(conn));
+                    let mut s = self.stats.get();
+                    s.total_connections_created += 1;
+                    self.stats.set(s);
                 }
             }
         }
@@ -493,14 +533,14 @@ impl PgPool {
         &self.config
     }
 
-    /// Get the pool config.
-    pub fn pool_config(&self) -> &PgPoolConfig {
-        &self.pool_config
+    /// Get a copy of the pool config.
+    pub fn pool_config(&self) -> PgPoolConfig {
+        self.pool_config.borrow().clone()
     }
 
     /// Get the maximum pool size.
     pub fn pool_size(&self) -> usize {
-        self.pool_config.max_size
+        self.pool_config.borrow().max_size
     }
 
     /// Resize the pool at runtime.
@@ -509,40 +549,46 @@ impl PgPool {
     /// connections are discarded immediately.  Active (checked-out)
     /// connections are not interrupted — the pool will converge to the
     /// new size as they are returned.
-    pub fn set_max_size(&mut self, new_size: usize) {
-        self.pool_config.max_size = new_size;
+    pub fn set_max_size(&self, new_size: usize) {
+        self.pool_config.borrow_mut().max_size = new_size;
         // Shrink idle queue if necessary
-        while self.idle.len() + self.active > new_size && !self.idle.is_empty() {
-            self.idle.pop_front();
-            self.stats.total_connections_closed += 1;
+        let mut idle = self.idle.borrow_mut();
+        while idle.len() + self.active.get() > new_size && !idle.is_empty() {
+            idle.pop_front();
+            let mut s = self.stats.get();
+            s.total_connections_closed += 1;
+            self.stats.set(s);
         }
     }
 
     /// Number of idle connections available for checkout.
     pub fn idle_connections(&self) -> usize {
-        self.idle.len()
+        self.idle.borrow().len()
     }
 
     /// Number of connections currently checked out.
     pub fn active_connections(&self) -> usize {
-        self.active
+        self.active.get()
     }
 
     /// Total connections (idle + active).
     pub fn total_connections(&self) -> usize {
-        self.idle.len() + self.active
+        self.idle.borrow().len() + self.active.get()
     }
 
     /// Get pool statistics.
-    pub fn stats(&self) -> &PoolStats {
-        &self.stats
+    pub fn stats(&self) -> PoolStats {
+        self.stats.get()
     }
 
     /// Close all idle connections in the pool.
-    pub fn close_all(&mut self) {
-        let closed = self.idle.len();
-        self.idle.clear();
-        self.stats.total_connections_closed += closed as u64;
+    pub fn close_all(&self) {
+        let mut idle = self.idle.borrow_mut();
+        let closed = idle.len();
+        idle.clear();
+        let mut s = self.stats.get();
+        s.total_connections_closed += closed as u64;
+        self.stats.set(s);
     }
 }
 
@@ -561,14 +607,14 @@ impl PgPool {
 /// ```
 pub struct ConnectionGuard<'a> {
     /// Raw pointer to the owning pool.  We use a raw pointer instead of
-    /// `&'a mut PgPool` to avoid a double-mutable-borrow conflict: the
-    /// guard itself borrows the pool, but the user also needs `&mut` access
-    /// to the connection inside the guard.  Since the pool is single-threaded
-    /// this is safe.
-    pool: *mut PgPool,
+    /// `&'a PgPool` to avoid a borrow conflict: the guard itself holds a
+    /// pointer to the pool, but the user also needs access to the pool
+    /// during the guard's lifetime.  Since the pool uses interior mutability
+    /// and is single-threaded, this is safe.
+    pool: *const PgPool,
     conn: Option<PooledConn>,
     /// Phantom to tie the lifetime to the pool.
-    _marker: std::marker::PhantomData<&'a mut PgPool>,
+    _marker: std::marker::PhantomData<&'a PgPool>,
 }
 
 impl<'a> ConnectionGuard<'a> {
@@ -608,7 +654,9 @@ impl<'a> Drop for ConnectionGuard<'a> {
     fn drop(&mut self) {
         if let Some(pooled) = self.conn.take() {
             // SAFETY: The pool is single-threaded and lives at least as long
-            // as 'a.  The raw pointer was obtained from a valid &mut PgPool.
+            // as 'a.  The raw pointer was obtained from a valid &PgPool.
+            // Interior mutability (RefCell/Cell) makes this safe — we only
+            // call &self methods on the pool.
             unsafe {
                 (*self.pool).return_conn(pooled);
             }
@@ -780,6 +828,13 @@ mod tests {
         assert_eq!(stats.checkout_timeouts, 0);
     }
 
+    #[test]
+    fn test_pool_stats_is_copy() {
+        let stats = PoolStats::default();
+        let copied = stats;
+        assert_eq!(copied.total_checkouts, stats.total_checkouts);
+    }
+
     // ─── PgPool Initial State (Lazy, No DB) ──────────────────────────────────
 
     #[test]
@@ -814,7 +869,7 @@ mod tests {
 
     #[test]
     fn test_try_get_returns_pool_exhausted_when_at_capacity() {
-        let mut pool = PgPool::new(dummy_config(), 0);
+        let pool = PgPool::new(dummy_config(), 0);
         let result = pool.try_get();
         assert!(
             matches!(result, Err(PgError::PoolExhausted)),
@@ -826,7 +881,7 @@ mod tests {
     #[test]
     fn test_try_get_never_returns_would_block() {
         // Regression: before Sprint 6, try_get returned WouldBlock instead of PoolExhausted
-        let mut pool = PgPool::new(dummy_config(), 0);
+        let pool = PgPool::new(dummy_config(), 0);
         let result = pool.try_get();
         assert!(
             !matches!(result, Err(PgError::WouldBlock)),
@@ -839,7 +894,7 @@ mod tests {
         let pool_cfg = PgPoolConfig::new()
             .max_size(0)
             .checkout_timeout(Duration::from_millis(1));
-        let mut pool = PgPool::with_config(dummy_config(), pool_cfg);
+        let pool = PgPool::with_config(dummy_config(), pool_cfg);
         let result = pool.get();
         assert!(
             matches!(result, Err(PgError::PoolTimeout)),
@@ -853,7 +908,7 @@ mod tests {
         let pool_cfg = PgPoolConfig::new()
             .max_size(0)
             .checkout_timeout(Duration::from_millis(1));
-        let mut pool = PgPool::with_config(dummy_config(), pool_cfg);
+        let pool = PgPool::with_config(dummy_config(), pool_cfg);
         let _ = pool.get();
         assert_eq!(pool.stats().checkout_timeouts, 1);
     }
@@ -862,7 +917,7 @@ mod tests {
 
     #[test]
     fn test_set_max_size_to_zero_makes_pool_exhausted() {
-        let mut pool = PgPool::new(dummy_config(), 10);
+        let pool = PgPool::new(dummy_config(), 10);
         pool.set_max_size(0);
         let result = pool.try_get();
         assert!(matches!(result, Err(PgError::PoolExhausted)));
@@ -870,7 +925,7 @@ mod tests {
 
     #[test]
     fn test_set_max_size_grow_does_not_panic() {
-        let mut pool = PgPool::new(dummy_config(), 5);
+        let pool = PgPool::new(dummy_config(), 5);
         pool.set_max_size(100); // grow — should not panic or discard anything
         assert_eq!(pool.idle_connections(), 0); // still lazy
     }
@@ -878,7 +933,7 @@ mod tests {
     #[test]
     fn test_set_max_size_shrink_with_empty_idle_is_noop() {
         // No idle connections → shrink has nothing to discard
-        let mut pool = PgPool::new(dummy_config(), 10);
+        let pool = PgPool::new(dummy_config(), 10);
         pool.set_max_size(1);
         assert_eq!(pool.idle_connections(), 0);
     }
@@ -887,7 +942,7 @@ mod tests {
 
     #[test]
     fn test_close_all_on_empty_pool_no_panic() {
-        let mut pool = PgPool::new(dummy_config(), 10);
+        let pool = PgPool::new(dummy_config(), 10);
         pool.close_all(); // must not panic
         assert_eq!(pool.idle_connections(), 0);
     }
@@ -895,7 +950,7 @@ mod tests {
     #[test]
     fn test_close_all_does_not_affect_active_count() {
         // No active connections → active stays 0 after close_all
-        let mut pool = PgPool::new(dummy_config(), 10);
+        let pool = PgPool::new(dummy_config(), 10);
         pool.close_all();
         assert_eq!(pool.active_connections(), 0);
     }
@@ -903,7 +958,7 @@ mod tests {
     #[test]
     fn test_close_all_increments_closed_stats() {
         // No idle connections → closed counter stays 0
-        let mut pool = PgPool::new(dummy_config(), 5);
+        let pool = PgPool::new(dummy_config(), 5);
         pool.close_all();
         // With 0 idle, nothing closes
         assert_eq!(pool.stats().total_connections_closed, 0);
@@ -913,14 +968,14 @@ mod tests {
 
     #[test]
     fn test_try_get_increments_checkout_counter() {
-        let mut pool = PgPool::new(dummy_config(), 0);
+        let pool = PgPool::new(dummy_config(), 0);
         let _ = pool.try_get(); // will fail with PoolExhausted
         assert_eq!(pool.stats().total_checkouts, 1);
     }
 
     #[test]
     fn test_try_get_multiple_exhausted_increments_counter() {
-        let mut pool = PgPool::new(dummy_config(), 0);
+        let pool = PgPool::new(dummy_config(), 0);
         for _ in 0..5 {
             let _ = pool.try_get();
         }
@@ -941,7 +996,7 @@ mod tests {
 
     #[test]
     fn test_reap_on_empty_pool_no_panic() {
-        let mut pool = PgPool::new(dummy_config(), 10);
+        let pool = PgPool::new(dummy_config(), 10);
         pool.reap(); // must not panic on empty idle queue
         assert_eq!(pool.idle_connections(), 0);
     }
