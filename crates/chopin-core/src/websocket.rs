@@ -173,7 +173,19 @@ pub fn decode_frame(buf: &[u8]) -> Result<(WsFrame, usize), WsError> {
         return Err(WsError::Protocol("reserved bits must be 0"));
     }
     let opcode = b0 & 0x0F;
+
+    // Validate opcode (RFC 6455 §5.2): only 0x0-0x2, 0x8-0xA are defined.
+    match opcode {
+        0x0 | 0x1 | 0x2 | 0x8 | 0x9 | 0xA => {}
+        _ => return Err(WsError::Protocol("unknown opcode")),
+    }
+
     let masked = b1 & 0x80 != 0;
+
+    // Client-to-server frames MUST be masked (RFC 6455 §5.1).
+    if !masked {
+        return Err(WsError::Protocol("client frames must be masked"));
+    }
     let mut payload_len = (b1 & 0x7F) as u64;
 
     let mut offset = 2usize;
@@ -198,11 +210,23 @@ pub fn decode_frame(buf: &[u8]) -> Result<(WsFrame, usize), WsError> {
             buf[offset + 6],
             buf[offset + 7],
         ]);
+        // RFC 6455 §5.2: 127-bit extended payload length MSB must be 0
+        // (the value must fit in 63 bits).
+        if payload_len > i64::MAX as u64 {
+            return Err(WsError::Protocol("127-bit payload length MSB must be 0"));
+        }
         offset += 8;
     }
 
     if payload_len > MAX_FRAME_PAYLOAD {
         return Err(WsError::PayloadTooLarge);
+    }
+
+    // Control frames (close/ping/pong) MUST have payload ≤ 125 bytes (RFC 6455 §5.5).
+    if matches!(opcode, OPCODE_CLOSE | OPCODE_PING | OPCODE_PONG) && payload_len > 125 {
+        return Err(WsError::Protocol(
+            "control frame payload must be <= 125 bytes",
+        ));
     }
 
     let mask_key = if masked {
@@ -529,12 +553,35 @@ mod tests {
         assert!(!is_upgrade_request(&req));
     }
 
+    /// Helper: apply a mask to an unmasked frame so it passes `decode_frame`.
+    fn mask_frame(frame: &[u8], mask: [u8; 4]) -> Vec<u8> {
+        let mut masked = frame.to_vec();
+        // Set the MASK bit in byte 1
+        masked[1] |= 0x80;
+        // Insert mask key after the extended length (if any)
+        let header_len = if (masked[1] & 0x7F) == 126 {
+            4
+        } else if (masked[1] & 0x7F) == 127 {
+            10
+        } else {
+            2
+        };
+        let (head, tail) = masked.split_at(header_len);
+        let mut result = head.to_vec();
+        result.extend_from_slice(&mask);
+        for (i, b) in tail.iter().enumerate() {
+            result.push(b ^ mask[i & 3]);
+        }
+        result
+    }
+
     #[test]
     fn test_encode_decode_text_frame() {
         let encoded = encode_text("Hello, WebSocket!");
-        // Server frames are unmasked, so we can decode directly
-        let (frame, consumed) = decode_frame(&encoded).unwrap();
-        assert_eq!(consumed, encoded.len());
+        // Mask the frame; decode_frame requires client→server masking.
+        let masked = mask_frame(&encoded, [0x12, 0x34, 0x56, 0x78]);
+        let (frame, consumed) = decode_frame(&masked).unwrap();
+        assert_eq!(consumed, masked.len());
         assert!(frame.fin);
         assert_eq!(frame.opcode, OPCODE_TEXT);
         assert_eq!(frame.payload, b"Hello, WebSocket!");
@@ -544,7 +591,8 @@ mod tests {
     fn test_encode_decode_binary_frame() {
         let data = vec![0xDE, 0xAD, 0xBE, 0xEF];
         let encoded = encode_binary(&data);
-        let (frame, _) = decode_frame(&encoded).unwrap();
+        let masked = mask_frame(&encoded, [0xAA, 0xBB, 0xCC, 0xDD]);
+        let (frame, _) = decode_frame(&masked).unwrap();
         assert!(frame.fin);
         assert_eq!(frame.opcode, OPCODE_BINARY);
         assert_eq!(frame.payload, data);
@@ -572,7 +620,8 @@ mod tests {
     #[test]
     fn test_encode_decode_close_frame() {
         let encoded = encode_close(Some(1000), "Normal Closure");
-        let (frame, _) = decode_frame(&encoded).unwrap();
+        let masked = mask_frame(&encoded, [0x11, 0x22, 0x33, 0x44]);
+        let (frame, _) = decode_frame(&masked).unwrap();
         assert_eq!(frame.opcode, OPCODE_CLOSE);
         let (code, reason) = parse_close_payload(&frame.payload).unwrap();
         assert_eq!(code, 1000);
@@ -582,7 +631,8 @@ mod tests {
     #[test]
     fn test_encode_close_no_code() {
         let encoded = encode_close(None, "");
-        let (frame, _) = decode_frame(&encoded).unwrap();
+        let masked = mask_frame(&encoded, [0x55, 0x66, 0x77, 0x88]);
+        let (frame, _) = decode_frame(&masked).unwrap();
         assert_eq!(frame.opcode, OPCODE_CLOSE);
         assert!(frame.payload.is_empty());
     }
@@ -590,12 +640,14 @@ mod tests {
     #[test]
     fn test_encode_decode_ping_pong() {
         let ping = encode_ping(b"ping-data");
-        let (frame, _) = decode_frame(&ping).unwrap();
+        let ping_masked = mask_frame(&ping, [0xAB, 0xCD, 0xEF, 0x01]);
+        let (frame, _) = decode_frame(&ping_masked).unwrap();
         assert_eq!(frame.opcode, OPCODE_PING);
         assert_eq!(frame.payload, b"ping-data");
 
         let pong = encode_pong(b"ping-data");
-        let (frame, _) = decode_frame(&pong).unwrap();
+        let pong_masked = mask_frame(&pong, [0x02, 0x13, 0x24, 0x35]);
+        let (frame, _) = decode_frame(&pong_masked).unwrap();
         assert_eq!(frame.opcode, OPCODE_PONG);
         assert_eq!(frame.payload, b"ping-data");
     }
@@ -618,8 +670,9 @@ mod tests {
         // Test 126-byte length encoding path
         let data = vec![0x42u8; 300];
         let encoded = encode_frame(OPCODE_BINARY, &data, true);
-        let (frame, consumed) = decode_frame(&encoded).unwrap();
-        assert_eq!(consumed, encoded.len());
+        let masked = mask_frame(&encoded, [0x01, 0x02, 0x03, 0x04]);
+        let (frame, consumed) = decode_frame(&masked).unwrap();
+        assert_eq!(consumed, masked.len());
         assert_eq!(frame.payload.len(), 300);
     }
 

@@ -144,6 +144,7 @@ impl Worker {
         let slab_capacity = std::env::var("CHOPIN_SLAB_CAPACITY")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
+            .map(|v| v.min(100_000))
             .unwrap_or(8_000); // Phase 1: 32 KiB read + 32 KiB write = 64 KiB/conn; 8k slots ≈ 512 MB/worker
 
         let epoll_timeout_ms = std::env::var("CHOPIN_EPOLL_TIMEOUT_MS")
@@ -423,7 +424,7 @@ impl Worker {
                                             }
                                         }
                                         Ok(n) => {
-                                            conn.read_len += n as u16;
+                                            conn.read_len = conn.read_len.saturating_add(n as u16);
                                             // Phase 1.3: proactively grow if ≥ 75% full
                                             // so the next read still has headroom.
                                             conn.maybe_grow_read_buf();
@@ -1299,7 +1300,7 @@ impl Worker {
         wheel: &mut TimerWheel,
         now: u32,
     ) {
-        const TIMEOUT: u32 = 30;
+        const TIMEOUT: u32 = 10;
         if let Some(mut drain) = wheel.advance(now, TIMEOUT) {
             while let Some(indices) = drain.next_slot() {
                 for idx in indices {
@@ -2373,7 +2374,7 @@ impl Worker {
         wheel: &mut TimerWheel,
         now: u32,
     ) {
-        const TIMEOUT: u32 = 30;
+        const TIMEOUT: u32 = 10;
         if let Some(mut drain) = wheel.advance(now, TIMEOUT) {
             while let Some(indices) = drain.next_slot() {
                 for idx in indices {

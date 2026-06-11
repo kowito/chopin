@@ -491,6 +491,14 @@ impl Response {
 
     /// Internal: attempt to open a file and build a zero-copy response.
     fn try_file(path: &str, range_header: Option<&str>) -> io::Result<Self> {
+        // Reject paths with directory-traversal segments, null bytes, or
+        // absolute paths — no legitimate static-file path needs these.
+        if path.contains("..") || path.contains('\0') || path.starts_with('/') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path traversal rejected",
+            ));
+        }
         let fd = syscalls::open_file_readonly(path)?;
         let total_size = match syscalls::file_size(fd) {
             Ok(s) => s,

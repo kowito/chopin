@@ -423,10 +423,7 @@ mod tests {
         // but each call parks the calling thread — in real code these would
         // be different worker threads)
         let results: Vec<String> = (0..8)
-            .map(|i| {
-                let i = i;
-                pool.run(move || format!("task-{}", i))
-            })
+            .map(|i| pool.run(move || format!("task-{}", i)))
             .collect();
 
         for (i, r) in results.iter().enumerate() {

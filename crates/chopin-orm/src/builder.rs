@@ -306,7 +306,10 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
         self
     }
 
+    /// ⚠️ Safety: The clause is validated against common SQL injection patterns.
+    /// Only pass trusted or validated strings.
     pub fn join(mut self, clause: &str) -> Self {
+        validate_sql_clause(clause, "join");
         self.joins.push(clause.into());
         self
     }
@@ -356,7 +359,10 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
         self
     }
 
+    /// ⚠️ Safety: The clause is validated against common SQL injection patterns.
+    /// Only pass trusted or validated strings.
     pub fn group_by(mut self, clause: &str) -> Self {
+        validate_sql_clause(clause, "group_by");
         self.group_by = Some(clause.into());
         self
     }
@@ -366,7 +372,10 @@ impl<M: Model + Send + Sync> QueryBuilder<M> {
         self
     }
 
+    /// ⚠️ Safety: The clause is validated against common SQL injection patterns.
+    /// Only pass trusted or validated strings.
     pub fn order_by(mut self, clause: &str) -> Self {
+        validate_sql_clause(clause, "order_by");
         self.order_by = Some(clause.to_string());
         self
     }
@@ -585,6 +594,58 @@ impl<M> IntoExpr<M> for Expr<M> {
 impl<M, S: Into<String>> IntoExpr<M> for (S, Vec<PgValue>) {
     fn into_expr(self) -> Expr<M> {
         Expr::new(self.0.into(), self.1)
+    }
+}
+
+/// Validates a raw SQL clause string against common injection patterns.
+/// Panics if the clause contains dangerous SQL — this is a build-time / startup
+/// guard, not a runtime sanitisation, because these clauses are typically string
+/// literals.
+fn validate_sql_clause(clause: &str, method: &str) {
+    let lower = clause.to_lowercase();
+
+    if clause.contains(';') {
+        panic!(
+            "{} clause contains potentially dangerous SQL (semicolon): {:?}",
+            method, clause
+        );
+    }
+    if clause.contains("--") {
+        panic!(
+            "{} clause contains potentially dangerous SQL (comment --): {:?}",
+            method, clause
+        );
+    }
+    if clause.contains("/*") || clause.contains("*/") {
+        panic!(
+            "{} clause contains potentially dangerous SQL (block comment /* */): {:?}",
+            method, clause
+        );
+    }
+    for keyword in &[
+        "drop", "delete", "insert", "update", "alter", "exec", "execute", "union",
+    ] {
+        // Match whole-word only: the keyword must be surrounded by word boundaries.
+        // We approximate a word boundary by checking the surrounding characters.
+        if let Some(pos) = lower.find(keyword) {
+            let prev_is_boundary = pos == 0
+                || lower.as_bytes()[pos - 1] == b' '
+                || lower.as_bytes()[pos - 1] == b','
+                || lower.as_bytes()[pos - 1] == b'('
+                || lower.as_bytes()[pos - 1] == b'!';
+            let next_idx = pos + keyword.len();
+            let next_is_boundary = next_idx >= lower.len()
+                || lower.as_bytes()[next_idx] == b' '
+                || lower.as_bytes()[next_idx] == b','
+                || lower.as_bytes()[next_idx] == b')'
+                || lower.as_bytes()[next_idx] == b';';
+            if prev_is_boundary && next_is_boundary {
+                panic!(
+                    "{} clause contains potentially dangerous SQL (keyword `{}`): {:?}",
+                    method, keyword, clause
+                );
+            }
+        }
     }
 }
 

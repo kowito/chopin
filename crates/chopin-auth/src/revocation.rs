@@ -7,6 +7,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Maximum number of revoked token entries allowed in the blacklist.
+/// Once this limit is reached, further [`TokenBlacklist::revoke`] calls are
+/// silently ignored to prevent unbounded memory growth.
+const MAX_REVOKED_TOKENS: usize = 100_000;
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -47,8 +52,20 @@ impl TokenBlacklist {
     /// `expires_at` should be the token's own `exp` claim (Unix seconds) so
     /// the entry can be cleaned up once the token's natural lifetime ends.
     /// Pass `None` to revoke indefinitely.
+    ///
+    /// If the blacklist already contains [`MAX_REVOKED_TOKENS`] entries,
+    /// the revocation is silently ignored and a warning is logged to stderr.
+    /// This prevents unbounded memory growth when cleanup is not called
+    /// frequently enough.
     pub fn revoke(&self, jti: String, expires_at: Option<u64>) {
         if let Ok(mut lock) = self.revoked.write() {
+            if lock.len() >= MAX_REVOKED_TOKENS && !lock.contains_key(&jti) {
+                eprintln!(
+                    "WARN [chopin_auth::TokenBlacklist] revoke limit reached ({MAX_REVOKED_TOKENS} entries); \
+                     skipping revocation of JTI \"{jti}\". Call cleanup() to remove expired entries."
+                );
+                return;
+            }
             lock.insert(jti, expires_at);
         }
     }
@@ -223,6 +240,33 @@ mod tests {
         assert!(!bl.is_revoked("expired"));
         assert!(bl.is_revoked("live"));
         assert!(bl.is_revoked("perm"));
+    }
+
+    #[test]
+    fn test_revoke_refuses_beyond_max_capacity() {
+        // We can't easily test with 100_000 entries in a unit test, but we can
+        // verify that revoke() for an already-present JTI still works (upsert)
+        // even when the cap is hit by using a small cap-like check.
+        // Since MAX_REVOKED_TOKENS is 100_000, this test verifies the upsert
+        // path: when the map is full but the entry already exists, it's allowed.
+        let bl = TokenBlacklist::new();
+        // Fill the blacklist to exactly MAX_REVOKED_TOKENS by cheating with
+        // the internal lock.
+        {
+            let mut lock = bl.revoked.write().unwrap();
+            for i in 0..MAX_REVOKED_TOKENS {
+                lock.insert(format!("jti-{i}"), None);
+            }
+        }
+        assert_eq!(bl.len(), MAX_REVOKED_TOKENS);
+        // Revoking a JTI that is already present should still succeed (upsert).
+        bl.revoke("jti-0".to_string(), Some(FAR_FUTURE));
+        assert_eq!(bl.len(), MAX_REVOKED_TOKENS);
+        assert!(bl.is_revoked("jti-0"));
+        // Revoking a new JTI beyond the cap should be silently ignored.
+        bl.revoke("jti-new".to_string(), None);
+        assert_eq!(bl.len(), MAX_REVOKED_TOKENS);
+        assert!(!bl.is_revoked("jti-new"));
     }
 
     #[test]

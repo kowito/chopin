@@ -138,11 +138,18 @@ pub fn parse_request(
 
     let header_end = cursor;
 
-    // SAFETY: We have parsed headers from buf[..header_end].
-    // We now take a mutable slice of buf[header_end..] to decode the body (if chunked).
-    // The immutable slices we took previously are strictly in buf[..header_end] and will not be mutated.
-    let remaining =
-        unsafe { std::slice::from_raw_parts_mut(ptr.add(header_end), len - header_end) };
+    // Use raw pointer for remaining buffer to avoid creating a `&mut [u8]` that
+    // overlaps with the `&str` header slices stored in `headers`.  Stacked Borrows
+    // forbids creating a mutable reference while immutable references derived from
+    // the same allocation are still live, even when the ranges don't overlap
+    // logically.  Raw-pointer reads/writes are outside the borrow-checker model
+    // and are sound here because:
+    //   - Headers (`&str` slices) are read-only and confined to buf[..header_end].
+    //   - All chunked-body writes target positions >= header_end.
+    //   - We never create a `&mut` that aliases a live `&` reference.
+    // SAFETY: header_end is <= len (derived from buf parsing above).
+    let remaining_ptr = unsafe { ptr.add(header_end) };
+    let remaining_len = len - header_end;
 
     let mut expected_len = 0;
     let mut is_chunked = false;
@@ -170,17 +177,36 @@ pub fn parse_request(
         let mut write_pos = 0;
 
         loop {
-            let mut crlf = None;
-            for i in read_pos..remaining.len().saturating_sub(1) {
-                if remaining[i] == b'\r' && remaining[i + 1] == b'\n' {
-                    crlf = Some(i);
-                    break;
+            // Scan for \r\n using raw pointer reads (no &mut slice).
+            let crlf = {
+                let mut found = None;
+                let max = remaining_len.saturating_sub(1);
+                for i in read_pos..max {
+                    // SAFETY: i and i+1 are within [0, remaining_len), so
+                    // remaining_ptr.add(i) / .add(i+1) are in bounds.
+                    unsafe {
+                        if *remaining_ptr.add(i) == b'\r' && *remaining_ptr.add(i + 1) == b'\n' {
+                            found = Some(i);
+                            break;
+                        }
+                    }
                 }
+                found
             }
-            let crlf = crlf.ok_or(ParseError::Incomplete)?;
+            .ok_or(ParseError::Incomplete)?;
 
-            let hex_str = std::str::from_utf8(&remaining[read_pos..crlf])
-                .map_err(|_| ParseError::InvalidFormat)?;
+            // Build a temporary shared slice (not a `&mut`) for UTF-8 decoding.
+            let hex_str = {
+                // SAFETY: read_pos..crlf is within [0, remaining_len).  We create
+                // a `*const u8` slice that doesn't alias any live `&mut`.
+                let tmp = unsafe {
+                    std::slice::from_raw_parts(
+                        remaining_ptr.add(read_pos) as *const u8,
+                        crlf - read_pos,
+                    )
+                };
+                std::str::from_utf8(tmp).map_err(|_| ParseError::InvalidFormat)?
+            };
             let chunk_len =
                 usize::from_str_radix(hex_str.trim(), 16).map_err(|_| ParseError::InvalidFormat)?;
 
@@ -191,40 +217,61 @@ pub fn parse_request(
 
             if chunk_len == 0 {
                 read_pos = crlf + 2;
-                // find final \r\n (end of chunked body)
-                if read_pos + 2 > remaining.len() {
+                // Find final \r\n (end of chunked body).
+                if read_pos + 2 > remaining_len {
                     return Err(ParseError::Incomplete);
                 }
-                if remaining[read_pos] == b'\r' && remaining[read_pos + 1] == b'\n' {
-                    read_pos += 2;
+                // SAFETY: read_pos and read_pos+1 are within bounds (checked above).
+                unsafe {
+                    if *remaining_ptr.add(read_pos) == b'\r'
+                        && *remaining_ptr.add(read_pos + 1) == b'\n'
+                    {
+                        read_pos += 2;
+                    }
                 }
                 break;
             }
 
             let data_start = crlf + 2;
-            if data_start + chunk_len + 2 > remaining.len() {
+            if data_start + chunk_len + 2 > remaining_len {
                 return Err(ParseError::Incomplete);
             }
 
-            remaining.copy_within(data_start..data_start + chunk_len, write_pos);
+            // Copy chunk data from data_start to write_pos via raw pointer.
+            // We use `copy` (memmove semantics) rather than `copy_nonoverlapping`
+            // because as chunks are compacted, the write position can advance
+            // into the range of a later chunk's source data.
+            // SAFETY:
+            //   - Source: remaining_ptr.add(data_start) … +chunk_len is within [0, remaining_len).
+            //   - Dest:   remaining_ptr.add(write_pos) … +chunk_len is also within [0, remaining_len).
+            //   - No aliasing with `&str` header refs (they're below header_end).
+            unsafe {
+                std::ptr::copy(
+                    remaining_ptr.add(data_start),
+                    remaining_ptr.add(write_pos),
+                    chunk_len,
+                );
+            }
             write_pos += chunk_len;
-            read_pos = data_start + chunk_len + 2; // Skip \r\n
+            read_pos = data_start + chunk_len + 2; // Skip trailing \r\n
         }
 
-        // Safety: the body is now compacted at the beginning of `remaining`
-        let body_ptr = remaining.as_ptr();
-        final_body = unsafe { std::slice::from_raw_parts(body_ptr, write_pos) };
+        // Build a shared body slice from the compacted region.
+        // SAFETY: write_pos bytes at remaining_ptr are valid (compacted above).
+        final_body = unsafe { std::slice::from_raw_parts(remaining_ptr, write_pos) };
         consumed = header_end + read_pos;
     } else {
-        if remaining.len() < expected_len {
+        if remaining_len < expected_len {
             return Err(ParseError::Incomplete);
         }
         // D.1: Check size limit only when we have the complete body
         if header_end + expected_len > max_size {
             return Err(ParseError::TooLarge);
         }
-        let body_ptr = remaining.as_ptr();
-        final_body = unsafe { std::slice::from_raw_parts(body_ptr, expected_len) };
+        // Build a shared body slice from the raw pointer.
+        // SAFETY: expected_len bytes at remaining_ptr are valid (we checked
+        // remaining_len >= expected_len above).
+        final_body = unsafe { std::slice::from_raw_parts(remaining_ptr, expected_len) };
         consumed = header_end + expected_len;
     }
 

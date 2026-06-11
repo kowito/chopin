@@ -501,17 +501,10 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(result)
 }
 
-/// Generate a random nonce string.
+/// Generate a cryptographically random nonce string.
 fn generate_nonce() -> String {
-    // Use /dev/urandom for cryptographic randomness
     let mut buf = [0u8; 18];
-    #[cfg(unix)]
-    {
-        use std::io::Read;
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            let _ = f.read_exact(&mut buf);
-        }
-    }
+    getrandom::fill(&mut buf).expect("failed to generate random nonce: system entropy unavailable");
     base64_encode(&buf)
 }
 
