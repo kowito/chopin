@@ -451,6 +451,7 @@ dependencies = [
 name = "chopin-pg"
 version = "0.6.0"
 dependencies = [
+ "arrayvec",
  "chrono",
  "getrandom 0.3.4",
  "libc",

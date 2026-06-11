@@ -26,6 +26,8 @@ use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use arrayvec::ArrayVec;
+
 use crate::auth::ScramClient;
 use crate::codec;
 use crate::error::{PgError, PgResult};
@@ -34,7 +36,115 @@ use crate::row::Row;
 use crate::statement::{CacheStats, StatementCache};
 #[cfg(feature = "tls")]
 use crate::tls;
-use crate::types::{PgValue, ToSql};
+use crate::types::ToSql;
+
+/// Maximum number of parameters to encode on the stack.
+/// TFB common cases: world=1, fortunes=0, updates=2 — all fit in 4.
+const STACK_PARAMS: usize = 4;
+
+/// Pre-encoded query parameters used by [`encode_bind`].
+///
+/// Stores format codes and value references.  For ≤[`STACK_PARAMS`] params,
+/// all storage lives on the stack via [`ArrayVec`]; larger parameter lists
+/// fall back to heap [`Vec`]s.  The `Deref` impl on `ArrayVec` / `Vec` lets
+/// `&self.formats` and `&self.refs` be passed directly to `codec::encode_bind`
+/// as `&[i16]` / `&[Option<&[u8]>]`.
+enum EncodedParams<'a> {
+    Stack {
+        formats: ArrayVec<i16, STACK_PARAMS>,
+        _values: ArrayVec<Option<Vec<u8>>, STACK_PARAMS>,
+        refs: ArrayVec<Option<&'a [u8]>, STACK_PARAMS>,
+    },
+    Heap {
+        formats: Vec<i16>,
+        _values: Vec<Option<Vec<u8>>>,
+        refs: Vec<Option<&'a [u8]>>,
+    },
+}
+
+impl<'a> EncodedParams<'a> {
+    fn formats(&self) -> &[i16] {
+        match self {
+            EncodedParams::Stack { formats, .. } => formats,
+            EncodedParams::Heap { formats, .. } => formats,
+        }
+    }
+
+    fn refs(&self) -> &[Option<&[u8]>] {
+        match self {
+            EncodedParams::Stack { refs, .. } => refs,
+            EncodedParams::Heap { refs, .. } => refs,
+        }
+    }
+}
+
+/// Encode query parameters into format-codes and value references.
+///
+/// For ≤[`STACK_PARAMS`] parameters this uses stack-allocated [`ArrayVec`]s
+/// (zero extra heap allocations beyond the bytes conversion inherent
+/// in `to_binary_bytes`/`to_text_bytes`).  For larger parameter lists we
+/// fall back to heap `Vec`s transparently.
+fn encode_params<'a>(params: &'a [&dyn ToSql]) -> EncodedParams<'a> {
+    if params.len() <= STACK_PARAMS {
+        // Hot path: stack-allocated ArrayVec, zero extra heap allocations
+        let mut formats: ArrayVec<i16, STACK_PARAMS> = ArrayVec::new();
+        let mut values: ArrayVec<Option<Vec<u8>>, STACK_PARAMS> = ArrayVec::new();
+        for p in params {
+            let v = p.to_sql();
+            let fmt = if v.prefers_binary() { 1_i16 } else { 0_i16 };
+            let bytes = if fmt == 1 {
+                v.to_binary_bytes()
+            } else {
+                v.to_text_bytes()
+            };
+            formats.push(fmt);
+            values.push(bytes);
+        }
+        let mut refs: ArrayVec<Option<&[u8]>, STACK_PARAMS> = ArrayVec::new();
+        // SAFETY: we immediately move `values` into the struct below, so the
+        // references we build here remain valid for the lifetime of `EncodedParams`.
+        // The borrow checker can't see this, so we use raw-pointer indirection.
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..values.len() {
+            let ptr: *const Option<Vec<u8>> = &values[i];
+            let val: &Option<Vec<u8>> = unsafe { &*ptr };
+            refs.push(val.as_deref());
+        }
+        EncodedParams::Stack {
+            formats,
+            _values: values,
+            refs,
+        }
+    } else {
+        // Cold path: heap Vec for large parameter lists
+        let n = params.len();
+        let mut formats: Vec<i16> = Vec::with_capacity(n);
+        let mut values: Vec<Option<Vec<u8>>> = Vec::with_capacity(n);
+        for p in params {
+            let v = p.to_sql();
+            let fmt = if v.prefers_binary() { 1_i16 } else { 0_i16 };
+            let bytes = if fmt == 1 {
+                v.to_binary_bytes()
+            } else {
+                v.to_text_bytes()
+            };
+            formats.push(fmt);
+            values.push(bytes);
+        }
+        let mut refs: Vec<Option<&[u8]>> = Vec::with_capacity(n);
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..values.len() {
+            let ptr: *const Option<Vec<u8>> = &values[i];
+            let val: &Option<Vec<u8>> = unsafe { &*ptr };
+            refs.push(val.as_deref());
+        }
+        EncodedParams::Heap {
+            formats,
+            _values: values,
+            refs,
+        }
+    }
+}
 
 /// Default I/O timeout for poll operations (5 seconds).
 const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -894,29 +1004,13 @@ impl PgConnection {
         }
 
         // Bind — encode parameters with per-parameter format codes
-        let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
-        let param_formats: Vec<i16> = pg_values
-            .iter()
-            .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
-            .collect();
-        let param_values: Vec<Option<Vec<u8>>> = pg_values
-            .iter()
-            .zip(param_formats.iter())
-            .map(|(v, &fmt)| {
-                if fmt == 1 {
-                    v.to_binary_bytes()
-                } else {
-                    v.to_text_bytes()
-                }
-            })
-            .collect();
-        let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
+        let params = encode_params(params);
         let n = codec::encode_bind(
             &mut self.write_buf[pos..],
             "", // unnamed portal
             &stmt.name,
-            &param_formats,
-            &param_refs,
+            params.formats(),
+            params.refs(),
             &[1], // request all results in binary format
         );
         pos += n;
@@ -936,17 +1030,69 @@ impl PgConnection {
         Ok(rows)
     }
 
+    /// Shared write-path for `query_one` and `query_opt`.
+    ///
+    /// Encodes the full Parse→Bind→Execute→Sync sequence (same as [`query`]) but
+    /// uses [`read_extended_one`] on the read side, avoiding the `Vec<Row>`
+    /// allocation entirely.
+    fn query_one_inner(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Option<Row>> {
+        let stmt = self.stmt_cache.get_or_create(sql);
+
+        // Conservative upper bound for write buffer
+        let estimated = 10 + sql.len() + (params.len() * 256);
+        self.ensure_write_capacity(estimated);
+
+        let mut pos = 0;
+
+        if stmt.is_new {
+            // Parse
+            let n = codec::encode_parse(&mut self.write_buf[pos..], &stmt.name, sql, &[]);
+            pos += n;
+
+            // Describe (to get column info)
+            let n = codec::encode_describe(
+                &mut self.write_buf[pos..],
+                DescribeTarget::Statement,
+                &stmt.name,
+            );
+            pos += n;
+        }
+
+        // Bind — encode parameters with per-parameter format codes
+        let params = encode_params(params);
+        let n = codec::encode_bind(
+            &mut self.write_buf[pos..],
+            "", // unnamed portal
+            &stmt.name,
+            params.formats(),
+            params.refs(),
+            &[1], // request all results in binary format
+        );
+        pos += n;
+
+        // Execute
+        let n = codec::encode_execute(&mut self.write_buf[pos..], "", 0);
+        pos += n;
+
+        // Sync
+        let n = codec::encode_sync(&mut self.write_buf[pos..]);
+        pos += n;
+
+        self.flush_write_buf(pos)?;
+
+        // Read results — stop after one DataRow, error on second
+        self.read_extended_one(sql, &stmt.name, stmt.is_new, stmt.columns)
+    }
+
     /// Execute a query expecting exactly one row.
     ///
     /// Returns `Ok(Row)` when exactly one row is returned, `Err(NoRows)` when
     /// zero rows are returned, and `Err(TooManyRows)` when more than one row
     /// is returned.  Use [`query_opt`] when zero rows are acceptable.
     pub fn query_one(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Row> {
-        let mut rows = self.query(sql, params)?;
-        match rows.len() {
-            0 => Err(PgError::NoRows),
-            1 => Ok(rows.remove(0)),
-            _ => Err(PgError::TooManyRows),
+        match self.query_one_inner(sql, params)? {
+            Some(row) => Ok(row),
+            None => Err(PgError::NoRows),
         }
     }
 
@@ -956,12 +1102,7 @@ impl PgConnection {
     /// exactly one row is returned, and `Err(TooManyRows)` when more than one
     /// row is returned.
     pub fn query_opt(&mut self, sql: &str, params: &[&dyn ToSql]) -> PgResult<Option<Row>> {
-        let mut rows = self.query(sql, params)?;
-        match rows.len() {
-            0 => Ok(None),
-            1 => Ok(Some(rows.remove(0))),
-            _ => Err(PgError::TooManyRows),
-        }
+        self.query_one_inner(sql, params)
     }
 
     /// Execute a statement that returns no rows (INSERT, UPDATE, DELETE).
@@ -993,29 +1134,13 @@ impl PgConnection {
         }
 
         // Bind — encode parameters with per-parameter format codes
-        let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
-        let param_formats: Vec<i16> = pg_values
-            .iter()
-            .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
-            .collect();
-        let param_values: Vec<Option<Vec<u8>>> = pg_values
-            .iter()
-            .zip(param_formats.iter())
-            .map(|(v, &fmt)| {
-                if fmt == 1 {
-                    v.to_binary_bytes()
-                } else {
-                    v.to_text_bytes()
-                }
-            })
-            .collect();
-        let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
+        let params = encode_params(params);
         let n = codec::encode_bind(
             &mut self.write_buf[pos..],
             "", // unnamed portal
             &stmt.name,
-            &param_formats,
-            &param_refs,
+            params.formats(),
+            params.refs(),
             &[1], // request all results in binary format
         );
         pos += n;
@@ -1415,30 +1540,14 @@ impl PgConnection {
         }
 
         // Bind to the named portal (not the unnamed "").
-        let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
-        let param_formats: Vec<i16> = pg_values
-            .iter()
-            .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
-            .collect();
-        let param_values: Vec<Option<Vec<u8>>> = pg_values
-            .iter()
-            .zip(param_formats.iter())
-            .map(|(v, &fmt)| {
-                if fmt == 1 {
-                    v.to_binary_bytes()
-                } else {
-                    v.to_text_bytes()
-                }
-            })
-            .collect();
-        let param_refs: Vec<Option<&[u8]>> = param_values.iter().map(|p| p.as_deref()).collect();
+        let params = encode_params(params);
 
         let n = codec::encode_bind(
             &mut self.write_buf[pos..],
             &portal_name,
             &stmt_name,
-            &param_formats,
-            &param_refs,
+            params.formats(),
+            params.refs(),
             &[1], // request binary-format results
         );
         pos += n;
@@ -1604,31 +1713,14 @@ impl PgConnection {
                 pos += n;
             }
 
-            let pg_values: Vec<PgValue> = params.iter().map(|p| p.to_sql()).collect();
-            let param_formats: Vec<i16> = pg_values
-                .iter()
-                .map(|v| if v.prefers_binary() { 1_i16 } else { 0_i16 })
-                .collect();
-            let param_values: Vec<Option<Vec<u8>>> = pg_values
-                .iter()
-                .zip(param_formats.iter())
-                .map(|(v, &fmt)| {
-                    if fmt == 1 {
-                        v.to_binary_bytes()
-                    } else {
-                        v.to_text_bytes()
-                    }
-                })
-                .collect();
-            let param_refs: Vec<Option<&[u8]>> =
-                param_values.iter().map(|p| p.as_deref()).collect();
+            let params = encode_params(params);
 
             let n = codec::encode_bind(
                 &mut self.write_buf[pos..],
                 "", // unnamed portal — discarded after Execute
                 &stmt_name,
-                &param_formats,
-                &param_refs,
+                params.formats(),
+                params.refs(),
                 &[1], // binary results
             );
             pos += n;
@@ -2177,6 +2269,104 @@ impl PgConnection {
                         self.tx_status = TransactionStatus::from(body[0]);
                         self.consume_read(msg_len);
                         return Ok(rows);
+                    }
+                    BackendTag::ErrorResponse => {
+                        let err = self.parse_error_with_context(body, sql);
+                        self.consume_read(msg_len);
+                        self.drain_to_ready()?;
+                        return Err(err);
+                    }
+                    BackendTag::NotificationResponse => {
+                        let notification = Self::parse_notification(body);
+                        self.notifications.push_back(notification);
+                    }
+                    BackendTag::NoticeResponse => {
+                        self.dispatch_notice(body);
+                    }
+                    _ => {}
+                }
+                self.consume_read(msg_len);
+            }
+        }
+    }
+
+    /// Read extended query results, stopping after collecting ONE DataRow.
+    ///
+    /// This is the zero-allocation single-row read path used by `query_one` and
+    /// `query_opt`.  It collects at most one `Row` — if a second `DataRow` arrives
+    /// before `ReadyForQuery`, the stream is drained and `Err(TooManyRows)` is returned.
+    /// Returns `Ok(None)` if `ReadyForQuery` arrives with no `DataRow` seen.
+    fn read_extended_one(
+        &mut self,
+        sql: &str,
+        stmt_name: &str,
+        is_new: bool,
+        cached_columns: Option<Vec<codec::ColumnDesc>>,
+    ) -> PgResult<Option<Row>> {
+        let mut row: Option<Row> = None;
+        let mut columns_rc: Rc<Vec<codec::ColumnDesc>> = match cached_columns {
+            Some(c) => Rc::new(c),
+            None => Rc::new(Vec::new()),
+        };
+
+        loop {
+            if codec::message_complete(&self.read_buf[..self.read_pos])?.is_none() {
+                self.fill_read_buf(None)?;
+            }
+
+            while let Some(msg_len) = codec::message_complete(&self.read_buf[..self.read_pos])? {
+                let header = codec::decode_header(&self.read_buf)
+                    .ok_or_else(|| PgError::Protocol("Incomplete message header".to_string()))?;
+                let body = &self.read_buf[5..msg_len];
+
+                match header.tag {
+                    BackendTag::ParseComplete => {}
+                    BackendTag::ParameterDescription => {}
+                    BackendTag::RowDescription => {
+                        let mut columns = codec::parse_row_description(body);
+                        for col in &mut columns {
+                            col.format_code = FormatCode::Binary;
+                        }
+                        if is_new
+                            && let Some(evicted) = self.stmt_cache.insert(
+                                sql,
+                                stmt_name.to_string(),
+                                0,
+                                Some(columns.clone()),
+                            )
+                        {
+                            self.close_statement_on_server(&evicted.name);
+                        }
+                        columns_rc = Rc::new(columns);
+                    }
+                    BackendTag::NoData if is_new => {
+                        if let Some(evicted) =
+                            self.stmt_cache.insert(sql, stmt_name.to_string(), 0, None)
+                        {
+                            self.close_statement_on_server(&evicted.name);
+                        }
+                    }
+                    BackendTag::NoData => {}
+                    BackendTag::BindComplete => {}
+                    BackendTag::DataRow => {
+                        if row.is_some() {
+                            // Second DataRow — too many rows. Drain and error.
+                            self.consume_read(msg_len);
+                            self.drain_to_ready()?;
+                            return Err(PgError::TooManyRows);
+                        }
+                        let raw_values = codec::parse_data_row(body);
+                        row = Some(Row::new(Rc::clone(&columns_rc), raw_values));
+                    }
+                    BackendTag::CommandComplete => {
+                        let (tag, rows_affected) = extract_command_complete(body);
+                        self.last_command_tag = tag;
+                        self.last_affected_rows = rows_affected;
+                    }
+                    BackendTag::ReadyForQuery => {
+                        self.tx_status = TransactionStatus::from(body[0]);
+                        self.consume_read(msg_len);
+                        return Ok(row);
                     }
                     BackendTag::ErrorResponse => {
                         let err = self.parse_error_with_context(body, sql);

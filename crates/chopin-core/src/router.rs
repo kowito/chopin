@@ -130,9 +130,10 @@ pub struct Router {
     pub(crate) global_middleware: Vec<MiddlewareFn>,
     pub(crate) global_boxed_middleware: Vec<BoxedMiddleware>,
     /// O(1) fast path for exact, static (no param/wildcard) routes.
-    /// Keyed by `(method_index, path)` — built once at `finalize()` time.
+    /// One HashMap per HTTP method (indexed by `method_index`) — built once at `finalize()` time.
+    /// `HashMap<String, _>::get(&str)` works via `Borrow`, so the hot-path lookup is zero-alloc.
     /// Avoids trie traversal for the common TFB benchmark paths like `/plaintext`, `/json`.
-    fast_table: HashMap<(usize, String), (Handler, Option<BoxedHandler>)>,
+    fast_table: [HashMap<String, (Handler, Option<BoxedHandler>)>; METHOD_COUNT],
 }
 
 impl Router {
@@ -142,7 +143,7 @@ impl Router {
             root: RouteNode::new(String::new()),
             global_middleware: Vec::new(),
             global_boxed_middleware: Vec::new(),
-            fast_table: HashMap::new(),
+            fast_table: std::array::from_fn(|_| HashMap::new()),
         }
     }
 
@@ -215,8 +216,9 @@ impl Router {
     pub fn match_route<'a>(&'a self, method: Method, path: &'a str) -> Option<RouteMatch<'a>> {
         // ── O(1) fast path: exact static routes (covers TFB /plaintext /json etc.) ──
         // Only valid for paths with no params/wildcards — checked at finalize() time.
+        // `HashMap<String, _>::get(&str)` uses Borrow, zero-alloc on the hot path.
         let midx = method_index(method);
-        if let Some((h, composed)) = self.fast_table.get(&(midx, path.to_owned())) {
+        if let Some((h, composed)) = self.fast_table[midx].get(path) {
             return Some((h, [("", ""); MAX_PARAMS], 0, composed.as_ref()));
         }
 
@@ -623,7 +625,9 @@ impl Router {
 
         // Build the O(1) fast-path table for all static (no param/wildcard) leaf routes.
         // This is done once at startup — zero cost on the hot path.
-        self.fast_table.clear();
+        for table in &mut self.fast_table {
+            table.clear();
+        }
         let mut path_buf = String::with_capacity(64);
         Self::build_fast_table(&self.root, &mut path_buf, &mut self.fast_table);
     }
@@ -633,12 +637,12 @@ impl Router {
     fn build_fast_table(
         node: &RouteNode,
         path_buf: &mut String,
-        table: &mut HashMap<(usize, String), (Handler, Option<BoxedHandler>)>,
+        table: &mut [HashMap<String, (Handler, Option<BoxedHandler>)>; METHOD_COUNT],
     ) {
-        for method_idx in 0..METHOD_COUNT {
+        for (method_idx, method_table) in table.iter_mut().enumerate() {
             if let Some(handler) = node.handlers[method_idx] {
                 let composed = node.composed_handlers[method_idx].clone();
-                table.insert((method_idx, path_buf.clone()), (handler, composed));
+                method_table.insert(path_buf.clone(), (handler, composed));
             }
         }
         for child in &node.children {
